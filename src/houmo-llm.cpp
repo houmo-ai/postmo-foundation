@@ -31,8 +31,10 @@
 #include <unordered_set>
 #include <cstddef>
 
-#include "http_server_c_interface_3.h"
 #include <torch/torch.h>
+#include "http_server_c_interface_3.h"
+
+#include "INIReader.h"
 #include "tcim/tcim_runtime.h"
 #if (__GNUC__ < 8 && !defined(_MSC_VER))
 #include <experimental/filesystem>
@@ -2269,7 +2271,12 @@ struct server_context {
         torch::Tensor input;
         //std::string input_path = "./qembedding.pt";
         std::string input_path = model_path + "hmquant/quant_qembedding.pt";
-        
+
+        if (!std::filesystem::exists(input_path)) {
+            std::cerr << "Error: File not found: " << input_path << std::endl;
+            return;
+        }
+
         try {
             torch::load(input, input_path);
             input = input.view({-1, 3584});
@@ -2321,11 +2328,24 @@ struct server_context {
         if (!fs::is_regular_file(prefill_model_path.c_str())) {
             LOG_ERR("File %s Not Found!\n", prefill_model_path.c_str());
         }
-        hmctx->prefill_model = tcim::Module::LoadFromFile(prefill_model_path, hmctx->option_prefill);
-        if (!hmctx->prefill_model) {
-            std::cerr << " load model " << prefill_model_path << " fail." << std::endl;
+
+        try
+        {
+            LOG_INF("load model ing :  %s \n ", prefill_model_path.c_str());
+            hmctx->prefill_model = tcim::Module::LoadFromFile(prefill_model_path, hmctx->option_prefill);
+            if (!hmctx->prefill_model) {
+                std::cerr << " load model " << prefill_model_path << " fail." << std::endl;
+                exit(-1);
+            }
+        }
+        catch (std::exception& e)
+        {
+            std::cerr << "error loading the prefill_model: " << prefill_model_path << ", ERROR: " << e.what() << std::endl;
             exit(-1);
         }
+
+        LOG_INF(">>> loaded model prefill <<< \n");
+
         LOG_DBG("model %s loaded.\n", prefill_model_path.c_str());
         hmctx->prefill_model.SetStream(hmctx->stream);
 
@@ -2385,6 +2405,10 @@ struct server_context {
             std::cerr << " load model " << decode_model_path << " fail." << std::endl;
             exit(-1);
         }
+
+        LOG_INF(">>> loaded model decode <<< \n");
+
+
         LOG_DBG("model %s loaded.\n", decode_model_path.c_str());
         hmctx->decode_model.SetStream(hmctx->stream);
 
@@ -4723,23 +4747,47 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
 }
 
 
+#ifdef _WIN32
 
-
-HANDLE create_instance(std::string model_path) {
-
+int init_params(std::string model_path, const INIReader& config_reader, common_params* &p_params) {
     model_path = model_path + "/";
 
     std::string tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
     if (model_path.find("qwen2") != std::string::npos) {
         tok_model_path = model_path + "qwen2-1_5b-instruct-q4_0.gguf";
     }
-    std::time_t t = std::time(nullptr);
-    std::string log_file = string_format("houmo-llm-%d.log", t);
-    char* argv[] = {"houmo-llm-demo", "-m", &tok_model_path[0], "--port", "8808", "--host", "0.0.0.0", "--device", "none", "-np", "1", "--ctx-size", "4096", "--no-context-shift", "--no-warmup", "--log-file", (char *)log_file.c_str(), NULL};
 
-    char **p = argv;
+    const std::string log_location = config_reader.Get("log", "location", "UNKNOWN");
+    if (log_location == "UNKNOWN") {
+        return -1;
+    }
+
+    const std::time_t t = std::time(nullptr);
+    const std::string log_file = log_location + string_format("houmo-llm-%d.log", t);
+    char* argv[] = {"houmo-llm-demo",
+                    "-m",
+                    &tok_model_path[0],
+                    "--port",
+                    "8808",
+                    "--host",
+                    "0.0.0.0",
+                    "--device",
+                    "none",
+                    "-np",
+                    "1",
+                    "--ctx-size",
+                    "4096",
+                    "--no-context-shift",
+                    "--no-warmup",
+                    "--log-verbose",
+                    "--log-file",
+                    const_cast<char*>(log_file.c_str()),
+                    nullptr};
+
+    char** p = argv;
     int argc = 0;
-    while (*p++ != NULL) {
+    while (*p++ != nullptr)
+    {
         argc++;
     }
 
@@ -4748,14 +4796,133 @@ HANDLE create_instance(std::string model_path) {
     //}
 
     // own arguments required by this example
-    common_params *p_params = new common_params();
+    p_params = new common_params();
 
     if (!common_params_parse(argc, argv, *p_params, LLAMA_EXAMPLE_SERVER)) {
-        return nullptr;
+        return -1;
     }
-    
 
     common_init();
+
+    return 0;
+}
+
+static bool server_running = false;
+static bool server_terminating = false;
+
+/**
+ * Win Service Main Logic
+ *
+ * @return error_code
+ */
+int run_server() {
+    std::string configPath = "../config/sys.cfg";
+    char exePath[MAX_PATH];
+    GetModuleFileName(nullptr, exePath, MAX_PATH); // 获取exe绝对路径
+    const auto programPath = std::string(exePath);
+    configPath = std::string(exePath).substr(0, std::string(exePath).find_last_of('\\') + 1) + "..\\config\\sys.cfg";
+
+    const INIReader config_reader(configPath);
+    if (config_reader.ParseError() < 0) {
+        LOG_ERR("WINSERVICE cannot parse config/sys.cfg");
+        return 1;
+    }
+
+    const int thread_count = config_reader.GetInteger("server", "thread_count", 5);
+    const std::string model_location = config_reader.Get("models_loc", "location", "UNKNOWN");
+    const std::string cur_model = config_reader.Get("server", "cur_model", "UNKNOWN");
+    if (model_location == "UNKNOWN" || cur_model == "UNKNOWN") {
+        return 2;
+    }
+
+    common_params* p_params = nullptr;
+    const std::string cur_model_path = model_location + "/" + cur_model + "/";
+    std::cout << cur_model_path << std::endl;
+    if (const int error_code = init_params(cur_model_path, config_reader, p_params); error_code != 0) {
+        return error_code;
+    }
+
+
+    LOG_INF("WINSERVICE info: n_threads = %d, model_location = %s, cur_model = %s \n", thread_count, model_location.c_str(), cur_model.c_str());
+
+    HANDLE instance = create_instance(cur_model_path, p_params);
+    if (!instance) {
+        LOG_ERR("instance is null\n");
+    }
+
+    while (server_running) {
+        Sleep(1000);
+    }
+
+    const int ret = destroy_instance(instance);
+
+    printf("ret = %d\n", ret);
+    server_terminating = false;
+    return ret;
+}
+
+void stop_server() {
+    LOG_INF("WINSERVICE begin to terminate. \n");
+    server_running = false;
+    server_terminating = true;
+    while (server_terminating) {
+        Sleep(1000);
+    }
+    LOG_INF("WINSERVICE terminated. \n");
+}
+
+#endif
+
+
+HANDLE create_instance(std::string model_path, common_params* p_params = nullptr) {
+    if (!p_params) {
+        model_path = model_path + "/";
+
+        std::string tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
+        if (model_path.find("qwen2") != std::string::npos) {
+            tok_model_path = model_path + "qwen2-1_5b-instruct-q4_0.gguf";
+        }
+        std::time_t t = std::time(nullptr);
+        std::string log_file = string_format("houmo-llm-%d.log", t);
+        char* argv[] = {"houmo-llm-demo",
+                        "-m",
+                        &tok_model_path[0],
+                        "--port",
+                        "8808",
+                        "--host",
+                        "0.0.0.0",
+                        "--device",
+                        "none",
+                        "-np",
+                        "1",
+                        "--ctx-size",
+                        "4096",
+                        "--no-context-shift",
+                        "--no-warmup",
+                        "--log-file",
+                        (char*)log_file.c_str(),
+                        NULL};
+
+        char** p = argv;
+        int argc = 0;
+        while (*p++ != NULL)
+        {
+            argc++;
+        }
+
+        //for (int i = 0; i < argc; i++) {
+        //    printf("argv[%d] = %s\n", i, argv[i]);
+        //}
+
+        // own arguments required by this example
+        p_params = new common_params();
+
+        if (!common_params_parse(argc, argv, *p_params, LLAMA_EXAMPLE_SERVER)) {
+            return nullptr;
+        }
+
+        common_init();
+    }
 
     // struct that contains llama context and inference
     static server_context * ctx_server = nullptr;
@@ -6081,6 +6248,10 @@ HANDLE create_instance(std::string model_path) {
     SRV_INF("svr: %p\n", svr);
 
     SRV_INF("svr running: %d\n", ctx_server->svr->is_running());
+
+#ifdef _WIN32
+    server_running = true;
+#endif
 
     return ctx_server;
 }

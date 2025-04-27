@@ -1,0 +1,17 @@
+###
+POST http://localhost:8808/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "DeepSeek-R1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Who are you?"
+    }
+  ],
+  "temperature": 0.7
+}
+
+###
+

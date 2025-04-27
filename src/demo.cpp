@@ -1,116 +1,108 @@
-#include "houmo-llm.h"
-#include "houmo-llm.hpp"
-#include <stdio.h>
-#include <signal.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string>
+#include <cstdio>
 #include <iostream>
+#include "houmo-llm.h"
+
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 
-int main(int argc, char ** argv) {
+#ifdef _WIN32
 
-    //signal(SIGSEGV, handler);   // install our handler
-    //signal(SIGABRT, handler);   // install our handler
-    
-    //HANDLE instance = create_instance("./models/hmm_qwen2_256_4096_4cores_20250317/");
-//
-    //
-//
-    //if (instance == nullptr) {
-    //    printf("instance is null\n");
-    //}
-    //int ret = generate(instance);
-    //ret = generate_stream(instance);
-    //ret = generate_stream_next_token_all(instance);
-//
-    //printf("instance 1 = %p\n", instance);
-    //ret = destroy_instance(instance);
-    //printf("ret = %d\n", ret);
-//
+#include <thread>
 
-    //instance = create_instance("./models/hmm_qwen2_256_4096_4cores_20250317/");
-    HANDLE instance = create_instance("./models/hmm_deepseek_256_4096_4cores_20250317/");
+// 全局状态句柄
+SERVICE_STATUS_HANDLE g_StatusHandle = nullptr;
+SERVICE_STATUS g_ServiceStatus = {0};
+
+std::thread srv_t;
+
+
+void ReportSvcStatus(const DWORD currentState, const DWORD win32ExitCode, const DWORD waitHint) {
+    static DWORD checkPoint = 1;
+    g_ServiceStatus.dwCurrentState = currentState;
+    g_ServiceStatus.dwWin32ExitCode = win32ExitCode;
+    g_ServiceStatus.dwWaitHint = waitHint;
+    g_ServiceStatus.dwCheckPoint = (currentState == SERVICE_START_PENDING || currentState == SERVICE_STOP_PENDING) ? checkPoint++ : 0;
+    SetServiceStatus(g_StatusHandle, &g_ServiceStatus);
+}
+
+void WINAPI Handler(const DWORD controlCode) {
+    switch (controlCode)
+    {
+    case SERVICE_CONTROL_STOP:
+        ReportSvcStatus(SERVICE_STOP_PENDING, NO_ERROR, 0);
+        stop_server();
+        break;
+    default:
+        break;
+    }
+}
+
+void ServiceWorkerThread() {
+    run_server();
+    ReportSvcStatus(SERVICE_STOPPED, NO_ERROR, 0);
+}
+
+void WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
+    // 1. 注册控制处理函数
+    g_StatusHandle = RegisterServiceCtrlHandler(TEXT("HoumoHI"), Handler);
+
+    // 2. 初始化 SERVICE_STATUS
+    g_ServiceStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+    g_ServiceStatus.dwControlsAccepted = SERVICE_ACCEPT_STOP;
+    g_ServiceStatus.dwWin32ExitCode = NO_ERROR;
+    g_ServiceStatus.dwServiceSpecificExitCode = 0;
+
+    // 3. 报告“启动中”
+    ReportSvcStatus(SERVICE_START_PENDING, NO_ERROR, 5000); // 最多等待 5 秒
+
+    // 4. 启动后台线程
+    srv_t = std::thread(ServiceWorkerThread);
+    srv_t.detach();
+
+    // 5. 报告“运行中”
+    ReportSvcStatus(SERVICE_RUNNING, NO_ERROR, 0);
+    // ServiceMain 返回，线程接管工作
+}
+
+
+#endif
+
+int main(int argc, char** argv) {
+
+#ifdef WINSERVICE_MODE
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
+    // LOG(Info) << "WIN32 Service Mode";
+
+    char serviceName[] = "HoumoHI";
+
+    SERVICE_TABLE_ENTRY ServiceTable[] = {{serviceName, ServiceMain}, {NULL, NULL}};
+    if (!StartServiceCtrlDispatcher(ServiceTable))
+    {
+        // 此处处理错误（如记录日志）
+        const DWORD err = GetLastError();
+        // LOG(Error) << "HoumoHI WIN32 Service StartServiceCtrlDispatcher failed, ErrCode: " << err;
+    }
+
+#else
+    HANDLE instance = create_instance("./models/hmm_deepseek_256_4096_4cores_20250317/", nullptr);
     if (instance == nullptr) {
         printf("instance is null\n");
     }
     printf("instance 3 = %p\n", instance);
 
-    //ret = generate(instance);
-//
-    //ret = generate_stream(instance);
-    //while (true) {
-    //    std::string result_json_str;
-    //    ret = generate_stream_next_token_string(instance, result_json_str);
-    //    if (ret == 1) {
-    //        printf("1 stop found str: %s\n", result_json_str.c_str());
-    //        break;
-    //    } else if (ret == -1) {
-    //        printf("1 Error: %d\n", ret);
-    //        break;
-    //    } else {
-    //        printf("1 content str: %s\n", result_json_str.c_str());
-    //    }
-    //}
-    //
-//
-    //ret = generate_stream(instance);
-    //while (true) {
-    //    size_t size;
-    //    char * result;
-    //    printf("new round: %d\n", ret);
-    //    ret = generate_stream_next_token(instance, &result, &size);
-    //    printf("ret 2: %d\n", ret);
-    //    if (ret == 1) {
-    //        printf("2 stop found str: %s\n", result);
-    //        break;
-    //    } else if (ret == -1) {
-    //        printf("2 Error: %d\n", ret);
-    //        break;
-    //    } else {
-    //        printf("2 content str: %s\n", result);
-    //    }
-    //}
-//
-    //ret = generate_stream(instance);
-    //while (true) {
-    //    std::string result_json_str;
-    //    ret = generate_stream_next_token_string(instance, result_json_str);
-    //    if (ret == 1) {
-    //        printf("3 stop found str: %s\n", result_json_str.c_str());
-    //        break;
-    //    } else if (ret == -1) {
-    //        printf("3 Error: %d\n", ret);
-    //        break;
-    //    } else {
-    //        printf("3 content str: %s\n", result_json_str.c_str());
-    //    }
-    //}
-//
-    //ret = generate_stream(instance);
-    //while (true) {
-    //    size_t size;
-    //    char * result;
-    //    ret = generate_stream_next_token(instance, &result, &size);
-    //    printf("ret 4: %d\n", ret);
-    //    if (ret == 1) {
-    //        printf("4 c stop found str: %s\n", result);
-    //        break;
-    //    } else if (ret == -1) {
-    //        printf("4 c Error: %d\n", ret);
-    //        break;
-    //    } else {
-    //        printf("4 c content str: %s\n", result);
-    //    }
-    //}
-
     int input;
     std::cin >> input;
-    
+
     int ret = destroy_instance(instance);
     printf("ret = %d\n", ret);
     std::cin >> input;
     printf("exit = %d!\n", input);
+
+#endif
 
     return 0;
 }
