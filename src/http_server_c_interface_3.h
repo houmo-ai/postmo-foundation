@@ -25,10 +25,10 @@ struct params
 {
     int32 n_ctx = 2048;
     int32 n_predict = 2048;
-    int32 top_k = 1;
-    float32 top_p = 1;
-    float32 temperature = 2023;
-    float32 repeat_penalty = 1;
+    int32 top_k = 30;
+    float32 top_p = 0.95;
+    float32 temperature = 1.0f;
+    float32 repeat_penalty = 1.1;
     int32 repeat_last_n = 64;
     int32 seed = 42;
     double64 rope_theta = 10000.0;
@@ -36,7 +36,7 @@ struct params
 };
 
 enum generater_status {
-    completed       = 0,    // finished generate 
+    completed       = 0,    // finished generate
     generating      = 1,    // Running generation
     stopped         = 2,    // generation stopped
     exceed          = 3,    // exceed context size
@@ -179,7 +179,7 @@ int32 HTTP_SERVER_API api_Generate(HANDLE handle, const char* prompt, const void
 //int32 HTTP_SERVER_API api_token_num(HANDLE handle, const std::string& prompt);
 int32 HTTP_SERVER_API api_token_num(HANDLE handle, const char* prompt);
 
-//stream generate 
+//stream generate
 //bool HTTP_SERVER_API api_Generate_stream(HANDLE handle, const std::string& prompt, const params& params);
 bool HTTP_SERVER_API api_Generate_stream(HANDLE handle, const char* prompt, const void* params, size_t params_size);
 
