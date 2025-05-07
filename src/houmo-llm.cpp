@@ -277,221 +277,6 @@ bool areFloatsEqual(double a, double b) {
 }
 
 
-class LogitsProcessor {
- public:
-  virtual ~LogitsProcessor() = default;
-  virtual void process(float *logits, int n_vocab,
-                       const std::vector<llama_token> &last_tokens) = 0;
-  virtual void print_processor_param()=0;
-};
-
-class TemperatureProcessor : public LogitsProcessor {
-  float temp;
-
- public:
-  explicit TemperatureProcessor(float temp) : temp(temp) {}
-  void print_processor_param(){
-    SRV_INF("TemperatureProcessor temp:%f \r\n",temp);
-  }
-  void process(float *logits, int n_vocab,
-               const std::vector<llama_token> &) override {
-    if (temp <= 0.0f || areFloatsEqual(0,temp) || areFloatsEqual(1,temp)) {
-      SRV_DBG("%s || temp is:%f\r\n","temperature M<=0 or equal 1, just return",temp);
-      return;
-      // 温度<=0时使用贪心搜索
-      // float max_logit = *std::max_element(logits, logits + n_vocab);
-      // std::fill(logits, logits + n_vocab, -INFINITY);
-      // *std::max_element(logits, logits + n_vocab) = 0.0f;
-      // int max_pos=std::distance(logits, max_it)
-
-    } else {
-      // 应用温度缩放
-      for (int i = 0; i < n_vocab; ++i) {
-        logits[i] /= temp;
-      }
-    }
-    SRV_DBG("++%s \r\n","call temperature");
-  }
-};
-
-class TopKProcessor : public LogitsProcessor {
-  int k;
-
- public:
-  explicit TopKProcessor(int k) : k(k) {}
-  void print_processor_param(){
-    SRV_INF("TopKProcessor topk:%d \r\n",k);
-  }
-  void process(float *logits, int n_vocab,
-               const std::vector<llama_token> &) override {
-    if (k <= 0) {
-        SRV_ERR("set topk value invalid:%d \r\n",k);
-        return;
-    }
-
-    std::vector<std::pair<float, int>> logits_id;
-    logits_id.reserve(n_vocab);
-    for (int i = 0; i < n_vocab; ++i) {
-      logits_id.emplace_back(logits[i], i);
-    }
-
-    // 找出top-k的logits
-    std::partial_sort(
-        logits_id.begin(), logits_id.begin() + std::min(k, n_vocab),
-        logits_id.end(),
-        [](const std::pair<float, int> &a, const std::pair<float, int> &b) {
-          return a.first > b.first;
-        });
-
-    // 将非top-k的logits设为负无穷
-    for (int i = k; i < n_vocab; ++i) {
-      logits[logits_id[i].second] = -INFINITY;
-    }
-    SRV_DBG("++%s \r\n","call topK");
-  }
-};
-
-class TopPProcessor : public LogitsProcessor {
-  float p;
-
- public:
-  explicit TopPProcessor(float p) : p(p) {}
-  void print_processor_param(){
-    SRV_INF("TopPProcessor topp:%f \r\n",p);
-  }
-  void process(float *logits, int n_vocab,
-               const std::vector<llama_token> &) override {
-    if (p >= 1.0f || areFloatsEqual(p,1.0)) return;
-    if (p<0) {
-       SRV_ERR("Error:top_p value not right,please check input p:%f\r\n",p);
-       return;
-    }
-
-    std::vector<std::pair<float, int>> logits_id;
-    logits_id.reserve(n_vocab);
-    for (int i = 0; i < n_vocab; ++i) {
-      logits_id.emplace_back(logits[i], i);
-    }
-
-    // 按概率降序排序
-    std::sort(logits_id.begin(), logits_id.end(),
-              [](const std::pair<float, int> &a,
-                 const std::pair<float, int> &b) { return a.first > b.first; });
-
-    // 计算softmax概率
-    std::vector<float> probs(n_vocab);
-    softmax(logits, probs.data(), n_vocab);
-
-    // 累积概率直到超过p
-    float cumsum = 0.0f;
-    int last_idx = n_vocab - 1;
-    for (int i = 0; i < n_vocab; ++i) {
-      cumsum += probs[logits_id[i].second];
-      if (cumsum >= p) {
-        last_idx = i;
-        break;
-      }
-    }
-
-    // 将不在top-p中的logits设为负无穷
-    for (int i = last_idx + 1; i < n_vocab; ++i) {
-      logits[logits_id[i].second] = -INFINITY;
-    }
-    SRV_DBG("++%s \r\n","call topp");
-  }
-};
-
-class RepeatPenaltyProcessor : public LogitsProcessor {
-  int last_n;
-  float penalty;
-
- public:
-  explicit RepeatPenaltyProcessor(int last_n, float penalty)
-      : last_n(last_n), penalty(penalty) {}
-  void print_processor_param(){
-    SRV_INF("RepeatPenaltyProcessor: last_n:%d penalty:%f\r\n", last_n,penalty);
-  }
-  void process(float *logits, int n_vocab,
-               const std::vector<llama_token> &last_tokens) override {
-    if (last_n <= 0 || penalty <= 1.0f || areFloatsEqual(0, penalty) ||
-        areFloatsEqual(1, penalty))
-      return;
-
-    // 统计最近last_n个token的出现次数
-    std::unordered_map<llama_token, int> token_counts;
-    for (auto token : last_tokens) {
-      token_counts[token]++;
-    }
-
-    // 应用重复惩罚
-    for (auto &pair : token_counts) {
-      if (pair.first >= 0 && pair.first < n_vocab) {
-        if (logits[pair.first] > 0) {
-          logits[pair.first] /= penalty;
-        } else {
-          logits[pair.first] *= penalty;
-        }
-      }
-    }
-    SRV_DBG("++%s \r\n","call repeat penalty");
-  }
-};
-
-class FrequencyPenaltyProcessor : public LogitsProcessor {
-  float penalty;
-
- public:
-  explicit FrequencyPenaltyProcessor(float penalty) : penalty(penalty) {}
-  void print_processor_param(){
-    SRV_INF("FrequencyPenaltyProcessor penalty:%f\r\n", penalty);
-  }
-
-  void process(float *logits, int n_vocab,
-               const std::vector<llama_token> &last_tokens) override {
-    if (penalty == 0.0f) return;
-
-    // 统计所有token的出现频率
-    std::unordered_map<llama_token, float> token_freqs;
-    float sum = 0.0f;
-    for (auto token : last_tokens) {
-      token_freqs[token] += 1.0f;
-      sum += 1.0f;
-    }
-
-    // 计算频率并应用惩罚
-    for (auto &pair : token_freqs) {
-      if (pair.first >= 0 && pair.first < n_vocab) {
-        float freq = pair.second / sum;
-        logits[pair.first] -= penalty * freq;
-      }
-    }
-    SRV_DBG("++%s \r\n","call freq penalty");
-  }
-};
-
-class LogitsProcessorList {
-  std::vector<std::unique_ptr<LogitsProcessor>> processors;
-
- public:
-  void add(std::unique_ptr<LogitsProcessor> processor) {
-    processors.push_back(std::move(processor));
-  }
-  void print_processors_param() {
-    for (auto &processor : processors) {
-      SRV_INF("%s","++call print_processor_param\r\n");
-      processor->print_processor_param();
-    }
-  }
-  void process(float *logits, int n_vocab,
-               const std::vector<llama_token> &last_tokens) {
-    for (auto &processor : processors) {
-      SRV_DBG("--%s\r\n","call process");
-      processor->process(logits, n_vocab, last_tokens);
-    }
-  }
-};
-
-
 struct slot_params {
   bool stream = true;
   bool cache_prompt =
@@ -591,6 +376,247 @@ struct slot_params {
         {"lora", lora},
     };
   }
+};
+
+
+class LogitsProcessor {
+public:
+    virtual ~LogitsProcessor() = default;
+
+    virtual void process(float* logits, int n_vocab, const std::vector<llama_token>& last_tokens) = 0;
+    virtual void print_processor_param() = 0;
+
+    virtual void update(const slot_params& params) = 0;
+};
+
+class TemperatureProcessor final : public LogitsProcessor {
+    float temp;
+
+public:
+    explicit TemperatureProcessor(float temp) : temp(temp) {}
+
+    void print_processor_param() override {
+        SRV_INF("TemperatureProcessor temp:%f \r\n", temp);
+    }
+
+    void process(float* logits, int n_vocab, const std::vector<llama_token>&) override {
+        if (temp <= 0.0f || areFloatsEqual(0, temp) || areFloatsEqual(1, temp)) {
+            SRV_DBG("%s || temp is:%f\r\n", "temperature M<=0 or equal 1, just return", temp);
+            return;
+            // 温度<=0时使用贪心搜索
+            // float max_logit = *std::max_element(logits, logits + n_vocab);
+            // std::fill(logits, logits + n_vocab, -INFINITY);
+            // *std::max_element(logits, logits + n_vocab) = 0.0f;
+            // int max_pos=std::distance(logits, max_it)
+        }
+        else {
+            // 应用温度缩放
+            for (int i = 0; i < n_vocab; ++i) {
+                logits[i] /= temp;
+            }
+        }
+        SRV_DBG("++%s \r\n", "call temperature");
+    }
+
+    void update(const slot_params& params) override {
+        temp = params.sampling.temp;
+    }
+};
+
+class TopKProcessor final : public LogitsProcessor {
+    int k;
+
+public:
+    explicit TopKProcessor(int k) : k(k) {}
+
+    void print_processor_param() override {
+        SRV_INF("TopKProcessor topk:%d \r\n", k);
+    }
+
+    void process(float* logits, int n_vocab, const std::vector<llama_token>&) override {
+        if (k <= 0) {
+            SRV_ERR("set topk value invalid:%d \r\n", k);
+            return;
+        }
+
+        std::vector<std::pair<float, int>> logits_id;
+        logits_id.reserve(n_vocab);
+        for (int i = 0; i < n_vocab; ++i) {
+            logits_id.emplace_back(logits[i], i);
+        }
+
+        // 找出top-k的logits
+        std::partial_sort(logits_id.begin(), logits_id.begin() + std::min(k, n_vocab), logits_id.end(),
+                          [](const std::pair<float, int>& a, const std::pair<float, int>& b) { return a.first > b.first; });
+
+        // 将非top-k的logits设为负无穷
+        for (int i = k; i < n_vocab; ++i) {
+            logits[logits_id[i].second] = -INFINITY;
+        }
+        SRV_DBG("++%s \r\n", "call topK");
+    }
+
+    void update(const slot_params& params) override {
+        k = params.sampling.top_k;
+    }
+};
+
+class TopPProcessor final : public LogitsProcessor {
+    float p;
+
+public:
+    explicit TopPProcessor(float p) : p(p) {}
+
+    void print_processor_param() override {
+        SRV_INF("TopPProcessor topp:%f \r\n", p);
+    }
+
+    void process(float* logits, int n_vocab, const std::vector<llama_token>&) override {
+        if (p >= 1.0f || areFloatsEqual(p, 1.0))
+            return;
+        if (p < 0) {
+            SRV_ERR("Error:top_p value not right,please check input p:%f\r\n", p);
+            return;
+        }
+
+        std::vector<std::pair<float, int>> logits_id;
+        logits_id.reserve(n_vocab);
+        for (int i = 0; i < n_vocab; ++i) {
+            logits_id.emplace_back(logits[i], i);
+        }
+
+        // 按概率降序排序
+        std::sort(logits_id.begin(), logits_id.end(),
+                  [](const std::pair<float, int>& a, const std::pair<float, int>& b) { return a.first > b.first; });
+
+        // 计算softmax概率
+        std::vector<float> probs(n_vocab);
+        softmax(logits, probs.data(), n_vocab);
+
+        // 累积概率直到超过p
+        float cumsum = 0.0f;
+        int last_idx = n_vocab - 1;
+        for (int i = 0; i < n_vocab; ++i) {
+            cumsum += probs[logits_id[i].second];
+            if (cumsum >= p) {
+                last_idx = i;
+                break;
+            }
+        }
+
+        // 将不在top-p中的logits设为负无穷
+        for (int i = last_idx + 1; i < n_vocab; ++i) {
+            logits[logits_id[i].second] = -INFINITY;
+        }
+        SRV_DBG("++%s \r\n", "call topp");
+    }
+
+    void update(const slot_params& params) override {
+        p = params.sampling.top_p;
+    }
+};
+
+class RepeatPenaltyProcessor final : public LogitsProcessor {
+    int last_n;
+    float penalty;
+
+public:
+    explicit RepeatPenaltyProcessor(int last_n, float penalty) : last_n(last_n), penalty(penalty) {}
+
+    void print_processor_param() override {
+        SRV_INF("RepeatPenaltyProcessor: last_n:%d penalty:%f\r\n", last_n, penalty);
+    }
+
+    void process(float* logits, int n_vocab, const std::vector<llama_token>& last_tokens) override {
+        if (last_n <= 0 || penalty <= 1.0f || areFloatsEqual(0, penalty) || areFloatsEqual(1, penalty))
+            return;
+
+        // 统计最近last_n个token的出现次数
+        std::unordered_map<llama_token, int> token_counts;
+        for (auto token : last_tokens) {
+            token_counts[token]++;
+        }
+
+        // 应用重复惩罚
+        for (auto& pair : token_counts) {
+            if (pair.first >= 0 && pair.first < n_vocab) {
+                if (logits[pair.first] > 0) {
+                    logits[pair.first] /= penalty;
+                }
+                else {
+                    logits[pair.first] *= penalty;
+                }
+            }
+        }
+        SRV_DBG("++%s \r\n", "call repeat penalty");
+    }
+
+    void update(const slot_params& params) override {
+        penalty = params.sampling.penalty_repeat;
+        last_n = params.sampling.penalty_last_n;
+    }
+};
+
+class FrequencyPenaltyProcessor final : public LogitsProcessor {
+    float penalty;
+
+public:
+    explicit FrequencyPenaltyProcessor(float penalty) : penalty(penalty) {}
+
+    void print_processor_param() override {
+        SRV_INF("FrequencyPenaltyProcessor penalty:%f\r\n", penalty);
+    }
+
+    void process(float* logits, int n_vocab, const std::vector<llama_token>& last_tokens) override {
+        if (penalty == 0.0f)
+            return;
+
+        // 统计所有token的出现频率
+        std::unordered_map<llama_token, float> token_freqs;
+        float sum = 0.0f;
+        for (auto token : last_tokens) {
+            token_freqs[token] += 1.0f;
+            sum += 1.0f;
+        }
+
+        // 计算频率并应用惩罚
+        for (auto& pair : token_freqs) {
+            if (pair.first >= 0 && pair.first < n_vocab) {
+                float freq = pair.second / sum;
+                logits[pair.first] -= penalty * freq;
+            }
+        }
+        SRV_DBG("++%s \r\n", "call freq penalty");
+    }
+
+    void update(const slot_params& params) override {
+        penalty = params.sampling.penalty_repeat;
+    }
+};
+
+class LogitsProcessorList {
+public:
+    void add(std::unique_ptr<LogitsProcessor> processor) {
+        processors.push_back(std::move(processor));
+    }
+
+    void print_processors_param() const {
+        for (const auto& processor : processors) {
+            SRV_INF("%s", "++call print_processor_param\r\n");
+            processor->print_processor_param();
+        }
+    }
+
+    void process(float* logits, const int n_vocab, const std::vector<llama_token>& last_tokens, const slot_params& params) const {
+        for (const auto& processor : processors) {
+            SRV_DBG("--%s\r\n", "call process");
+            processor->update(params);
+            processor->process(logits, n_vocab, last_tokens);
+        }
+    }
+
+private:
+    std::vector<std::unique_ptr<LogitsProcessor>> processors;
 };
 
 struct server_task {
@@ -933,9 +959,7 @@ struct server_task {
       }
     }
 
-    std::string model_name = params_base.model_alias.empty()
-                                 ? DEFAULT_OAICOMPAT_MODEL
-                                 : params_base.model_alias;
+    std::string model_name = params_base.model_alias.empty() ? DEFAULT_OAICOMPAT_MODEL : params_base.model_alias;
     params.oaicompat_model = json_value(data, "model", model_name);
 
     return params;
@@ -2598,7 +2622,7 @@ struct server_context {
 
   void init_houmo_sampling(LogitsProcessorList &processors, void *param) {
     // 创建处理器列表
-    auto p = (::params *)param;
+    const auto p = static_cast<::params*>(param);
     processors.add(std::make_unique<TopKProcessor>(p->top_k));
     processors.add(std::make_unique<TopPProcessor>(p->top_p));
     processors.add(std::make_unique<TemperatureProcessor>(p->temperature));
@@ -2638,9 +2662,9 @@ struct server_context {
           hmctx->model_type);
     }
 
-    // hmctx->model_type = "deepseek";
-    // hmctx->model_type = "qwen2";
-    // hmctx->model_type = "qwen2.5";
+    // /v1/models 接口依赖获取对应的model_id
+    params->model_alias = hmctx->model_name;
+
     std::string prefill_model = "qwen2_prefill.hmm";
     std::string decode_model = "qwen2_decode.hmm";
     if (hmctx->model_type == "qwen2.5") {
@@ -5074,11 +5098,14 @@ struct server_context {
         //torch::Tensor decode_floatTensor = decode_output_tensor.to(torch::kFloat);
         //float *p_logits=(float *)decode_floatTensor.data_ptr<float>();
 
-        float *p_logits=(float *)decode_output_tensor.data_ptr<float>();
+        auto *p_logits= decode_output_tensor.data_ptr<float>();
         for (auto &slot : slots) {
-          if(slot.generated_tokens.size()>0){
+          if (!slot.generated_tokens.empty()) {
             SRV_DBG("%s\r\n","++call hm_sampling_processors process");
-            hm_sampling_processors.process(p_logits, n_vocab, slot.generated_tokens);
+            SRV_DBG("HI.CPP >>> [%d][%d] slot.params top_k: %d, top_p: %f, temp: %f, penalty_repeat: %f, penalty_last_n: %d \r\n",
+                slot.id, slot.id_task, slot.params.sampling.top_k, slot.params.sampling.top_p, slot.params.sampling.temp,
+                slot.params.sampling.penalty_repeat, slot.params.sampling.penalty_last_n);
+            hm_sampling_processors.process(p_logits, n_vocab, slot.generated_tokens, slot.params);
           }
           else{
             SRV_ERR("slot.generated_tokens.size() is:%d ,dont need sample\r\n",slot.generated_tokens.size());
@@ -5902,11 +5929,18 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
         return -1;
     }
 
-  // struct that contains llama context and inference
-  static server_context *ctx_server = nullptr;
-  ctx_server = new server_context();
-  SRV_INF("ctx_server: %p\n", ctx_server);
-  ctx_server->params = p_params;
+    // struct that contains llama context and inference
+    static server_context* ctx_server = nullptr;
+    ctx_server = new server_context();
+    SRV_INF("ctx_server: %p\n", ctx_server);
+
+    // 服务化版本自定义初始后采样参数配置
+    p_params->sampling.top_k = 40;
+    p_params->sampling.top_p = 0.9;
+    p_params->sampling.temp = 1.1f;
+    p_params->sampling.penalty_repeat = 1.05;
+    p_params->sampling.penalty_last_n = 60;
+    ctx_server->params = p_params;
 
     return 0;
 }
@@ -5933,21 +5967,19 @@ int run_server() {
     }
 
     const int thread_count = config_reader.GetInteger("server", "thread_count", 5);
-    const std::string model_location = config_reader.Get("models_loc", "location", "UNKNOWN");
-    const std::string cur_model = config_reader.Get("server", "cur_model", "UNKNOWN");
-    if (model_location == "UNKNOWN" || cur_model == "UNKNOWN") {
+    const std::string cur_model = config_reader.Get("model", "cur_model", "UNKNOWN");
+    if (cur_model == "UNKNOWN") {
         return 2;
     }
 
     common_params* p_params = nullptr;
-    const std::string cur_model_path = model_location + "/" + cur_model + "/";
-    std::cout << cur_model_path << std::endl;
+    const std::string cur_model_path = cur_model + "/";
     if (const int error_code = init_params(cur_model_path, config_reader, p_params); error_code != 0) {
         return error_code;
     }
 
 
-    LOG_INF("WINSERVICE info: n_threads = %d, model_location = %s, cur_model = %s \n", thread_count, model_location.c_str(), cur_model.c_str());
+    LOG_INF("WINSERVICE info: n_threads = %d, cur_model = %s \n", thread_count, cur_model.c_str());
 
     HANDLE instance = create_instance(cur_model_path, p_params);
     if (!instance) {
@@ -6003,6 +6035,7 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
                         "4096",
                         "--no-context-shift",
                         "--no-warmup",
+                        "--log-verbose",
                         "--log-file",
                         (char*)log_file.c_str(),
                         NULL};
@@ -6020,6 +6053,11 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
 
         // own arguments required by this example
         p_params = new common_params();
+        p_params->sampling.top_k = 40;
+        p_params->sampling.top_p = 0.9;
+        p_params->sampling.temp = 1.1f;
+        p_params->sampling.penalty_repeat = 1.05;
+        p_params->sampling.penalty_last_n = 60;
 
         if (!common_params_parse(argc, argv, *p_params, LLAMA_EXAMPLE_SERVER)) {
             return nullptr;
@@ -6032,6 +6070,13 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
     static server_context * ctx_server = nullptr;
     ctx_server = new server_context();
     SRV_INF("ctx_server: %p\n", ctx_server);
+    params params;
+    params.top_k = p_params->sampling.top_k;
+    params.top_p = p_params->sampling.top_p;
+    params.temperature = p_params->sampling.temp;
+    params.repeat_penalty = p_params->sampling.penalty_repeat;
+    params.repeat_last_n = p_params->sampling.penalty_last_n;
+    ctx_server->init_houmo_sampling(ctx_server->hm_sampling_processors, &params);
     ctx_server->params = p_params;
 
 
@@ -7003,15 +7048,14 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
                                           /* oaicompat_chat */ true);
       };
 
-  const auto handle_models = [&res_ok](const httplib::Request &,
-                                       httplib::Response &res) {
-    json models = {{"object", "list"},
+  const auto handle_models = [&res_ok](const httplib::Request &, httplib::Response &res) {
+    const json models = {{"object", "list"},
                    {"data",
                     {
                         {{"id", ctx_server->params->model_alias},
                          {"object", "model"},
                          {"created", std::time(0)},
-                         {"owned_by", "llamacpp"},
+                         {"owned_by", "owner"},
                          {"meta", ctx_server->model_meta()}},
                     }}};
 
@@ -7314,15 +7358,12 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
   }
 
   // register API routes
-  ctx_server->svr->Get("/health",
-                       handle_health);  // public endpoint (no API key check)
+  ctx_server->svr->Get("/health",  handle_health);  // public endpoint (no API key check)
   ctx_server->svr->Get("/metrics", handle_metrics);
   ctx_server->svr->Get("/props", handle_props);
   ctx_server->svr->Post("/props", handle_props_change);
-  ctx_server->svr->Get("/models",
-                       handle_models);  // public endpoint (no API key check)
-  ctx_server->svr->Get("/v1/models",
-                       handle_models);  // public endpoint (no API key check)
+  ctx_server->svr->Get("/models", handle_models);  // public endpoint (no API key check)
+  ctx_server->svr->Get("/v1/models", handle_models);  // public endpoint (no API key check)
   ctx_server->svr->Post("/completion", handle_completions);  // legacy
   ctx_server->svr->Post("/completions", handle_completions);
   ctx_server->svr->Post("/v1/completions", handle_completions);
@@ -7392,8 +7433,7 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
   }
 
   // run the HTTP server in a thread
-  ctx_server->srv_t =
-      std::thread([&]() { ctx_server->svr->listen_after_bind(); });
+  ctx_server->srv_t = std::thread([&] { ctx_server->svr->listen_after_bind(); });
   ctx_server->svr->wait_until_ready();
 
   LOG_INF(
@@ -7561,7 +7601,7 @@ HANDLE completion_create_instance(void* param) {
     SRV_DBG("ctx_server->model: %p\n", ctx_server->model);
     SRV_DBG("ctx_server->ctx: %p\n", ctx_server->ctx);
     SRV_DBG("ctx_server->params: %p\n", ctx_server->params);
-    ctx_server->init_houmo_sampling(ctx_server->hm_sampling_processors,param);
+    ctx_server->init_houmo_sampling(ctx_server->hm_sampling_processors, param);
   }
 
   return ctx_server;

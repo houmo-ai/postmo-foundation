@@ -101,25 +101,25 @@ target_link_libraries(${TARGET} PRIVATE ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_
         ${LLAMA_CPP_LIBRARY_GGML_CPU} ${INIH_LIBRARY} ${INIH_LIBRARY_CPP} "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
-add_executable(${TARGET}-demo demo.cpp)
-install(TARGETS ${TARGET}-demo RUNTIME)
-target_include_directories(${TARGET}-demo PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET}-demo PRIVATE houmo-llm ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+add_executable(${TARGET}-hi-cpp-win main-win.cpp)
+install(TARGETS ${TARGET}-hi-cpp-win RUNTIME)
+target_include_directories(${TARGET}-hi-cpp-win PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(${TARGET}-hi-cpp-win PRIVATE houmo-llm ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU} ${INIH_LIBRARY} ${INIH_LIBRARY_CPP} "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 
 if (LLAMA_SERVER_SSL)
     find_package(OpenSSL REQUIRED)
-    target_link_libraries(${TARGET}-demo PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-    target_compile_definitions(${TARGET}-demo PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(${TARGET}-hi-cpp-win PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    target_compile_definitions(${TARGET}-hi-cpp-win PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
 endif()
 
 if (WIN32)
-    TARGET_LINK_LIBRARIES(${TARGET}-demo PRIVATE ws2_32)
+    TARGET_LINK_LIBRARIES(${TARGET}-hi-cpp-win PRIVATE ws2_32)
 else()
-    TARGET_LINK_LIBRARIES(${TARGET}-demo PRIVATE -lpthread -lm)
+    TARGET_LINK_LIBRARIES(${TARGET}-hi-cpp-win PRIVATE -lpthread -lm)
 endif()
 
-target_compile_features(${TARGET}-demo PRIVATE cxx_std_17)
+target_compile_features(${TARGET}-hi-cpp-win PRIVATE cxx_std_17)
 
 add_executable(${TARGET}-server ${TARGET_SRCS})
 install(TARGETS ${TARGET}-server RUNTIME)
