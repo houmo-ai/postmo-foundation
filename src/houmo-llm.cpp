@@ -28,14 +28,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include <torch/torch.h>
 #include "http_server_c_interface_3.h"
-
 #include "INIReader.h"
-
-#include "index.html.gz.hpp"
-#include "loading.html.hpp"
 #include "tcim/tcim_runtime.h"
+
 #if (__GNUC__ < 8 && !defined(_MSC_VER))
 #include <experimental/filesystem>
 namespace fs = std::experimental::filesystem;
@@ -5885,10 +5881,26 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
         tok_model_path = model_path + "qwen2-1_5b-instruct-q4_0.gguf";
     }
 
+    const auto server_port = config_reader.Get("server", "port", "8808");
+
     const std::string log_location = config_reader.Get("log", "location", "UNKNOWN");
     if (log_location == "UNKNOWN") {
         return -1;
     }
+
+    const int log_level = config_reader.GetInteger("log", "level", 0);
+
+    try {
+        if (std::filesystem::create_directories(log_location)) {
+            std::cout << "Log Dir created successfully.\n";
+        } else {
+            std::cout << "Log Dir already exist.\n";
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "Log Dir created failed, exception: " << e.what() << "\n";
+        return -1;
+    }
+
 
     const std::time_t t = std::time(nullptr);
     const std::string log_file = log_location + string_format("houmo-llm-%d.log", t);
@@ -5896,7 +5908,7 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
                     "-m",
                     &tok_model_path[0],
                     "--port",
-                    "8808",
+                    const_cast<char*>(server_port.c_str()),
                     "--host",
                     "0.0.0.0",
                     "--device",
@@ -5907,7 +5919,8 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
                     "4096",
                     "--no-context-shift",
                     "--no-warmup",
-                    "--log-verbose",
+                    "--log-verbosity",
+                    const_cast<char*>(std::to_string(log_level).c_str()),
                     "--log-file",
                     const_cast<char*>(log_file.c_str()),
                     nullptr};
@@ -6180,8 +6193,7 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
   }
 
   // Necessary similarity of prompt for slot selection
-  ctx_server->slot_prompt_similarity =
-      ctx_server->params->slot_prompt_similarity;
+  ctx_server->slot_prompt_similarity = ctx_server->params->slot_prompt_similarity;
 
   //
   // Middlewares
@@ -6228,23 +6240,13 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
     return false;
   };
 
-  auto middleware_server_state = [&res_error](const httplib::Request &req,
-                                              httplib::Response &res) {
-    LOG_INF("state 2: %d\n", ctx_server->state.load());
-    server_state current_state = ctx_server->state.load();
-    if (current_state == SERVER_STATE_LOADING_MODEL) {
-      auto tmp = string_split<std::string>(req.path, '.');
-      if (req.path == "/" || tmp.back() == "html") {
-        res.set_content(reinterpret_cast<const char *>(loading_html),
-                        loading_html_len, "text/html; charset=utf-8");
-        res.status = 503;
-      } else {
-        res_error(res, format_error_response("Loading model",
-                                             ERROR_TYPE_UNAVAILABLE));
+  auto middleware_server_state = [&res_error](const httplib::Request& req, httplib::Response& res) {
+      LOG_INF("state 2: %d\n", ctx_server->state.load());
+      if (ctx_server->state.load() == SERVER_STATE_LOADING_MODEL) {
+          res_error(res, format_error_response("Loading model", ERROR_TYPE_UNAVAILABLE));
+          return false;
       }
-      return false;
-    }
-    return true;
+      return true;
   };
 
   // register server middlewares
@@ -6276,11 +6278,10 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
   // Route handlers (or controllers)
   //
 
-  const auto handle_health = [&](const httplib::Request &,
-                                 httplib::Response &res) {
-    // error and loading states are handled by middleware
-    json health = {{"status", "ok"}};
-    res_ok(res, health);
+  const auto handle_health = [&](const httplib::Request &, httplib::Response &res) {
+      // error and loading states are handled by middleware
+      json health = {{"status", "ok"}};
+      res_ok(res, health);
   };
 
   const auto handle_slots = [&](const httplib::Request &req,
@@ -7329,33 +7330,6 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
     res_ok(res, result->to_json());
   };
 
-  //
-  // Router
-  //
-
-  if (!ctx_server->params->webui) {
-    LOG_INF("Web UI is disabled\n");
-  } else {
-    // register static assets routes
-    if (!ctx_server->params->public_path.empty()) {
-      // Set the base directory for serving static files
-      bool is_found = ctx_server->svr->set_mount_point(
-          "/", ctx_server->params->public_path);
-      if (!is_found) {
-        LOG_ERR("%s: static assets path not found: %s\n", __func__,
-                ctx_server->params->public_path.c_str());
-        return nullptr;
-      }
-    } else {
-      // using embedded static index.html
-      ctx_server->svr->Get(
-          "/", [](const httplib::Request &, httplib::Response &res) {
-            res.set_content(reinterpret_cast<const char *>(index_html_gz),
-                            index_html_gz_len, "text/html; charset=utf-8");
-            return false;
-          });
-    }
-  }
 
   // register API routes
   ctx_server->svr->Get("/health",  handle_health);  // public endpoint (no API key check)

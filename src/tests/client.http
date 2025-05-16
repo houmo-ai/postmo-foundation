@@ -1,5 +1,5 @@
 ###
-POST http://localhost:8808/v1/chat/completions
+POST http://10.64.35.42:8808/v1/chat/completions
 Content-Type: application/json
 
 {
@@ -16,7 +16,8 @@ Content-Type: application/json
   ],
   "top_k": 30,
   "temperature": 1.5,
-  "top_p": 0.88
+  "top_p": 0.88,
+  "stream": true
 }
 
 ###
@@ -52,6 +53,11 @@ Content-Type: application/json
 GET http://localhost:8808/v1/models
 Content-Type: application/json
 
+###
+
+GET http://10.65.35.16:7819/v1/models
+Content-Type: application/json
+
 
 
 ###
@@ -64,6 +70,20 @@ Content-Type: application/json
     {
       "role": "user",
       "content": "你了解上海吗？"
+    }
+  ]
+}
+
+
+### message参数 错误测试
+POST http://localhost:8808/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "test",
+  "messages": [
+    {
+      "content": "user"
     }
   ]
 }

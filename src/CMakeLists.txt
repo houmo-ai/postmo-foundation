@@ -80,19 +80,6 @@ set(PUBLIC_ASSETS
     loading.html
 )
 
-foreach(asset ${PUBLIC_ASSETS})
-    message("asset=${asset}")
-    set(input "${CMAKE_CURRENT_SOURCE_DIR}/public/${asset}")
-    set(output "${CMAKE_CURRENT_BINARY_DIR}/${asset}.hpp")
-    list(APPEND TARGET_SRCS ${output})
-    list(APPEND HOUMO_LLM_SRCS ${output})
-    add_custom_command(
-        DEPENDS "${input}"
-        OUTPUT "${output}"
-        COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
-    )
-    set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
-endforeach()
 
 add_library(${TARGET} ${HOUMO_LLM_SRCS})
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
