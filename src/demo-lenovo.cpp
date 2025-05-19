@@ -276,7 +276,7 @@ int main(int argc, char ** argv) {
       //return 0;
       bool state = api_loadmodel_by_buffer(instance, buffers, model_filesizes, buffers_count, hwinfo);
       int max_model_size=0;
-      printf("api_loadmodel_by_path = %d\n", state);
+      printf("api_loadmodel_by_buffer = %d\n", state);
     #endif
     status = api_status(instance);
     printf("-api_status: %d\n", status);

@@ -235,6 +235,16 @@ enum error_type {
   ERROR_TYPE_NOT_SUPPORTED,  // custom error
 };
 
+enum model_scale_type {
+  MODEL_1DOT5B,
+  MODEL_3B,
+  MODEL_7B,
+  MODEL_8B,
+  MODEL_14B,
+  MODEL_32B,
+  MODEL_72B,
+};
+
 //===========add sampling algorithm
 
 struct llama_sampling_params {
@@ -372,6 +382,28 @@ struct slot_params {
         {"lora", lora},
     };
   }
+};
+
+struct server_context;
+class TensorConverter {
+public:
+    // 将torch::Tensor转换为tcim::Tensor
+    //static tcim::Tensor FromTorch(const torch::Tensor& torch_tensor, server_context *hmqwen, const std::string &tcim_tensorname,int which_part) ;
+    static void FromTorch(const torch::Tensor& torch_tensor, server_context *hmqwen, const std::string &tcim_tensorname,int which_part) ;
+
+    // 将tcim::Tensor转换为torch::Tensor
+    static torch::Tensor ToTorch(const tcim::Tensor& tcim_tensor);
+
+    // 将vector<float>转换为tcim::Tensor
+    //template<typename T>
+    //static tcim::Tensor FromVector(const std::vector<int16_t>& vec, const std::vector<uint64_t>& shape, server_context *hmqwen, const std::string &tcim_tensorname,int which_part);
+
+    static void FromVector(const std::vector<int16_t>& vec, const std::vector<uint64_t>& shape, server_context *hmqwen, const std::string &tcim_tensorname,int which_part);
+
+
+    // 将tcim::Tensor转换为vector<T>
+    //template<typename T>
+    static std::vector<int16_t> ToVector(const tcim::Tensor& tcim_tensor);
 };
 
 
@@ -2348,6 +2380,26 @@ struct houmo_context {
   tcim::Module decode_model;
 };
 
+struct houmo_context_14B {
+  std::string model_type = "deepseek";
+  std::string model_name = "Unkown";
+
+  int prefill_length = 256;
+  int decode_length = 8192;
+  int nblocks = 48;
+
+  std::vector<std::string> dummy_tensor_names;
+
+  tcim::Module::WeightManager* wm0_;
+  tcim::Module::WeightManager* wm1_;
+  tcim::Stream stream;
+  tcim::Stream stream2;
+  tcim::Module prefill_model_part1_;
+  tcim::Module prefill_model_part2_;
+  tcim::Module decode_model_part1_;
+  tcim::Module decode_model_part2_;
+};
+
 struct server_context {
   int magic = 12345;
   std::mutex mutex_context;
@@ -2367,6 +2419,8 @@ struct server_context {
   torch::nn::Embedding emb = nullptr;
 
   houmo_context *hmctx;
+  houmo_context_14B *hmctx_14B;
+  model_scale_type hm_model_scale_type=MODEL_7B;;  //根据加载的模型，修改成对应的宏
   LogitsProcessorList  hm_sampling_processors; //后采样实现
 
   std::map<std::string, tcim::Tensor> prefill_input_map;
@@ -2374,6 +2428,11 @@ struct server_context {
 
   std::map<std::string, tcim::Tensor> decode_input_map;
   std::map<std::string, tcim::Tensor> decode_output_map;
+
+  std::map<std::string, tcim::Tensor> prefill_part1_tensormap;
+  std::map<std::string, tcim::Tensor> prefill_part2_tensormap;
+  std::map<std::string, tcim::Tensor> decode_part1_tensormap;
+  std::map<std::string, tcim::Tensor> decode_part2_tensormap;
 
   int32_t context_length;
 
@@ -2631,8 +2690,333 @@ struct server_context {
 
   }
 
+  void fillinfomap_from_modelinfo(houmo_context_14B *hmctx_14B) {
+        // 1. get prefillpart1 input info
+        int input_num = hmctx_14B->prefill_model_part1_.GetInputNum();
+        // std::cout << "Count of Input: " << input_num << std::endl;
+        for (int idx = 0; idx < input_num; idx++) {
+          auto input_name = hmctx_14B->prefill_model_part1_.GetInputName(idx);
+          auto input_info =
+              hmctx_14B->prefill_model_part1_.GetInputInfo(input_name).AsContiguous();
+          // std::cout << "Input[" << input_name << "] " << input_info << std::endl;
+          auto input_tensor = tcim::Tensor::CreateHostTensor(input_info);
+          prefill_part1_tensormap.insert(
+              std::pair<std::string, tcim::Tensor>(input_name, input_tensor));
+        }
+
+        // 1. get prefillpart1 info
+        int output_num = hmctx_14B->prefill_model_part1_.GetOutputNum();
+        // std::cout << "Count of Output: " << output_num << std::endl;
+        for (int idx = 0; idx < output_num; idx++) {
+          auto output_name = hmctx_14B->prefill_model_part1_.GetOutputName(idx);
+          auto output_info =
+              hmctx_14B->prefill_model_part1_.GetOutputInfo(output_name).AsContiguous();
+          // std::cout << "Output[" << output_name << "] " << output_info <<
+          // std::endl;
+          auto output_tensor = tcim::Tensor::CreateHostTensor(output_info);
+          prefill_part1_tensormap.insert(
+              std::pair<std::string, tcim::Tensor>(output_name, output_tensor));
+        }
+
+        // 2. get prefillpart2 input info
+        input_num = hmctx_14B->prefill_model_part2_.GetInputNum();
+        // std::cout << "Count of Input: " << input_num << std::endl;
+        for (int idx = 0; idx < input_num; idx++) {
+          auto input_name = hmctx_14B->prefill_model_part2_.GetInputName(idx);
+          auto input_info =
+              hmctx_14B->prefill_model_part2_.GetInputInfo(input_name).AsContiguous();
+          // std::cout << "Input[" << input_name << "] " << input_info << std::endl;
+          auto input_tensor = tcim::Tensor::CreateHostTensor(input_info);
+          prefill_part2_tensormap.insert(
+              std::pair<std::string, tcim::Tensor>(input_name, input_tensor));
+        }
+
+        // 2. get prefillpart2 info
+        output_num = hmctx_14B->prefill_model_part2_.GetOutputNum();
+        // std::cout << "Count of Output: " << output_num << std::endl;
+        for (int idx = 0; idx < output_num; idx++) {
+          auto output_name = hmctx_14B->prefill_model_part2_.GetOutputName(idx);
+          auto output_info =
+              hmctx_14B->prefill_model_part2_.GetOutputInfo(output_name).AsContiguous();
+          // std::cout << "Output[" << output_name << "] " << output_info <<
+          // std::endl;
+          auto output_tensor = tcim::Tensor::CreateHostTensor(output_info);
+          prefill_part2_tensormap.insert(
+              std::pair<std::string, tcim::Tensor>(output_name, output_tensor));
+        }
+
+        // 3. get decodepart1 input info
+        input_num = hmctx_14B->decode_model_part1_.GetInputNum();
+        // std::cout << "Count of Input: " << input_num << std::endl;
+        for (int idx = 0; idx < input_num; idx++) {
+          auto input_name = hmctx_14B->decode_model_part1_.GetInputName(idx);
+          auto input_info =
+              hmctx_14B->decode_model_part1_.GetInputInfo(input_name).AsContiguous();
+          // std::cout << "Input[" << input_name << "] " << input_info << std::endl;
+          auto input_tensor = tcim::Tensor::CreateHostTensor(input_info);
+          decode_part1_tensormap.insert(
+              std::pair<std::string, tcim::Tensor>(input_name, input_tensor));
+        }
+
+        // 3. get decodepart1 info
+        output_num = hmctx_14B->decode_model_part1_.GetOutputNum();
+        // std::cout << "Count of Output: " << output_num << std::endl;
+        for (int idx = 0; idx < output_num; idx++) {
+          auto output_name = hmctx_14B->decode_model_part1_.GetOutputName(idx);
+          auto output_info =
+              hmctx_14B->decode_model_part1_.GetOutputInfo(output_name).AsContiguous();
+          // std::cout << "Output[" << output_name << "] " << output_info <<
+          // std::endl;
+          auto output_tensor = tcim::Tensor::CreateHostTensor(output_info);
+          decode_part1_tensormap.insert(
+              std::pair<std::string, tcim::Tensor>(output_name, output_tensor));
+        }
+
+        // 4. get decodepart2 input info
+        input_num = hmctx_14B->decode_model_part2_.GetInputNum();
+        // std::cout << "Count of Input: " << input_num << std::endl;
+        for (int idx = 0; idx < input_num; idx++) {
+          auto input_name = hmctx_14B->decode_model_part2_.GetInputName(idx);
+          auto input_info =
+              hmctx_14B->decode_model_part2_.GetInputInfo(input_name).AsContiguous();
+          // std::cout << "Input[" << input_name << "] " << input_info << std::endl;
+          auto input_tensor = tcim::Tensor::CreateHostTensor(input_info);
+          decode_part2_tensormap.insert(
+              std::pair<std::string, tcim::Tensor>(input_name, input_tensor));
+        }
+
+        // 4. get decodepart2 info
+        output_num = hmctx_14B->decode_model_part2_.GetOutputNum();
+        // std::cout << "Count of Output: " << output_num << std::endl;
+        for (int idx = 0; idx < output_num; idx++) {
+          auto output_name = hmctx_14B->decode_model_part2_.GetOutputName(idx);
+          auto output_info =
+              hmctx_14B->decode_model_part2_.GetOutputInfo(output_name).AsContiguous();
+          // std::cout << "Output[" << output_name << "] " << output_info <<
+          // std::endl;
+          auto output_tensor = tcim::Tensor::CreateHostTensor(output_info);
+          decode_part2_tensormap.insert(
+              std::pair<std::string, tcim::Tensor>(output_name, output_tensor));
+        }
+  }
+
+  void init_14B(std::string model_path) {
+    #define SPLIT_COUNT (26)
+    model_status = 0;
+    hm_model_scale_type=MODEL_14B;
+    if (model_path == "") {
+      model_path = "./";
+    }
+    model_path = model_path + "/";
+
+    hmctx_14B = new houmo_context_14B();
+    hmctx = new houmo_context();
+    hmctx_14B->prefill_length = 256;
+    hmctx_14B->decode_length = 8192;
+    hmctx_14B->nblocks = 48;
+    if (model_path.find("qwen2.5") != std::string::npos) {
+      hmctx_14B->model_type = "qwen2.5";
+    } else if (model_path.find("qwen2") != std::string::npos) {
+      hmctx_14B->model_type = "qwen2";
+    }
+
+    if (hmctx_14B->model_type == "qwen2") {
+      hmctx_14B->model_name = "Qwen2-7B-Instruct";
+    } else if (hmctx_14B->model_type == "qwen2.5") {
+      hmctx_14B->model_name = "Qwen2.5-7B-Instruct";
+    } else if (hmctx_14B->model_type == "deepseek") {
+      hmctx_14B->model_name = "DeepSeek-R1-Distill-Qwen-14B";
+    } else {
+      LOG_ERR(
+          "model type %s not support, only support qwen2, qwen2.5 and "
+          "deepseek.\n",
+          hmctx_14B->model_type);
+    }
+
+    // /v1/models 接口依赖获取对应的model_id
+    params->model_alias = hmctx_14B->model_name;
+
+
+    torch::Tensor input;
+    // std::string input_path = "./qembedding.pt";
+    std::string input_path = model_path + "hmquant/deepseek14b_traced_model.pt";
+
+    try {
+      torch::load(input, input_path);
+      input = input.view({-1, 5120});
+      // std::cout << "input options: " << input.options() << "\n";
+      // std::cout << "input dim: " << input.dim() << "\n";
+      // std::cout << "input size: " << input.size(0) << "\n";
+      // std::cout << "embedding content: " << std::endl;
+      // for (int i = 0; i < 20; i++) {
+      //     std::cout << input[0][i] << std::endl;
+      // }
+      // std::cout << std::endl;
+      emb = torch::nn::Embedding::from_pretrained(input);
+    } catch (const c10::Error &e) {
+      std::cerr << "error loading the model: " << e.what_without_backtrace()
+                << std::endl;
+      return;
+    }
+
+    LOG_DBG("%s\n", "emb loaded");
+    LOG_DBG("tcim version: %s\n", tcim::GetVersion().c_str());
+
+    // 初始化权重管理器
+    tcim::Module::WeightManager weight_manager_0=tcim::Module::WeightManager::CreateWeightManager(0);
+    tcim::Module::WeightManager weight_manager_1=tcim::Module::WeightManager::CreateWeightManager(1);
+
+    // 创建模型选项
+    tcim::Module::Option option1_0(weight_manager_0);
+    tcim::Module::Option option1_1(weight_manager_1);
+    tcim::Module::Option option2_0(weight_manager_0);
+    tcim::Module::Option option2_1(weight_manager_1);
+
+    // 设置dummy tensors
+    std::vector<std::string> dummy_tensor_names;
+    for (int i = 0; i < hmctx_14B->nblocks; ++i) {
+        dummy_tensor_names.push_back("model_layers_" + std::to_string(i) + "_self_attn_kcache_input");
+        dummy_tensor_names.push_back("model_layers_" + std::to_string(i) + "_self_attn_vcache_input");
+        dummy_tensor_names.push_back("model_layers_" + std::to_string(i) + "_self_attn_kcache_history_sum");
+    }
+    option2_0.SetDummyTensors(dummy_tensor_names);
+    option2_1.SetDummyTensors(dummy_tensor_names);
+
+    hmctx_14B->stream = tcim::Stream(true);
+    hmctx_14B->stream2 = tcim::Stream(true);
+
+    std::string prefill_model = "qwen2_prefill.hmm";
+    std::string decode_model = "qwen2_decode.hmm";
+    if (hmctx_14B->model_type == "qwen2.5") {
+      decode_model = "qwen2.5_decode.hmm";
+      prefill_model = "qwen2.5_prefill.hmm";
+    } else if (hmctx_14B->model_type == "deepseek") {
+      decode_model = "deepseek_decode.hmm";
+      prefill_model = "deepseek_prefill.hmm";
+    }
+    // std::cout << "prefill_model: " << prefill_model << "\n";
+    // std::cout << "decode_model: " << decode_model << "\n";
+
+    // 加载模型
+    hmctx_14B->prefill_model_part1_ = tcim::Module::LoadFromFile((model_path +"/deepseek_prefill_part1.hmm"), option1_0);
+    std::cout << " loaded prefill part1" << std::endl;
+
+    hmctx_14B->prefill_model_part2_ = tcim::Module::LoadFromFile((model_path +"/deepseek_prefill_part2.hmm"), option1_1);
+    std::cout << " loaded prefill part2" << std::endl;
+
+    hmctx_14B->decode_model_part1_ = tcim::Module::LoadFromFile((model_path  +"/deepseek_decode_part1.hmm"), option2_0);
+    std::cout << " loaded decoder part1" << std::endl;
+
+    hmctx_14B->decode_model_part2_ = tcim::Module::LoadFromFile((model_path  +"/deepseek_decode_part2.hmm"), option2_1);
+    std::cout << " loaded decoder part2" << std::endl;
+
+    hmctx_14B->prefill_model_part1_.SetStream(hmctx_14B->stream);
+    hmctx_14B->prefill_model_part2_.SetStream(hmctx_14B->stream2);
+    hmctx_14B->decode_model_part1_.SetStream(hmctx_14B->stream);
+    hmctx_14B->decode_model_part2_.SetStream(hmctx_14B->stream2);
+
+    fillinfomap_from_modelinfo(hmctx_14B);
+    printf("++1\r\n");
+    // 设置KVCache输入
+    for (int i = 0; i < SPLIT_COUNT; ++i) {
+        //printf("++i =%d\r\n",i);
+        auto kcache = hmctx_14B->prefill_model_part1_.GetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_input");
+        //printf("##1\r\n");
+        hmctx_14B->decode_model_part1_.SetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_input", kcache);
+        //printf("##2\r\n");
+        auto vcache = hmctx_14B->prefill_model_part1_.GetInput("model_layers_" + std::to_string(i) + "_self_attn_vcache_input");
+        //printf("##3\r\n");
+        hmctx_14B->decode_model_part1_.SetInput("model_layers_" + std::to_string(i) + "_self_attn_vcache_input", vcache);
+        //printf("##4\r\n");
+        auto kcache_history_sum = hmctx_14B->prefill_model_part1_.GetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_history_sum");
+        //printf("##5\r\n");
+        hmctx_14B->decode_model_part1_.SetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_history_sum", kcache_history_sum);
+        //printf("##6\r\n");
+    }
+    printf("++2\r\n");
+    for (int i = SPLIT_COUNT; i < hmctx_14B->nblocks; ++i) {
+        auto kcache = hmctx_14B->prefill_model_part2_.GetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_input");
+        hmctx_14B->decode_model_part2_.SetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_input", kcache);
+
+        auto vcache = hmctx_14B->prefill_model_part2_.GetInput("model_layers_" + std::to_string(i) + "_self_attn_vcache_input");
+        hmctx_14B->decode_model_part2_.SetInput("model_layers_" + std::to_string(i) + "_self_attn_vcache_input", vcache);
+
+        auto kcache_history_sum = hmctx_14B->prefill_model_part2_.GetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_history_sum");
+        hmctx_14B->decode_model_part2_.SetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_history_sum", kcache_history_sum);
+    }
+    printf("++3\r\n");
+    // 设置decode输入
+    std::vector<int16_t> current_length_input_1 = {1};
+    //TODO:szj 确认 shape 是1维的1 还是二维的1
+    TensorConverter::FromVector(current_length_input_1, {current_length_input_1.size()},this,"current_length",3);
+    hmctx_14B->decode_model_part1_.SetInput("current_length", decode_part1_tensormap.at("current_length") );
+    TensorConverter::FromVector(current_length_input_1, {current_length_input_1.size()},this,"current_length",4);
+    hmctx_14B->decode_model_part2_.SetInput("current_length",  decode_part2_tensormap.at("current_length"));
+
+
+
+    const int32_t n_ctx_slot = n_ctx / params_base.n_parallel;
+
+    SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);
+
+    for (int i = 0; i < params_base.n_parallel; i++) {
+      server_slot slot;
+
+      slot.id = i;
+      slot.ctx = ctx;
+      slot.n_ctx = n_ctx_slot;
+      slot.n_predict = params_base.n_predict;
+
+      if (model_dft) {
+        slot.batch_spec =
+            llama_batch_init(params_base.speculative.n_max + 1, 0, 1);
+
+        slot.ctx_dft = llama_init_from_model(model_dft, cparams_dft);
+        if (slot.ctx_dft == nullptr) {
+          SRV_ERR("%s", "failed to create draft context\n");
+          return;
+        }
+
+        slot.spec = common_speculative_init(slot.ctx_dft);
+        if (slot.spec == nullptr) {
+          SRV_ERR("%s", "failed to create speculator\n");
+          return;
+        }
+      }
+
+      SLT_INF(slot, "new slot n_ctx_slot = %d\n", slot.n_ctx);
+
+      slot.params.sampling = params_base.sampling;
+
+      slot.callback_on_release = [this](int) {
+        queue_tasks.pop_deferred_task();
+      };
+
+      slot.reset();
+
+      slots.push_back(slot);
+    }
+
+    default_generation_settings_for_props = slots[0].to_json();
+
+    // the update_slots() logic will always submit a maximum of n_batch or
+    // n_parallel tokens note that n_batch can be > n_ctx (e.g. for non-causal
+    // attention models such as BERT where the KV cache is not used)
+    {
+      const int32_t n_batch = llama_n_batch(ctx);
+
+      // only a single seq_id per token is needed
+      batch = llama_batch_init(std::max(n_batch, params_base.n_parallel), 0, 1);
+    }
+
+    metrics.init();
+    model_status = 1;
+    hm_sampling_processors.print_processors_param();
+  }
+
   void init(std::string model_path) {
     model_status = 0;
+    hm_model_scale_type=MODEL_7B;
     if (model_path == "") {
       model_path = "./";
     }
@@ -4725,6 +5109,483 @@ struct server_context {
     }
   }
 
+  int houmo_decode_14B(llama_batch batch) {
+    if (decode_pos == 0) {
+      SRV_DBG("%s", "prefill stage\n");
+      // std::vector<llama_token> tokens(batch.token, batch.token +
+      // batch.n_tokens);
+      std::vector<llama_token> tokens;
+      copy(batch.token, batch.token + batch.n_tokens, back_inserter(tokens));
+      // for(const int& i : tokens) {
+      //     std::cout << "i = " << i << std::endl;
+      // }
+      size_t input_echo_len = tokens.size();
+      // auto input_echo_len = test_tokens.size();
+
+      // std::cout << "input_echo_len: " << input_echo_len << std::endl;
+      SRV_DBG("++input_echo_len is:%d\r\n", input_echo_len);
+      // std::cout << "prefill_length: " << prefill_length << std::endl;
+
+      // int16_t prefill_loop_round = ceil(static_cast<float>(input_echo_len) /
+      //                                   static_cast<float>(prefill_length));
+      int16_t valid_length = 0;
+      int16_t current_length = 0;
+      int16_t gather_index = 0;
+      if (hmctx_14B->model_type == "deepseek") {
+        //TODO:
+      }
+
+      // 初始化KVCache历史
+        for (int i = 0; i < SPLIT_COUNT; ++i) {
+            //auto kcache_history_sum = prefill_model_part1_.GetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_history_sum");
+            //std::vector<float> zeros(kcache_history_sum.info().size(), 0.0f);
+            auto input_data = prefill_part1_tensormap.at("model_layers_" + std::to_string(i) + "_self_attn_kcache_history_sum");
+             auto kcache_history_sum_init = torch::zeros(
+              {1, (int16_t)(input_data.MemSize() / 2)}, torch::kInt16);
+            int16toint16((int16_t *)input_data.Data(),
+                       (int16_t *)kcache_history_sum_init.data_ptr<int16_t>(),
+                       kcache_history_sum_init.numel());
+            hmctx_14B->prefill_model_part1_.SetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_history_sum", input_data);
+        }
+        for (int i = SPLIT_COUNT; i < hmctx_14B->nblocks; ++i) {
+            //auto kcache_history_sum = prefill_model_part2_.GetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_history_sum");
+            //std::vector<float> zeros(kcache_history_sum.info().size(), 0.0f);
+
+            auto input_data = prefill_part2_tensormap.at("model_layers_" + std::to_string(i) + "_self_attn_kcache_history_sum");
+            auto kcache_history_sum_init = torch::zeros(
+              {1, (int16_t)(input_data.MemSize() / 2)}, torch::kInt16);
+            int16toint16((int16_t *)input_data.Data(),
+                       (int16_t *)kcache_history_sum_init.data_ptr<int16_t>(),
+                       kcache_history_sum_init.numel());
+
+            hmctx_14B->prefill_model_part2_.SetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_history_sum", input_data);
+        }
+        printf("@@1+with kvcache clear\r\n");
+        // 预填充阶段
+        int prefill_loop_round = std::ceil(static_cast<double>(input_echo_len) / hmctx_14B->prefill_length);
+        printf("++prefill_loop_round is:%d\r\n",prefill_loop_round);
+        for (int round = 0; round < prefill_loop_round; ++round) {
+            int16_t valid_length = round * hmctx_14B->prefill_length;
+            int16_t current_length;
+            std::vector<int32_t> input_ids;
+
+            if (round == prefill_loop_round - 1) {
+                current_length = input_echo_len - round * hmctx_14B->prefill_length;
+                input_ids.assign(tokens.begin() + round * hmctx_14B->prefill_length, tokens.end());
+            } else {
+                current_length = hmctx_14B->prefill_length;
+                input_ids.assign(tokens.begin() + round * hmctx_14B->prefill_length,
+                                tokens.begin() + (round + 1) * hmctx_14B->prefill_length);
+            }
+            printf("@@2\r\n");
+            // 准备输入嵌入
+            auto opts = torch::TensorOptions().dtype(torch::kInt);
+            auto inp = torch::from_blob(input_ids.data(),
+                                    {int64_t(input_ids.size())}, opts)
+                       .clone();
+            printf("@@2.1 after round input_ids.size is:%d\r\n",input_ids.size());
+            torch::Tensor inputs_embeds = emb->forward(inp);//torch::embedding(torch::tensor(input_ids), embedding_weight_);
+            printf("@@2.1.1 \r\n");
+            int effective_length = input_ids.size();
+            torch::Tensor pad_embeds = torch::zeros({hmctx_14B->prefill_length - effective_length, inputs_embeds.size(-1)}, inputs_embeds.options());
+            printf("@@2.1.2 effective_length=%d inputs_embeds.size(-1)=%d\r\n",effective_length,inputs_embeds.size(-1));
+
+            std::cout << "inputs_embeds shape: " << inputs_embeds.sizes() << std::endl;
+            std::cout << "pad_embeds shape: " << pad_embeds.sizes() << std::endl;
+            //打印torch tensor
+            //print_tensor(inputs_embeds);
+            // 检查是否有空张量
+            if (inputs_embeds.numel() == 0 ) {
+                std::cerr << "Empty inputs_embeds tensor detected!" << std::endl;
+                //return;
+            }
+            if (pad_embeds.numel() == 0) {
+                std::cerr << "Empty pad_embeds tensor detected!" << std::endl;
+                //return;
+            }
+
+            //torch::Tensor input_data = torch::cat({inputs_embeds, pad_embeds}, 0).reshape({4, hmctx_14B->prefill_length / 4, 5120});
+            torch::Tensor input_data = torch::cat({inputs_embeds, pad_embeds});
+            input_data=input_data.view({4, hmctx_14B->prefill_length / 4, 5120}).to(torch::kInt16);
+            //printf("----input_data after .view to int16:\r\n");
+            //print_tensor(input_data);
+
+            //reshape({4, config_.prefill_length / 4, 5120});
+            printf("@@--2.2\r\n");
+            // 设置并运行模型
+            std::vector<int16_t> valid_length_data = {valid_length};
+            std::vector<int16_t> current_length_data = {current_length};
+            // printf("+++valid_length_data info:\n");
+            // printVector(valid_length_data);
+
+            // printf("+++current_length_data info:\n");
+            // printVector(current_length_data);
+
+
+            printf("@@3 valid_length=%d  current_length=%d\r\n",valid_length,current_length);
+            #if 1
+            TensorConverter::FromTorch(input_data.to(torch::kInt16),this,"input_1",1);
+            hmctx_14B->prefill_model_part1_.SetInput("input_1",prefill_part1_tensormap.at("input_1"));
+
+            TensorConverter::FromVector(valid_length_data, {valid_length_data.size()},this,"valid_length",1);
+            hmctx_14B->prefill_model_part1_.SetInput("valid_length",  prefill_part1_tensormap.at("valid_length"));
+
+            TensorConverter::FromVector(current_length_data, {current_length_data.size()},this,"current_length",1);
+            hmctx_14B->prefill_model_part1_.SetInput("current_length", prefill_part1_tensormap.at("current_length"));
+            #else
+              //input_1
+              auto prefill_part1_input_data = prefill_part1_tensormap.at("input_1");
+              int16toint16((int16_t *)prefill_part1_input_data.Data(),
+                           (int16_t *)input_data.data_ptr<int16_t>(),
+                           input_data.numel());
+              //valid_length
+              std::vector<int16_t> valid_length_input = {valid_length};
+              auto valid_length_input_tensor_opts =
+                  torch::TensorOptions().dtype(torch::kInt16);
+              auto valid_length_input_tensor =
+                  torch::from_blob(valid_length_input.data(),
+                                   {int64_t(valid_length_input.size())},
+                                   valid_length_input_tensor_opts)
+                      .clone();
+
+              auto prefill_valid_length = prefill_part1_tensormap.at("valid_length");
+              int16toint16((int16_t *)prefill_valid_length.Data(),
+                           (int16_t *)valid_length_input_tensor.data_ptr<int16_t>(),
+                           valid_length_input_tensor.numel());
+
+
+              //current_length
+              std::vector<int16_t> current_length_input = {current_length};
+              auto current_length_input_tensor_opts =
+                  torch::TensorOptions().dtype(torch::kInt16);
+              auto current_length_input_tensor =
+                  torch::from_blob(current_length_input.data(),
+                                   {int64_t(current_length_input.size())},
+                                   current_length_input_tensor_opts)
+                      .clone();
+
+              // std::cout << "current_length_input_tensor: " <<
+              // current_length_input_tensor << std::endl;
+              auto prefill_current_length = prefill_part1_tensormap.at("current_length");
+              int16toint16((int16_t *)prefill_current_length.Data(),
+                     (int16_t *)current_length_input_tensor.data_ptr<int16_t>(),
+              current_length_input_tensor.numel());
+
+              hmctx_14B->prefill_model_part1_.SetInput("input_1",prefill_part1_input_data);
+              hmctx_14B->prefill_model_part1_.SetInput("valid_length",  prefill_valid_length);
+              hmctx_14B->prefill_model_part1_.SetInput("current_length", prefill_current_length);
+            #endif
+            printf("@@4\r\n");
+            if (1) {
+                printf("+++call prefill part1 run+sync\r\n");
+                hmctx_14B->prefill_model_part1_.Run();
+                hmctx_14B->prefill_model_part1_.Sync();
+                printf("@@4.1\r\n");
+                tcim::Tensor prefill_part1_output = hmctx_14B->prefill_model_part1_.GetOutput("model_layers_25_resadd2");
+                //打印prefill1输出-每隔512个打印输出
+                //print_tcimtensor(prefill_part1_output);
+                printf("@@4.2\r\n");
+                hmctx_14B->prefill_model_part2_.SetInput("model_layers_25_resadd2", prefill_part1_output);
+                printf("@@4.3\r\n");
+
+                TensorConverter::FromVector(valid_length_data, {valid_length_data.size()},this,"valid_length",2);
+                hmctx_14B->prefill_model_part2_.SetInput("valid_length", prefill_part2_tensormap.at("valid_length"));
+                printf("@@4.4\r\n");
+                TensorConverter::FromVector(current_length_data, {current_length_data.size()},this,"current_length",2);
+                hmctx_14B->prefill_model_part2_.SetInput("current_length", prefill_part2_tensormap.at("current_length"));
+                printf("@@4.5\r\n");
+                printf("+++call prefill part2 run+sync\r\n");
+                hmctx_14B->prefill_model_part2_.Run();
+                hmctx_14B->prefill_model_part2_.Sync();
+                printf("@@4.6\r\n");
+            }
+        }
+        printf("@@5\r\n");
+        // 获取预填充结果
+        tcim::Tensor output = hmctx_14B->prefill_model_part2_.GetOutput("Output_lm_head_add_list_1");
+        //std::vector<float> output_data(output.data(), output.data() + output.size());
+        auto output_data=TensorConverter::ToVector(output);
+
+        //下面打印prefill2的输出
+        // for(auto int16_v:output_data) {
+        //     //std::cout<<static_cast<int16_t>(int16_v)<<", ";
+        //     printf("%hd,",int16_v);
+        // }
+        std::cout<<std::endl;
+        printf("++output_data size is:%d\r\n",output_data.size());
+        std::cout<<std::endl;
+        int32_t next_id=0;
+        #if USE_STDDISTANCE
+            next_id = std::distance(output_data.begin(), std::max_element(output_data.begin(), output_data.end()));
+        #else
+        auto prefill_output_opts = torch::TensorOptions().dtype(torch::kInt16);
+        auto prefill_output_tensor =
+            torch::from_blob(output_data.data(),
+                            {int64_t(output_data.size())},
+                            prefill_output_opts)
+                .clone();
+
+        auto selected_output =
+            torch::argmax(prefill_output_tensor).to(torch::kInt32);
+        // std::cout << "selected_output: " << selected_output << std::endl;
+        // 下面打印的selected_output是乱码，index
+        // int值，调下面的common_token_to_piece转成字符串
+        next_id = *(int32_t *)selected_output.data_ptr<int32_t>();
+        printf("++selected next_id is:%d\r\n",next_id);
+        #endif
+
+      // std::cout << "selected_output: " << selected_output << std::endl;
+      // 下面打印的selected_output是乱码，index
+      // int值，调下面的common_token_to_piece转成字符串
+      SRV_DBG("++selected_output(tensor addr not selected index) is:%u\r\n", selected_output);
+      auto prefill_token = *(int32_t *)selected_output.data_ptr<int32_t>();
+      SRV_DBG("++selected tensor index is:%d\r\n",*(int32_t *)selected_output.data_ptr<int32_t>());
+      auto response = common_token_to_piece(ctx, prefill_token);
+      std::cout << "rrefill response: ";
+      auto invalid_utf8 = false;
+      write_utf8_cstr_to_stdout(response.c_str(), invalid_utf8);
+      std::cout << std::endl;
+      // 下面打印的是正常的response 字符串
+      SRV_DBG("++prefill response is:%s\r\n", response);
+
+      context_length = input_echo_len;
+
+      std::vector<llama_token> prefill_input_ids = {prefill_token};
+      torch::Tensor prefill_inputs_embeds;
+      auto prefill_opts = torch::TensorOptions().dtype(torch::kInt);
+      auto prefill_inp =
+          torch::from_blob(prefill_input_ids.data(),
+                           {int64_t(prefill_input_ids.size())}, prefill_opts)
+              .clone();
+      // std::cout << "prefill_inp: " << prefill_inp << "\n";
+      SRV_DBG("++prefill_inp is:%s\r\n", prefill_inp);
+      try {
+        prefill_inputs_embeds = emb->forward(prefill_inp);
+      } catch (const c10::Error &e) {
+        std::cerr << "error loading the model\n" << e.what_without_backtrace();
+        return -1;
+      }
+      // std::cout << "prefill_inputs_embeds options: " <<
+      // prefill_inputs_embeds.options() << std::endl; std::cout <<
+      // "prefill_inputs_embeds dim: " << prefill_inputs_embeds.dim() <<
+      // std::endl; std::cout << "prefill_inputs_embeds size: " <<
+      // prefill_inputs_embeds.size(0) << std::endl; for (int i = 0; i < 3; i++)
+      // {
+      //     std::cout << prefill_inputs_embeds[0][i] << " ";
+      // }
+      // std::cout << std::endl;
+      prefill_inputs_embeds =
+          prefill_inputs_embeds.view({1, 1, -1}).to(torch::kInt16);
+      // std::cout << "prefill_inputs_embeds options: " <<
+      // prefill_inputs_embeds.options() << std::endl; std::cout <<
+      // "prefill_inputs_embeds dim: " << prefill_inputs_embeds.dim() <<
+      // std::endl; std::cout << "prefill_inputs_embeds size: " <<
+      // prefill_inputs_embeds.size(0) << std::endl;
+
+      input_emd = prefill_inputs_embeds;
+      // write_utf8_cstr_to_stdout(response.c_str(), invalid_utf8);
+      // std::cout.flush();
+      token = prefill_token;
+      decode_pos = batch.n_tokens;
+      SRV_DBG("prefill stage:decode_pos is :%d \r\n",decode_pos);
+    } else {
+      SRV_DBG("%s", "decode stage\n");
+      printf("@@7\r\n");
+      // 设置并运行解码模型
+      TensorConverter::FromTorch(input_emd.to(torch::kInt16),this,"input_1",3);
+      hmctx_14B->decode_model_part1_.SetInput("input_1", decode_part1_tensormap.at("input_1"));
+      std::vector<int16_t> valid_length_data = {static_cast<int16_t>(context_length)};
+      TensorConverter::FromVector(valid_length_data, {valid_length_data.size()},this,"valid_length",3);
+      hmctx_14B->decode_model_part1_.SetInput("valid_length", decode_part1_tensormap.at("valid_length"));
+
+      printf("@@8\r\n");
+
+      hmctx_14B->decode_model_part1_.Run();
+      hmctx_14B->decode_model_part1_.Sync();
+      tcim::Tensor decode_part1_output = hmctx_14B->decode_model_part1_.GetOutput("model_layers_25_resadd2");
+
+      hmctx_14B->decode_model_part2_.SetInput("model_layers_25_resadd2", decode_part1_output);
+      TensorConverter::FromVector(valid_length_data, {valid_length_data.size()},this,"valid_length",4);
+      hmctx_14B->decode_model_part2_.SetInput("valid_length", decode_part2_tensormap.at("valid_length"));
+
+      hmctx_14B->decode_model_part2_.Run();
+      hmctx_14B->decode_model_part2_.Sync();
+      tcim::Tensor decode_data = hmctx_14B->decode_model_part2_.GetOutput("Output_lm_head_add_list_1");
+      //output_data.assign(decode_output.data(), decode_output.data() + decode_output.size());
+      //output_data=TensorConverter::ToVector(decode_output);
+
+      //7B 获取输出
+      // infer_end = clock();
+      //tcim::Tensor decode_data;
+      //tcim::Tensor decode_output_tensor_float;
+      //TODO:szj
+      // if (hmctx->model_type == "deepseek") {
+      //   decode_data =
+      //       hmctx->decode_model.GetOutput("Output_lm_head_add_list_0");
+      // } else {
+      //   decode_data = hmctx->decode_model.GetOutput("output");
+      // }
+
+      // std::cout << "decode_data Size: " << decode_data.Size() << std::endl;
+      // std::this_thread::sleep_for(std::chrono::seconds(5));
+      #if 0 //old int to float ,not right
+      std::vector<int16_t> decode_output;
+      for (int idx = 0; idx < decode_data.MemSize() / 2; idx++) {
+        auto data = *((int16_t *)decode_data.Data() + idx);
+        // if (data != 0) {
+        //     std::cout << "data at " << idx << ": " << data << std::endl;
+        // }
+
+        decode_output.push_back(data);
+      }
+      SRV_DBG("vector<int16_t> decode_output.size is:%d\r\n ",decode_output.size());
+      auto decode_output_opts = torch::TensorOptions().dtype(torch::kInt16);
+      decode_output_tensor =
+          torch::from_blob(decode_output.data(),
+                           {int64_t(decode_output.size())}, decode_output_opts)
+              .clone();
+      #else
+        auto output_info = decode_data.Info().AsContiguous().AsType(tcim::FLOAT32);
+        std::cout << "Output info:" << output_info << std::endl;
+        auto decode_output_tensor_float = tcim::Tensor::CreateHostTensor(output_info);
+        decode_data.CastTo(decode_output_tensor_float);
+        std::vector<float> decode_output;
+        for (int idx = 0; idx < decode_output_tensor_float.MemSize()/4 ; idx++) {
+          auto data = *((float *)decode_output_tensor_float.Data() + idx);
+          // if (data != 0) {
+          //     std::cout << "data at " << idx << ": " << data << std::endl;
+          // }
+          decode_output.push_back(data);
+        }
+        SRV_DBG("float decode_output.size() is:%d \r\n",decode_output.size());
+        auto decode_output_opts = torch::TensorOptions().dtype(torch::kFloat);
+        auto decode_output_tensor =
+          torch::from_blob(decode_output.data(),
+                           {int64_t(decode_output.size())}, decode_output_opts)
+              .clone();
+      #endif
+
+      // std::cout << "decode_output_tensor options: " <<
+      // decode_output_tensor.options() << std::endl; std::cout <<
+      // "decode_output_tensor dim: " << decode_output_tensor.dim() <<
+      // std::endl; std::cout << "decode_output_tensor size: " <<
+      // decode_output_tensor.size(0) << std::endl; for (int i = 0; i < 3; i++)
+      // {
+      //     std::cout << decode_output_tensor[i] << " ";
+      // }
+      // std::cout << std::endl;
+      // for (int i = 152060; i < 152064; i++) {
+      //     std::cout << decode_output_tensor[i] << " ";
+      // }
+      // std::cout << std::endl;
+      int32_t generate_token=0;
+      //default默认的处理流程-没有复杂的后采样
+      if(1) {
+        auto selected_output =
+            torch::argmax(decode_output_tensor).to(torch::kInt32);
+        // std::cout << "selected_output: " << selected_output << std::endl;
+        generate_token = *(int32_t *)selected_output.data_ptr<int32_t>();
+      } else {
+        #if 1 //TODO remember delete ,only for compare token between argmax and houmo sampling
+        auto selected_output_argmax =
+            torch::argmax(decode_output_tensor).to(torch::kInt32);
+        // std::cout << "selected_output: " << selected_output << std::endl;
+        auto argmax_generate_token = *(int32_t *)selected_output_argmax.data_ptr<int32_t>();
+        SRV_DBG("++before houmosample argmax_generate_token=%d \r\n",argmax_generate_token);
+        #endif
+
+        //float test_nouse=0.1234;
+        //float *logits =&test_nouse;                         // 获取模型输出的logits
+        int n_vocab = decode_output.size();                           // 词汇表大小
+        //std::vector<llama_token> last_tokens = {};  // 最近生成的token
+
+        //torch::Tensor decode_floatTensor = decode_output_tensor.to(torch::kFloat);
+        //float *p_logits=(float *)decode_floatTensor.data_ptr<float>();
+
+        auto *p_logits= decode_output_tensor.data_ptr<float>();
+        for (auto &slot : slots) {
+          if (!slot.generated_tokens.empty()) {
+            SRV_DBG("%s\r\n","++call hm_sampling_processors process");
+            SRV_DBG("HI.CPP >>> [%d][%d] slot.params top_k: %d, top_p: %f, temp: %f, penalty_repeat: %f, penalty_last_n: %d \r\n",
+                slot.id, slot.id_task, slot.params.sampling.top_k, slot.params.sampling.top_p, slot.params.sampling.temp,
+                slot.params.sampling.penalty_repeat, slot.params.sampling.penalty_last_n);
+            hm_sampling_processors.process(p_logits, n_vocab, slot.generated_tokens, slot.params);
+          }
+          else{
+            SRV_ERR("slot.generated_tokens.size() is:%d ,dont need sample\r\n",slot.generated_tokens.size());
+          }
+        }
+        // 计算softmax概率
+        std::vector<float> probs(n_vocab);
+        softmax(p_logits, probs.data(), n_vocab);
+        auto opts = torch::TensorOptions().dtype(torch::kFloat32);
+        auto tensor = torch::from_blob(probs.data(), {int64_t(probs.size())}, opts).clone();
+
+        auto selected_output = torch::multinomial(tensor, 1).to(torch::kInt32);
+        generate_token = *(int32_t *)selected_output.data_ptr<int32_t>();
+        #if 1 //TODO remember delete ,only for compare token between argmax and houmo sampling
+        SRV_DBG("++after houmosample generate_token=%d \r\n",generate_token);
+        if(generate_token!=argmax_generate_token) {
+           auto houmo_response = common_token_to_piece(ctx, generate_token);
+           auto argmax_response= common_token_to_piece(ctx, argmax_generate_token);
+           SRV_DBG("Houmo sample change gen idx from %d to %d , related string from %s to %s\r\n",
+                 argmax_generate_token,generate_token,argmax_response,houmo_response);
+        }
+        #endif
+      }
+      // auto response = common_token_to_piece(ctx, generate_token);
+      // std::cout << "response: ";
+      // auto invalid_utf8 = false;
+      // write_utf8_cstr_to_stdout(response.c_str(), invalid_utf8);
+      // std::cout.flush();
+      // std::cout << std::endl;
+
+      std::vector<llama_token> decode_input_ids = {generate_token};
+      torch::Tensor decode_inputs_embeds;
+      auto decode_opts = torch::TensorOptions().dtype(torch::kInt);
+      auto decode_inp =
+          torch::from_blob(decode_input_ids.data(),
+                           {int64_t(decode_input_ids.size())}, decode_opts)
+              .clone();
+      // std::cout << "decode_inp: " << decode_inp << "\n";
+      try {
+        input_emd = emb->forward(decode_inp);
+      } catch (const c10::Error &e) {
+        std::cerr << "error loading the model\n" << e.what_without_backtrace();
+        return -1;
+      }
+      // std::cout << "input_emd options: " << input_emd.options() << std::endl;
+      // std::cout << "input_emd dim: " << input_emd.dim() << std::endl;
+      // std::cout << "input_emd size: " << input_emd.size(0) << std::endl;
+      // for (int i = 0; i < 3; i++) {
+      //     std::cout << input_emd[0][i] << " ";
+      // }
+      // std::cout << std::endl;
+      input_emd = input_emd.view({1, 1, -1}).to(torch::kInt16);
+      // std::cout << "input_emd options: " << input_emd.options() << std::endl;
+      // std::cout << "input_emd dim: " << input_emd.dim() << std::endl;
+      // std::cout << "input_emd size: " << input_emd.size(0) << std::endl;
+      context_length = context_length + 1;
+      if (llama_token_is_eog(vocab, generate_token)) {
+        LOG_DBG("llama_token_is_eog: %d\n", generate_token);
+      }
+      token = generate_token;
+      decode_pos = decode_pos + batch.n_tokens;
+      SRV_DBG("decode stage:decode_pos is :%d \r\n",decode_pos);
+
+      auto response = common_token_to_piece(ctx, generate_token);
+      std::cout << "decode response: ";
+      bool invalid_utf8 = false;
+      write_utf8_cstr_to_stdout(response.c_str(), invalid_utf8);
+      std::cout << std::endl;
+      // 下面打印的是正常的response 字符串
+      SRV_DBG("--decode response is:%s\r\n", response);
+    }
+
+    return 0;
+  }
+
+
   int houmo_decode(llama_batch batch) {
     if (decode_pos == 0) {
       SRV_DBG("%s", "prefill stage\n");
@@ -5621,7 +6482,17 @@ struct server_context {
           batch.n_seq_id + i, batch.seq_id + i, batch.logits + i,
       };
 
-      const int ret = houmo_decode(batch);
+      int ret = 0;
+      switch(hm_model_scale_type) {
+        case MODEL_14B:
+             ret=houmo_decode_14B(batch);
+             break;
+        case MODEL_7B:
+             ret=houmo_decode(batch);
+             break;
+        default:
+             SRV_ERR("%s\r\n","hm_model_scale_type not supported,please check!");
+      }
       metrics.on_decoded(slots);
 
       if (ret != 0) {
@@ -5855,6 +6726,211 @@ struct server_context {
     };
   }
 };
+
+
+// 将torch::Tensor转换为tcim::Tensor
+//tcim::Tensor TensorConverter::FromTorch(const torch::Tensor& torch_tensor, server_context *hmqwen, const std::string &tcim_tensorname,int which_part) {
+void TensorConverter::FromTorch(const torch::Tensor& torch_tensor, server_context *hmqwen, const std::string &tcim_tensorname,int which_part) {
+    #if CREATE_NEW_TCIMTENSOR
+      // 获取torch tensor的形状
+      auto sizes = torch_tensor.sizes();
+      std::vector<int64_t> shape(sizes.begin(), sizes.end());
+
+      // 获取torch tensor的数据类型并转换为tcim类型
+      tcim::DataType dtype;
+      switch(torch_tensor.scalar_type()) {
+          case torch::kFloat32: dtype = tcim::FLOAT32; break;
+          case torch::kFloat16: dtype = tcim::FLOAT16; break;
+          case torch::kInt32: dtype = tcim::INT32; break;
+          case torch::kInt16: dtype = tcim::INT16; break;
+          case torch::kInt8: dtype = tcim::INT8; break;
+          case torch::kUInt8: dtype = tcim::UINT8; break;
+          default:
+              throw std::runtime_error("Unsupported tensor type");
+      }
+
+      // 创建tcim tensor
+      auto info = tcim::TensorInfo::CreateNDInfo(shape, dtype);
+      tcim::Tensor tcim_tensor=tcim::Tensor::CreateHostTensor(info,torch_tensor.nbytes());
+      // 复制数据
+      void* data = tcim_tensor.Data();
+      memcpy(data, torch_tensor.data_ptr(), torch_tensor.nbytes());
+
+      return tcim_tensor;
+    #else
+      //tcim::Tensor tcimtensor_frommap_atname;
+      switch (which_part){
+          case 1:
+              //tcimtensor_frommap_atname = hmqwen->prefill_part1_tensormap.at(tcim_tensorname);
+              int16toint16((int16_t *) hmqwen->prefill_part1_tensormap.at(tcim_tensorname).Data(),
+              (int16_t *)torch_tensor.data_ptr<int16_t>(),
+              torch_tensor.numel());
+              //return hmqwen->prefill_part1_tensormap.at(tcim_tensorname);
+              break;
+          case 2:
+              //tcimtensor_frommap_atname = hmqwen->prefill_part2_tensormap.at(tcim_tensorname);
+              int16toint16((int16_t *) hmqwen->prefill_part2_tensormap.at(tcim_tensorname).Data(),
+              (int16_t *)torch_tensor.data_ptr<int16_t>(),
+              torch_tensor.numel());
+              //return hmqwen->prefill_part2_tensormap.at(tcim_tensorname);
+              break;
+          case 3:
+              //tcimtensor_frommap_atname = hmqwen->decode_part1_tensormap.at(tcim_tensorname);
+              int16toint16((int16_t *) hmqwen->decode_part1_tensormap.at(tcim_tensorname).Data(),
+              (int16_t *)torch_tensor.data_ptr<int16_t>(),
+              torch_tensor.numel());
+              //return hmqwen->decode_part1_tensormap.at(tcim_tensorname);
+              break;
+          case 4:
+              //tcimtensor_frommap_atname = hmqwen->decode_part2_tensormap.at(tcim_tensorname);
+              int16toint16((int16_t *) hmqwen->decode_part1_tensormap.at(tcim_tensorname).Data(),
+              (int16_t *)torch_tensor.data_ptr<int16_t>(),
+              torch_tensor.numel());
+              //return hmqwen->decode_part2_tensormap.at(tcim_tensorname);
+              break;
+          default:
+              printf("++something error 1\r\n");
+              break;
+      }
+      //return std::move(tcimtensor_frommap_atname);
+
+    #endif
+
+}
+
+// 将tcim::Tensor转换为torch::Tensor
+torch::Tensor TensorConverter::ToTorch(const tcim::Tensor& tcim_tensor) {
+    // 获取tcim tensor的形状
+    auto info = tcim_tensor.Info();
+    auto shape = info.Shape();
+
+    // 获取tcim tensor的数据类型并转换为torch类型
+    torch::ScalarType dtype;
+    switch(info.DataType()) {
+        case tcim::FLOAT32: dtype = torch::kFloat32; break;
+        case tcim::FLOAT16: dtype = torch::kFloat16; break;
+        case tcim::INT32: dtype = torch::kInt32; break;
+        case tcim::INT16: dtype = torch::kInt16; break;
+        case tcim::INT8: dtype = torch::kInt8; break;
+        case tcim::UINT8: dtype = torch::kUInt8; break;
+        default:
+            throw std::runtime_error("Unsupported tensor type");
+    }
+
+    // 创建torch tensor
+    auto options = torch::TensorOptions().dtype(dtype);
+    auto torch_tensor = torch::empty(
+        std::vector<int64_t>(shape.begin(), shape.end()),
+        options
+    );
+
+    // 复制数据
+    void* data = tcim_tensor.Data();
+    memcpy(torch_tensor.data_ptr(), data, tcim_tensor.Info().MemSize());
+
+    return torch_tensor;
+}
+
+// 将vector<float>转换为tcim::Tensor
+//template<typename T>
+// tcim::Tensor TensorConverter::FromVector(const std::vector<int16_t>& vec, const std::vector<uint64_t>& shape,
+//                                server_context *hmqwen, const std::string &tcim_tensorname,int which_part) {
+void TensorConverter::FromVector(const std::vector<int16_t>& vec, const std::vector<uint64_t>& shape,
+                                server_context *hmqwen, const std::string &tcim_tensorname,int which_part) {
+    #if CREATE_NEW_TCIMTENSOR
+    // 确定形状，如果没有指定则默认为1维
+    std::vector<int64_t> final_shape = shape.empty() ?
+        std::vector<int64_t>{static_cast<int64_t>(vec.size())} : std::vector<int64_t>(shape.begin(), shape.end());
+
+    // 计算元素总数是否匹配
+    int64_t total_elements = 1;
+    for (auto dim : final_shape) {
+        total_elements *= dim;
+    }
+
+    if (total_elements != static_cast<int64_t>(vec.size())) {
+        throw std::runtime_error("Vector size does not match specified shape");
+    }
+
+    // 确定数据类型
+    tcim::DataType dtype;
+    if (typeid(T) == typeid(float)) {
+        dtype = tcim::FLOAT32;
+    } else if (typeid(T) == typeid(int32_t)) {
+        dtype = tcim::INT32;
+    } else if (typeid(T) == typeid(int16_t)) {
+        dtype = tcim::INT16;
+    } else if (typeid(T) == typeid(int8_t)) {
+        dtype = tcim::INT8;
+    } else {
+        throw std::runtime_error("Unsupported vector element type");
+    }
+
+    // 创建tcim tensor
+    auto info = tcim::TensorInfo::CreateNDInfo(final_shape, dtype);
+    tcim::Tensor tcim_tensor=tcim::Tensor::CreateHostTensor(info,vec.size() * sizeof(T));
+
+    // 复制数据
+    void* data = tcim_tensor.Data();
+    memcpy(data, vec.data(), vec.size() * sizeof(T));
+
+    return tcim_tensor;
+    #else
+      //tcim::Tensor tcimtensor_frommap_atname;
+      switch (which_part){
+          case 1:
+              //tcimtensor_frommap_atname = hmqwen->prefill_part1_tensormap.at(tcim_tensorname);
+              int16toint16((int16_t *) hmqwen->prefill_part1_tensormap.at(tcim_tensorname).Data(),
+              (int16_t*)vec.data(),
+              vec.size());
+              break;
+          case 2:
+              //tcimtensor_frommap_atname = hmqwen->prefill_part2_tensormap.at(tcim_tensorname);
+              int16toint16((int16_t *) hmqwen->prefill_part2_tensormap.at(tcim_tensorname).Data(),
+              (int16_t*)vec.data(),
+              vec.size());
+              break;
+          case 3:
+              //tcimtensor_frommap_atname = hmqwen->decode_part1_tensormap.at(tcim_tensorname);
+              int16toint16((int16_t *) hmqwen->decode_part1_tensormap.at(tcim_tensorname).Data(),
+              (int16_t*)vec.data(),
+              vec.size());
+              break;
+          case 4:
+              //tcimtensor_frommap_atname = hmqwen->decode_part2_tensormap.at(tcim_tensorname);
+              int16toint16((int16_t *) hmqwen->decode_part2_tensormap.at(tcim_tensorname).Data(),
+              (int16_t*)vec.data(),
+              vec.size());
+              break;
+          default:
+              printf("++something error 1\r\n");
+              break;
+      }
+      //return std::move(tcimtensor_frommap_atname);
+    #endif
+}
+
+// 将tcim::Tensor转换为vector<T>
+//template<typename T>
+std::vector<int16_t> TensorConverter::ToVector(const tcim::Tensor& tcim_tensor) {
+    #if 1
+    auto info = tcim_tensor.Info();
+    // 计算元素总数
+    size_t element_count = info.MemSize() / sizeof(int16_t);
+    std::cout<<"element_count is:"<<element_count<<std::endl;
+    std::vector<int16_t> result(element_count);
+
+    // 复制数据
+    const void* data = tcim_tensor.Data();
+    memcpy(result.data(), data, info.MemSize());
+
+    return std::move(result);
+    #else
+    std::vector<int16_t> result;
+    return result;
+    #endif
+}
+
 
 static void log_server_request(const httplib::Request &req,
                                const httplib::Response &res) {
@@ -7684,8 +8760,11 @@ int completion_load_model(HANDLE h, std::string model_path,
     LOG_ERR("%s: exiting due to model loading error\n", __func__);
     return -1;
   }
-
-  ctx_server->init(model_path);
+  if ((model_path.find("14B") != std::string::npos) || (model_path.find("14b") != std::string::npos)) {
+    ctx_server->init_14B(model_path);
+  } else {
+    ctx_server->init(model_path);
+  }
 
   ctx_server->state.store(SERVER_STATE_READY);
 
@@ -7707,7 +8786,7 @@ int completion_load_model(HANDLE h, std::string model_path,
   std::string req_body = string_format(
       "{\"messages\":[{\"content\":\"你好！\",\"role\":\"user\"}],\"stream\":"
       "false,\"model\": \"%s\", \"max_tokens\": 20}",
-      ctx_server->hmctx->model_name.c_str());
+      ctx_server->hmctx_14B->model_name.c_str());
   // std::string req_body =
   // "{\"messages\":[{\"content\":\"现在假设你是一名会议记录人员，需要你对一段会议记录的每一句话依次进行文本规整化，并直接返回规整化后的文本，回答的文本中不要增加任何额外内容。要求：1、规整化后的文本要忠于原始会议记录，保留会议记录中全部的有用信息；2、去除原文中明显的无意义表达；3、如果原文中存在明显的错别字，也需要进行改正。4、不要删除任何有用的信息。5、请用中文进行回答。6、不允许在回答中添加编造成分。7、如果原始会议记录中存在明显重复的表达，需用清晰通顺的方式改写。8、需注意原文中的数值不得擅自修改。原始会议记录为：“哦，喂啊。啊，你讲啊啊啊。”\",\"role\":\"user\"}],\"stream\":true,\"model\":\"Qwen2.5-32B-Instruct\"}";
   json data = oaicompat_completion_params_parse(

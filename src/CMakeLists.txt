@@ -145,3 +145,39 @@ else()
 endif()
 
 target_compile_features(${TARGET}-demo-lenovo PRIVATE cxx_std_17)
+
+#添加demo-lenevo-14B代码
+add_executable(${TARGET}-demo-lenovo-14B demo-lenovo-14B.cpp)
+install(TARGETS ${TARGET}-demo-lenovo-14B RUNTIME)
+target_include_directories(${TARGET}-demo-lenovo-14B PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(${TARGET}-demo-lenovo-14B PRIVATE houmo-llm ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE} ${LLAMA_CPP_LIBRARY_GGML_CPU} utf8_console "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
+
+if (LLAMA_SERVER_SSL)
+    find_package(OpenSSL REQUIRED)
+    target_link_libraries(${TARGET}-demo-lenovo-14B PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    target_compile_definitions(${TARGET}-demo-lenovo-14B PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+endif()
+
+if (WIN32)
+    TARGET_LINK_LIBRARIES(${TARGET}-demo-lenovo-14B PRIVATE ws2_32)
+else()
+    TARGET_LINK_LIBRARIES(${TARGET}-demo-lenovo-14B PRIVATE -lpthread -lm)
+endif()
+
+target_compile_features(${TARGET}-demo-lenovo-14B PRIVATE cxx_std_17)
+
+# 添加deepseek模型推理可执行程序
+# add_subdirectory(tokenizers-cpp)
+add_executable(${TARGET}-deepseek-inference model_inference_deepseek14b1batch.cpp)
+install(TARGETS ${TARGET}-deepseek-inference RUNTIME)
+target_include_directories(${TARGET}-deepseek-inference PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(${TARGET}-deepseek-inference PRIVATE houmo-llm ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+        ${LLAMA_CPP_LIBRARY_GGML_CPU} ${INIH_LIBRARY} ${INIH_LIBRARY_CPP} "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT} )
+
+if (WIN32)
+    TARGET_LINK_LIBRARIES(${TARGET}-deepseek-inference PRIVATE ws2_32)
+else()
+    TARGET_LINK_LIBRARIES(${TARGET}-deepseek-inference PRIVATE -lpthread -lm)
+endif()
+
+target_compile_features(${TARGET}-deepseek-inference PRIVATE cxx_std_17)
