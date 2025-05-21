@@ -169,6 +169,11 @@ void log_error(const json &error_data) {
   SRV_ERR("%s\n", str.c_str());
 }
 
+std::string getenv_or_default(const std::string& name, const std::string& default_value) {
+    const char* value = std::getenv(name.c_str());
+    return value ? std::string(value) : default_value;
+}
+
 void log_ok(const json &data) {
   const std::string str =
       data.dump(-1, ' ', false, json::error_handler_t::replace) +
@@ -2364,7 +2369,7 @@ struct server_response {
 
 struct houmo_context {
   std::string model_type = "deepseek";
-  std::string model_name = "Unkown";
+  std::string model_name = "Unknown";
 
   int prefill_length = 256;
   int decode_length = 4096;
@@ -2382,7 +2387,7 @@ struct houmo_context {
 
 struct houmo_context_14B {
   std::string model_type = "deepseek";
-  std::string model_name = "Unkown";
+  std::string model_name = "Unknown";
 
   int prefill_length = 256;
   int decode_length = 8192;
@@ -2417,7 +2422,7 @@ struct server_context {
   std::atomic<server_state> state{SERVER_STATE_LOADING_MODEL};
 
   torch::nn::Embedding emb = nullptr;
-
+  std::string model_path;
   houmo_context *hmctx;
   houmo_context_14B *hmctx_14B;
   model_scale_type hm_model_scale_type=MODEL_7B;;  //根据加载的模型，修改成对应的宏
@@ -2675,9 +2680,8 @@ struct server_context {
     return true;
   }
 
-  void init_houmo_sampling(LogitsProcessorList &processors, void *param) {
+  void init_houmo_sampling(LogitsProcessorList &processors, ::params* p) {
     // 创建处理器列表
-    const auto p = static_cast<::params*>(param);
     processors.add(std::make_unique<TopKProcessor>(p->top_k));
     processors.add(std::make_unique<TopPProcessor>(p->top_p));
     processors.add(std::make_unique<TemperatureProcessor>(p->temperature));
@@ -2836,27 +2840,23 @@ struct server_context {
     // /v1/models 接口依赖获取对应的model_id
     params->model_alias = hmctx_14B->model_name;
 
-
-    torch::Tensor input;
-    // std::string input_path = "./qembedding.pt";
-    std::string input_path = model_path + "hmquant/deepseek14b_traced_model.pt";
-
     try {
-      torch::load(input, input_path);
-      input = input.view({-1, 5120});
-      // std::cout << "input options: " << input.options() << "\n";
-      // std::cout << "input dim: " << input.dim() << "\n";
-      // std::cout << "input size: " << input.size(0) << "\n";
-      // std::cout << "embedding content: " << std::endl;
-      // for (int i = 0; i < 20; i++) {
-      //     std::cout << input[0][i] << std::endl;
-      // }
-      // std::cout << std::endl;
-      emb = torch::nn::Embedding::from_pretrained(input);
-    } catch (const c10::Error &e) {
-      std::cerr << "error loading the model: " << e.what_without_backtrace()
-                << std::endl;
-      return;
+        std::string input_path = model_path + "hmquant/quant_embedding_traced.pt";
+        torch::Tensor input;
+        torch::load(input, input_path);
+        input = input.view({-1, 5120});
+        // std::cout << "input options: " << input.options() << "\n";
+        // std::cout << "input dim: " << input.dim() << "\n";
+        // std::cout << "input size: " << input.size(0) << "\n";
+        // std::cout << "embedding content: " << std::endl;
+        // for (int i = 0; i < 20; i++) {
+        //     std::cout << input[0][i] << std::endl;
+        // }
+        // std::cout << std::endl;
+        emb = torch::nn::Embedding::from_pretrained(input);
+    } catch (const c10::Error& e) {
+        std::cerr << "error loading the model: " << e.what_without_backtrace() << std::endl;
+        return;
     }
 
     LOG_DBG("%s\n", "emb loaded");
@@ -3057,26 +3057,24 @@ struct server_context {
     // std::cout << "prefill_model: " << prefill_model << "\n";
     // std::cout << "decode_model: " << decode_model << "\n";
 
-    torch::Tensor input;
-    // std::string input_path = "./qembedding.pt";
-    std::string input_path = model_path + "hmquant/quant_qembedding.pt";
 
     try {
-      torch::load(input, input_path);
-      input = input.view({-1, 3584});
-      // std::cout << "input options: " << input.options() << "\n";
-      // std::cout << "input dim: " << input.dim() << "\n";
-      // std::cout << "input size: " << input.size(0) << "\n";
-      // std::cout << "embedding content: " << std::endl;
-      // for (int i = 0; i < 20; i++) {
-      //     std::cout << input[0][i] << std::endl;
-      // }
-      // std::cout << std::endl;
-      emb = torch::nn::Embedding::from_pretrained(input);
-    } catch (const c10::Error &e) {
-      std::cerr << "error loading the model: " << e.what_without_backtrace()
-                << std::endl;
-      return;
+        torch::Tensor input;
+        std::string input_path = model_path + "hmquant/quant_embedding_traced.pt";
+        torch::load(input, input_path);
+        input = input.view({-1, 3584});
+        // std::cout << "input options: " << input.options() << "\n";
+        // std::cout << "input dim: " << input.dim() << "\n";
+        // std::cout << "input size: " << input.size(0) << "\n";
+        // std::cout << "embedding content: " << std::endl;
+        // for (int i = 0; i < 20; i++) {
+        //     std::cout << input[0][i] << std::endl;
+        // }
+        // std::cout << std::endl;
+        emb = torch::nn::Embedding::from_pretrained(input);
+    } catch (const c10::Error& e) {
+        std::cerr << "error loading the model: " << e.what_without_backtrace() << std::endl;
+        return;
     }
 
     LOG_DBG("%s\n", "emb loaded");
@@ -3421,28 +3419,23 @@ struct server_context {
     // std::cout << "prefill_model: " << prefill_model << "\n";
     // std::cout << "decode_model: " << decode_model << "\n";
 
-    torch::Tensor input;
-    // std::string input_path = "./qembedding.pt";
-    std::string input_path =
-        "./models/hmm_deepseek_256_4096_4cores_20250317/hmquant/"
-        "quant_qembedding.pt";
-
     try {
-      torch::load(input, input_path);
-      input = input.view({-1, 3584});
-      // std::cout << "input options: " << input.options() << "\n";
-      // std::cout << "input dim: " << input.dim() << "\n";
-      // std::cout << "input size: " << input.size(0) << "\n";
-      // std::cout << "embedding content: " << std::endl;
-      // for (int i = 0; i < 20; i++) {
-      //     std::cout << input[0][i] << std::endl;
-      // }
-      // std::cout << std::endl;
-      emb = torch::nn::Embedding::from_pretrained(input);
-    } catch (const c10::Error &e) {
-      std::cerr << "error loading the model: " << e.what_without_backtrace()
-                << std::endl;
-      return;
+        torch::Tensor input;
+        std::string input_path = model_path + "hmquant/quant_embedding_traced.pt";
+        torch::load(input, input_path);
+        input = input.view({-1, 3584});
+        // std::cout << "input options: " << input.options() << "\n";
+        // std::cout << "input dim: " << input.dim() << "\n";
+        // std::cout << "input size: " << input.size(0) << "\n";
+        // std::cout << "embedding content: " << std::endl;
+        // for (int i = 0; i < 20; i++) {
+        //     std::cout << input[0][i] << std::endl;
+        // }
+        // std::cout << std::endl;
+        emb = torch::nn::Embedding::from_pretrained(input);
+    } catch (const c10::Error& e) {
+        std::cerr << "error loading the model: " << e.what_without_backtrace() << std::endl;
+        return;
     }
 
     LOG_DBG("%s\n", "emb loaded");
@@ -5480,7 +5473,7 @@ struct server_context {
       // std::cout << std::endl;
       int32_t generate_token=0;
       //default默认的处理流程-没有复杂的后采样
-      if(1) {
+      if(0) {
         auto selected_output =
             torch::argmax(decode_output_tensor).to(torch::kInt32);
         // std::cout << "selected_output: " << selected_output << std::endl;
@@ -7207,7 +7200,7 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
 
   ctx_server->svr = svr;
 
-  ctx_server->svr->set_default_headers({{"Server", "llama.cpp"}});
+  ctx_server->svr->set_default_headers({{"Server", "HoumoHI"}});
   ctx_server->svr->set_logger(log_server_request);
 
   auto res_error = [](httplib::Response &res, const json &error_data) {
@@ -8502,7 +8495,12 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
     return nullptr;
   }
 
-  ctx_server->init(model_path);
+  if (model_path.find("14B") != std::string::npos || model_path.find("14b") != std::string::npos) {
+      ctx_server->init_14B(model_path);
+  } else {
+      ctx_server->init(model_path);
+  }
+
   ctx_server->state.store(SERVER_STATE_READY);
 
   LOG_INF("state 1: %d\n", ctx_server->state.load());
@@ -8651,7 +8649,9 @@ HANDLE completion_create_instance(void* param) {
     SRV_DBG("ctx_server->model: %p\n", ctx_server->model);
     SRV_DBG("ctx_server->ctx: %p\n", ctx_server->ctx);
     SRV_DBG("ctx_server->params: %p\n", ctx_server->params);
-    ctx_server->init_houmo_sampling(ctx_server->hm_sampling_processors, param);
+    ctx_server->model_path = getenv_or_default("HM_MODEL_PATH", "./models/hmm_deepseek_256_4096_4cores_20250317/");
+    const auto p = static_cast<::params*>(param);
+    ctx_server->init_houmo_sampling(ctx_server->hm_sampling_processors, p);
   }
 
   return ctx_server;
@@ -8906,7 +8906,7 @@ int completion_load_model_by_buffer(HANDLE h, uint8_t **buffers,
     return -1;
   }
 
-  std::string model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
+  std::string model_path = ctx_server->model_path;
   std::string tok_model_path = model_path + "qwen2-1_5b-instruct-q4_0.gguf";
   if (tok_model_path.find("deepseek") != std::string::npos) {
     tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
