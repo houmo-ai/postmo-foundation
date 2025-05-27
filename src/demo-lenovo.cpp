@@ -235,7 +235,7 @@ int main(int argc, char ** argv) {
     size_t params_bytes = 0;
 
 
-    const char* model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
+
     //const char* token_fullpath = "./models/hmm_qwen2_256_4096_4cores_20250317/qwen2-1_5b-instruct-q4_0.gguf";
 
     const char* model_names[1] = {"qwen2-7b"};
@@ -250,7 +250,12 @@ int main(int argc, char ** argv) {
     int status = api_status(instance);
     printf("api_status: %d\n", status);
 
-    #if 0 //TEST_LOADMODLE_FROM_FILE //测试从文件加载模型
+    #if 1 //测试qwen3 从文件加载模型
+      const char* model_path = "./models/qwen3-8b-1batch/4core_8k";
+      bool state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count, hwinfo);
+      printf("api_loadmodel_by_path = %d\n", state);
+    #elif TEST_QWEN2 //测试qwen2 从文件加载模型
+      const char* model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
       bool state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count, hwinfo);
       printf("api_loadmodel_by_path = %d\n", state);
     #else  //测试从mem加载模型
