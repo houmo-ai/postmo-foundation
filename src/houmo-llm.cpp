@@ -2628,6 +2628,7 @@ struct server_context {
     vocab = llama_model_get_vocab(model);
 
     n_ctx = llama_n_ctx(ctx);
+    SRV_INF("cur n_ctx is '%d'\n", n_ctx);
 
     add_bos_token = llama_vocab_get_add_bos(vocab);
     has_eos_token = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
@@ -2963,9 +2964,9 @@ struct server_context {
 
         // 加载embedding权重
         // 这里应该实现加载embedding权重的逻辑
-        printf("++4 EMBEDDING_PATH.string() is:%s\r\n",(HMM_MODEL_PATH+"/quant_embedding_traced.pt").c_str());
+        printf("++4 EMBEDDING_PATH.string() is:%s\r\n",(HMM_MODEL_PATH+"/hmquant/quant_embedding_traced.pt").c_str());
         torch::Tensor embedding_weight_;
-        torch::load(embedding_weight_,(HMM_MODEL_PATH+"/quant_embedding_traced.pt").c_str());
+        torch::load(embedding_weight_,(HMM_MODEL_PATH+"/hmquant/quant_embedding_traced.pt").c_str());
         try {
           //torch::load(input, input_path);
           embedding_weight_ = embedding_weight_.view({-1, 4096});
@@ -7479,6 +7480,8 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
     std::string tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
     if (model_path.find("qwen2") != std::string::npos) {
         tok_model_path = model_path + "qwen2-1_5b-instruct-q4_0.gguf";
+    } else if (model_path.find("qwen3") != std::string::npos) {
+        tok_model_path = model_path + "Qwen3-0.6B-Q8_0.gguf";
     }
 
     const auto server_port = config_reader.Get("server", "port", "8808");
@@ -7489,6 +7492,11 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
     }
 
     const int log_level = config_reader.GetInteger("log", "level", 0);
+
+    std::string ctx_size = "4096";
+    if (model_path.find("8k") != std::string::npos || model_path.find("8K") != std::string::npos) {
+        ctx_size = "8192";
+    }
 
     try {
         if (std::filesystem::create_directories(log_location)) {
@@ -7516,7 +7524,7 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
                     "-np",
                     "1",
                     "--ctx-size",
-                    "4096",
+                    const_cast<char *>(ctx_size.c_str()),
                     "--no-context-shift",
                     "--no-warmup",
                     "--log-verbosity",
@@ -7630,7 +7638,15 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
         std::string tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
         if (model_path.find("qwen2") != std::string::npos) {
             tok_model_path = model_path + "qwen2-1_5b-instruct-q4_0.gguf";
+        } else if (model_path.find("qwen3") != std::string::npos) {
+            tok_model_path = model_path + "Qwen3-0.6B-Q8_0.gguf";
         }
+
+        std::string ctx_size = "4096";
+        if (model_path.find("8k") != std::string::npos || model_path.find("8K") != std::string::npos) {
+            ctx_size = "8192";
+        }
+
         std::time_t t = std::time(nullptr);
         std::string log_file = string_format("houmo-llm-%d.log", t);
         char* argv[] = {"houmo-llm-demo",
@@ -7645,7 +7661,7 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
                         "-np",
                         "1",
                         "--ctx-size",
-                        "4096",
+                        const_cast<char *>(ctx_size.c_str()),
                         "--no-context-shift",
                         "--no-warmup",
                         "--log-verbose",
@@ -9027,9 +9043,11 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
   }
 
   if (model_path.find("14B") != std::string::npos || model_path.find("14b") != std::string::npos) {
-      ctx_server->init_14B(model_path);
+    ctx_server->init_14B(model_path);
+  } else if (model_path.find("qwen3") != std::string::npos && model_path.find("8b") != std::string::npos) {
+    ctx_server->init_qwen3_8B(model_path);
   } else {
-      ctx_server->init(model_path);
+    ctx_server->init(model_path);
   }
 
   ctx_server->state.store(SERVER_STATE_READY);
@@ -9211,6 +9229,12 @@ int completion_load_model(HANDLE h, std::string model_path,
   } else if(tok_model_path.find("qwen3") != std::string::npos) {
     tok_model_path = model_path + "Qwen3-0.6B-Q8_0.gguf";
   }
+
+  std::string ctx_size = "4096";
+  if (model_path.find("8k") != std::string::npos || model_path.find("8K") != std::string::npos) {
+    ctx_size = "8192";
+  }
+
   //tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
   //tok_model_path = model_path + "qwen2-1_5b-instruct-q4_0.gguf"; //this works for qwen3-8B szj
   LOG_DBG("load tok_model_path:%s\n",tok_model_path.c_str());
@@ -9230,7 +9254,7 @@ int completion_load_model(HANDLE h, std::string model_path,
                   "-np",
                   "1",
                   "--ctx-size",
-                  "4096",
+                  const_cast<char *>(ctx_size.c_str()),
                   "--no-context-shift",
                   "--no-warmup",
                   "--log-file",
@@ -9456,6 +9480,11 @@ int completion_load_model_by_buffer(HANDLE h, uint8_t **buffers,
     tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
   }
 
+  std::string ctx_size = "4096";
+  if (model_path.find("8k") != std::string::npos || model_path.find("8K") != std::string::npos) {
+    ctx_size = "8192";
+  }
+
   std::time_t t = std::time(nullptr);
   std::string log_file = string_format("houmo-llm-%d.log", t);
 
@@ -9471,7 +9500,7 @@ int completion_load_model_by_buffer(HANDLE h, uint8_t **buffers,
                   "-np",
                   "1",
                   "--ctx-size",
-                  "4096",
+                  const_cast<char *>(ctx_size.c_str()),
                   "--no-context-shift",
                   "--no-warmup",
                   "--log-file",

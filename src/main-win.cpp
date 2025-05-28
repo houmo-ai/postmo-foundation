@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
     }
 
 #else
-    HANDLE instance = create_instance("./models/hmm_deepseek_14b_256_8k_4cores_20250514_26l/", nullptr);
+    HANDLE instance = create_instance("./models/qwen3-8b-1batch/4core_8k", nullptr);
     if (instance == nullptr) {
         printf("instance is null\n");
     }
