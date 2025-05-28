@@ -9208,10 +9208,9 @@ int completion_load_model(HANDLE h, std::string model_path,
   std::string tok_model_path = model_path + "qwen2-1_5b-instruct-q4_0.gguf";
   if (tok_model_path.find("deepseek") != std::string::npos) {
     tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
+  } else if(tok_model_path.find("qwen3") != std::string::npos) {
+    tok_model_path = model_path + "Qwen3-0.6B-Q8_0.gguf";
   }
-  // else if(tok_model_path.find("qwen3") != std::string::npos) {
-  //   tok_model_path = model_path + "Qwen3-0.6B-Q8_0.gguf";
-  // }
   //tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
   //tok_model_path = model_path + "qwen2-1_5b-instruct-q4_0.gguf"; //this works for qwen3-8B szj
   LOG_DBG("load tok_model_path:%s\n",tok_model_path.c_str());
