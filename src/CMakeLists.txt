@@ -42,6 +42,11 @@ add_definitions(-w)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -g -rdynamic")
 endif()
 
+if(UNIX)
+message(STATUS "##Linking libstdc++.so under path(if exists):/opt/hicpp/lib/ for Linux/Unix")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -L/opt/hicpp/lib/ -lstdc++")
+endif()
+
 find_package(Torch REQUIRED)
 
 option(LLAMA_SERVER_SSL "Build SSL support for the server" OFF)
@@ -71,6 +76,7 @@ set(TARGET_SRCS
 )
 
 set(HOUMO_LLM_SRCS
+    hi.h
     houmo-llm.h
     houmo-llm.cpp
 )
@@ -88,11 +94,6 @@ target_link_libraries(${TARGET} PRIVATE ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_
         ${LLAMA_CPP_LIBRARY_GGML_CPU} ${INIH_LIBRARY} ${INIH_LIBRARY_CPP} "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
-add_executable(${TARGET}-hi-cpp-win main-win.cpp)
-install(TARGETS ${TARGET}-hi-cpp-win RUNTIME)
-target_include_directories(${TARGET}-hi-cpp-win PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET}-hi-cpp-win PRIVATE houmo-llm ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
-        ${LLAMA_CPP_LIBRARY_GGML_CPU} ${INIH_LIBRARY} ${INIH_LIBRARY_CPP} "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 
 if (LLAMA_SERVER_SSL)
     find_package(OpenSSL REQUIRED)
@@ -101,12 +102,29 @@ if (LLAMA_SERVER_SSL)
 endif()
 
 if (WIN32)
+    message(STATUS "Building hi-cpp-win for Windows")
+    add_executable(${TARGET}-hi-cpp-win main-win.cpp)
+    install(TARGETS ${TARGET}-hi-cpp-win RUNTIME)
+    target_include_directories(${TARGET}-hi-cpp-win PRIVATE ${CMAKE_SOURCE_DIR})
+    target_link_libraries(${TARGET}-hi-cpp-win PRIVATE houmo-llm ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+        ${LLAMA_CPP_LIBRARY_GGML_CPU} ${INIH_LIBRARY} ${INIH_LIBRARY_CPP} "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
     TARGET_LINK_LIBRARIES(${TARGET}-hi-cpp-win PRIVATE ws2_32)
+    target_compile_features(${TARGET}-hi-cpp-win PRIVATE cxx_std_17)
+elseif(UNIX)
+    message(STATUS "Building hi-cpp-linux for Linux/Unix")
+    add_executable(${TARGET}-hi-cpp-linux main-linux.cpp)
+    install(TARGETS ${TARGET}-hi-cpp-linux RUNTIME)
+    target_include_directories(${TARGET}-hi-cpp-linux PRIVATE ${CMAKE_SOURCE_DIR})
+    target_link_libraries(${TARGET}-hi-cpp-linux PRIVATE houmo-llm ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+        ${LLAMA_CPP_LIBRARY_GGML_CPU} ${INIH_LIBRARY} ${INIH_LIBRARY_CPP} "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
+
+    TARGET_LINK_LIBRARIES(${TARGET}-hi-cpp-linux PRIVATE -lpthread -lm)
+    target_compile_features(${TARGET}-hi-cpp-linux PRIVATE cxx_std_17)
 else()
-    TARGET_LINK_LIBRARIES(${TARGET}-hi-cpp-win PRIVATE -lpthread -lm)
+    message(FATAL_ERROR "Unsupported operating system")
 endif()
 
-target_compile_features(${TARGET}-hi-cpp-win PRIVATE cxx_std_17)
+
 
 # add_executable(${TARGET}-server ${TARGET_SRCS})
 # install(TARGETS ${TARGET}-server RUNTIME)
@@ -145,6 +163,27 @@ else()
 endif()
 
 target_compile_features(${TARGET}-demo-lenovo PRIVATE cxx_std_17)
+
+#添加demo-hi,基于通用API编写的测试demo
+add_executable(${TARGET}-demo-hi demo-hi.cpp)
+install(TARGETS ${TARGET}-demo-hi RUNTIME)
+target_include_directories(${TARGET}-demo-hi PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(${TARGET}-demo-hi PRIVATE houmo-llm ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE} ${LLAMA_CPP_LIBRARY_GGML_CPU} utf8_console "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
+
+if (LLAMA_SERVER_SSL)
+    find_package(OpenSSL REQUIRED)
+    target_link_libraries(${TARGET}-demo-hi PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    target_compile_definitions(${TARGET}-demo-hi PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+endif()
+
+if (WIN32)
+    TARGET_LINK_LIBRARIES(${TARGET}-demo-hi PRIVATE ws2_32)
+else()
+    TARGET_LINK_LIBRARIES(${TARGET}-demo-hi PRIVATE -lpthread -lm)
+endif()
+
+target_compile_features(${TARGET}-demo-hi PRIVATE cxx_std_17)
+
 
 #添加demo-lenevo-14B代码
 add_executable(${TARGET}-demo-lenovo-14B demo-lenovo-14B.cpp)

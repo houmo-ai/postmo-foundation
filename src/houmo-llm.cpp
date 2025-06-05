@@ -29,6 +29,7 @@
 #include <unordered_set>
 
 #include "http_server_c_interface_3.h"
+//#include "hi.h"
 #include "INIReader.h"
 #include "tcim/tcim_runtime.h"
 
@@ -2147,7 +2148,7 @@ struct server_queue {
       while (true) {
         std::unique_lock<std::mutex> lock(mutex_tasks);
         if (!running) {
-          QUE_DBG("%s", "terminate\n");
+          QUE_DBG("%s", "++here terminate 1\n");
           return;
         }
         if (queue_tasks.empty()) {
@@ -2171,7 +2172,7 @@ struct server_queue {
       {
         std::unique_lock<std::mutex> lock(mutex_tasks);
         if (!running) {
-          QUE_DBG("%s", "terminate\n");
+          QUE_DBG("%s", "--here terminate 2\n");
           return;
         }
         if (queue_tasks.empty()) {
@@ -3293,8 +3294,8 @@ struct server_context {
       decode_model = "qwen2.5_decode.hmm";
       prefill_model = "qwen2.5_prefill.hmm";
     } else if (hmctx->model_type == "deepseek") {
-      decode_model = "deepseek_decode.hmm";
-      prefill_model = "deepseek_prefill.hmm";
+      decode_model = "decoder.hmm";
+      prefill_model = "prefill.hmm";
     }
     // std::cout << "prefill_model: " << prefill_model << "\n";
     // std::cout << "decode_model: " << decode_model << "\n";
@@ -3346,7 +3347,7 @@ struct server_context {
     // 1. load model
     // std::cout << "LoadFromFile prefill_part1" << std::endl;
     std::string prefill_model_path = model_path + prefill_model;
-    LOG_DBG("model %s to load.\n", prefill_model_path.c_str());
+    LOG_DBG("++model %s to load.\n", prefill_model_path.c_str());
     if (!fs::exists(prefill_model_path)) {
       LOG_ERR(
           "model %s not exist. you should run build.py in prefill_part1 "
@@ -6389,7 +6390,7 @@ struct server_context {
       }
 
       tcim::Tensor input_data;
-      if (hmctx->model_type == "deepseek") {
+      if (hmctx->model_type == "deepseek" || hmctx->model_type == "qwen2.5") {
         input_data =
             hmctx->prefill_model.GetOutput("Output_lm_head_add_list_0");
       } else {
@@ -6516,7 +6517,7 @@ struct server_context {
       // infer_end = clock();
       tcim::Tensor decode_data;
       tcim::Tensor decode_output_tensor_float;
-      if (hmctx->model_type == "deepseek") {
+      if (hmctx->model_type == "deepseek"|| hmctx->model_type == "qwen2.5") {
         decode_data =
             hmctx->decode_model.GetOutput("Output_lm_head_add_list_0");
       } else {
@@ -10417,3 +10418,99 @@ void HTTP_SERVER_API api_get_info(HANDLE handle) {
   return;
 }
 
+//hi.h api for normal customers
+
+#ifdef _MSC_VER
+#define HMINFER_API __declspec(dllexport)
+#else
+#define HMINFER_API
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// if fail, return nullptr
+//HANDLE HMINFER_API create_api_instance(params& params);
+HANDLE HMINFER_API create_infer_instance(void* params, size_t params_bytes){
+  return create_api_instance(params, params_bytes);
+}
+
+void HMINFER_API destroy_infer_instance(HANDLE handle){
+  return destroy_api_instance(handle);
+}
+
+//load model with model name ,layer:-1 load all layer.
+bool HMINFER_API infer_loadmodel_by_path(HANDLE handle, const char* model_path, const char** model_names, size_t model_name_count){
+  hardware_info hwinfo;
+  return api_loadmodel_by_path(handle, model_path, model_names,model_name_count,hwinfo);
+}
+
+//load model with buffer stream,layer:-1 load all layer.
+bool HMINFER_API infer_loadmodel_by_buffer(HANDLE handle, uint8_t** buffers, size_t* bufferSize, size_t buffers_count){
+  hardware_info hwinfo;
+  return api_loadmodel_by_buffer(handle, buffers, bufferSize, buffers_count,hwinfo);
+}
+
+//load token model not must
+bool HMINFER_API infer_loadtoken(HANDLE handle, const char* token_fullpath){
+  return api_loadtoken(handle, token_fullpath);
+}
+
+//unload model
+bool HMINFER_API infer_unloadmodel(HANDLE handle){
+  return api_unloadmodel(handle);
+}
+
+// model status see the enum status
+//return enum status
+int32 HMINFER_API infer_status(HANDLE handle){
+  return api_status(handle);
+}
+
+//Generate
+//if result == nullptr or *result_size is not enough, return E_BUFFER_NOT_ENOUGH and result_size return the needed size.
+int32 HMINFER_API infer_Generate(HANDLE handle, const char* prompt, const void* params, size_t params_bytes, char** result, size_t* result_size){
+  return api_Generate(handle, prompt, params, params_bytes, result, result_size);
+}
+
+//get prompt token number
+int32 HMINFER_API infer_token_num(HANDLE handle, const char* prompt){
+  return api_token_num(handle, prompt);
+}
+
+//stream generate
+bool HMINFER_API infer_Generate_stream(HANDLE handle, const char* prompt, const void* params, size_t params_size){
+  return api_Generate_stream(handle, prompt, params, params_size);
+}
+
+//the generate token ,use for stream mode
+//if result == nullptr or *result_size is not enough, return E_BUFFER_NOT_ENOUGH and result_size return the needed size.
+int32 HMINFER_API infer_Get_Generate_token(HANDLE handle, char** result, size_t* result_size){
+  return api_Get_Generate_token(handle, result, result_size);
+}
+
+//generate status see enum generater_status defined ahead
+//return enum generater_status
+int32 HMINFER_API infer_Generate_status(HANDLE handle){
+  return api_Generate_status(handle);
+}
+
+//stop generate
+bool HMINFER_API infer_stop(HANDLE handle){
+  return api_stop(handle);
+}
+
+//warmup not must
+bool HMINFER_API infer_warmup(HANDLE handle){
+  return api_warmup(handle);
+}
+
+//reset model not must
+void HMINFER_API infer_Reset(HANDLE handle){
+  return api_Reset(handle);
+}
+
+#ifdef __cplusplus
+}
+#endif

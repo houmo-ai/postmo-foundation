@@ -1,7 +1,8 @@
 #include <cstdio>
 #include <iostream>
 #include "houmo-llm.h"
-
+#include <chrono>
+#include <thread>
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -9,7 +10,7 @@
 
 #ifdef _WIN32
 
-#include <thread>
+
 
 // 全局状态句柄
 SERVICE_STATUS_HANDLE g_StatusHandle = nullptr;
@@ -89,14 +90,35 @@ int main(int argc, char** argv) {
     }
 
 #else
-    HANDLE instance = create_instance("./models/qwen3-8b-1batch/4core_8k", nullptr);
+    const char* hi_modelpath = std::getenv("HICPP_MODEL_PATH");
+    std::string hPath;
+    if(hi_modelpath){
+      hPath=hi_modelpath;
+    } else {
+        printf("No Env HICPP_MODEL_PATH Found, read default path:./models/qwen3-8b-1batch/4core_8k");
+        hPath="./models/qwen3-8b-1batch/4core_8k";
+    }
+    std::cout << "hPath is: " << hPath << std::endl;
+    HANDLE instance = create_instance(hPath, nullptr);
     if (instance == nullptr) {
         printf("instance is null\n");
     }
     printf("instance 3 = %p\n", instance);
 
     int input;
-    std::cin >> input;
+    while(true){
+      std::cin >> input;
+      if(input==12315) {
+        printf("+++get exit code:%d\r\n",input);
+        break;
+      }
+      else{
+        printf("### Error get false exit code,input is:%d\r\n",input);
+        // 睡眠 2 秒（精确到毫秒级）
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        continue;
+      }
+    }
 
     int ret = destroy_instance(instance);
     printf("ret = %d\n", ret);
