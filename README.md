@@ -6,6 +6,7 @@ Houmo HI.CPP是Houmo软件平台为Windows/Linux下打造的使用C++开发的�
 
 | 版本    | 日期          | 描述                                                 |
 |-------|-------------|----------------------------------------------------|
+| 1.3.0-daily-20250606 | 2025年6月6日   | 支持以linux后台service服务形式跑hi.cpp推理服务，能以openai api对外提供能力，同时提供麒麟OS对应版本的SDk，操作系统支持麒麟OS v10，模型包括qwen3 8b和deepseek 7b |
 | 1.2.0 | 2025年5月30日  | 实现Windows服务化安装，兼容更多OpenAI 接口参数，增加端口配置和日志Level与路径配置 |
 | 1.1.0 | 2024年04月11日 | 正式版本                                               |
 
@@ -84,6 +85,7 @@ $ tree
 - 安装本系统前请确保已安装好后摩推理加速卡、并且升级驱动和固件为指定版本
 - 若有启动同类型的大模型推理系统，请先下线对应系统，以保证该服务的正常运行
 - 请保证已获取到了完整的安装部署包（如应用或服务部署包、模型部署包等）
+- 请确保系统已经安装有Visual C++ Redistributable for Visual Studio 2015-2022 , 如未安装请下载并安装，微软[官方链接](https://learn.microsoft.com/zh-cn/cpp/windows/latest-supported-vc-redist?view=msvc-170)
 
 1. 双击hi_cpp.msi开始执行安装
 2. 同意安装协议，然后点击下一步
