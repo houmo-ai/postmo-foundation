@@ -4,3 +4,5 @@ out
 CMakeSettings.json
 third_party/llama.cpp/lib*
 third_party/boost
+src/houmo-tcim-runtime
+src/libtorch

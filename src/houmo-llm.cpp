@@ -2416,6 +2416,7 @@ struct server_context {
       0;  // 0 -> init; 1 -> loaded; 2 -> unloaded; 3 -> infer; -1 -> error;
   bool stop = false;
   bool hm_running = false;
+  int device_id = 0;
 
   common_params *params;
   std::thread ctx_t;
@@ -2930,7 +2931,7 @@ struct server_context {
         //printf("nblocks=%d,args.nblocks=%d \r\n",nblocks,args.nblocks);
         std::string HMM_MODEL_PATH = model_path;
         HMM_MODEL_PATH.resize(HMM_MODEL_PATH.length() - 1);//去掉多余的 "/"
-        tcim::Module::WeightManager weight_manager=tcim::Module::WeightManager::CreateWeightManager(0);
+        tcim::Module::WeightManager weight_manager=tcim::Module::WeightManager::CreateWeightManager(device_id);
         tcim::Module::Option option1(weight_manager);
         tcim::Module::Option option2(weight_manager);
         std::vector<std::string> dummy_tensor_names;
@@ -3338,7 +3339,7 @@ struct server_context {
     // }
 
     hmctx->stream = tcim::Stream(true);
-    hmctx->wm = tcim::Module::WeightManager::CreateWeightManager(0);
+    hmctx->wm = tcim::Module::WeightManager::CreateWeightManager(device_id);
     hmctx->option_prefill = tcim::Module::Option(hmctx->wm);
     hmctx->option_decode = tcim::Module::Option(hmctx->wm);
     // hmctx->option_decode.set_dummy_tensors(hmctx->dummy_tensor_names);
@@ -9042,6 +9043,10 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
     LOG_ERR("%s: exiting due to model loading error\n", __func__);
     return nullptr;
   }
+
+  auto device_id_str = getenv_or_default("DEVICE_CHOICE", "0").c_str();
+  ctx_server->device_id = atoi(device_id_str);
+  LOG_INF("Device Choice is : %d\n", ctx_server->device_id);
 
   if (model_path.find("14B") != std::string::npos || model_path.find("14b") != std::string::npos) {
     ctx_server->init_14B(model_path);
