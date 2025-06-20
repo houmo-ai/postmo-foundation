@@ -14,7 +14,7 @@ int main(int argc, char** argv) {
         printf("No Env HICPP_MODEL_PATH Found, read default path:/opt/hicpp/models/DeepSeek-R1-Distill-Qwen-7B-1Batch/4core_8k");
         hPath="/opt/hicpp/models/DeepSeek-R1-Distill-Qwen-7B-1Batch/4core_8k";
     }
-    std::cout << "env HICPP_MODEL_PATH: " << hPath << std::endl;
+    std::cout << "env HICPP_MODEL_PATH or default: " << hPath << std::endl;
     HANDLE instance = create_instance(hPath, nullptr);
     if (instance == nullptr) {
         printf("instance is null\n");

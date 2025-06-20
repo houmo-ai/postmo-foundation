@@ -1284,17 +1284,21 @@ public:
         std::string HMM_MODEL_PATH = args.model_dir;
         //std::string EMBEDDING_PATH = args.model_dir + "/quant_embedding.pt";
         std::string EMBEDDING_PATH = args.tokenizer_path;
-        printf("++0 args.nblocks=%d args.batch=%d\r\n",args.nblocks,args.batch);
+        printf("###--0 args.nblocks=%d args.batch=%d\r\n",args.nblocks,args.batch);
         for (int b = 0; b < args.batch; ++b) {
-            printf("++b=%d load prefill model\r\n",b);
-            prefill_models.emplace_back(tcim::Module::LoadFromFile((fs::path(HMM_MODEL_PATH) / "prefill.hmm").string(),option1));
+            //std::string prefill_modelname="models\\hmm_xh2_qwen2.5_256_8k_2cores_20250610\\prefill.hmm";
+            std::string prefill_modelname=(fs::path(HMM_MODEL_PATH) / "prefill.hmm").string();
+            printf("++b=%d load prefill model=%s\r\n",b,prefill_modelname.c_str());
+            prefill_models.emplace_back(tcim::Module::LoadFromFile(prefill_modelname,option1));
         }
-        printf("before load decode model\r\n");
-        decode_model = tcim::Module::LoadFromFile((fs::path(HMM_MODEL_PATH) / "decoder.hmm").string(),option2);
+        std::string decode_modelname=(fs::path(HMM_MODEL_PATH) / "decoder.hmm").string();
+        printf("before load decode model path:%s\r\n",decode_modelname.c_str());
+        decode_model = tcim::Module::LoadFromFile(decode_modelname,option2);
         printf("after load decode model\r\n");
         printf("++1\r\n");
         fillinfomap_from_modelinfo();
         printf("++2\r\n");
+        exit(-1);
         for (int b = 0; b < args.batch; ++b) {
             for (int i = 0; i < args.nblocks; ++i) {
                 auto kcache = prefill_models[b].GetInput("model_layers_" + std::to_string(i) + "_self_attn_kcache_input");
@@ -1304,7 +1308,11 @@ public:
             }
         }
         //std::vector<int> current_length = {1, 1, 1, 1};
-        std::vector<int16_t> current_length = {1, 1, 1, 1};
+        #if 0//(4==args.batch)
+            std::vector<int16_t> current_length = {1, 1, 1, 1};
+        #else
+            std::vector<int16_t> current_length = {1};
+        #endif
         printf("++3\r\n");
         //TODO:szj 确认 shape 是1维的1 还是二维的1
         TensorConverter::FromVector(current_length, decode_input_map.at("current_length"));
@@ -1346,7 +1354,7 @@ public:
         auto input_name = prefill_models[0].GetInputName(idx);
         auto input_info =
             prefill_models[0].GetInputInfo(input_name).AsContiguous();
-        // std::cout << "Input[" << input_name << "] " << input_info << std::endl;
+        std::cout << "PrefillModel Input[" <<idx<<"] withname:["<< input_name << "] " << input_info << std::endl;
         auto input_tensor = tcim::Tensor::CreateHostTensor(input_info);
         prefill_input_map.insert(
             std::pair<std::string, tcim::Tensor>(input_name, input_tensor));
@@ -1354,13 +1362,13 @@ public:
 
         // 4. get output info
         int output_num = prefill_models[0].GetOutputNum();
-        // std::cout << "Count of Output: " << output_num << std::endl;
+        std::cout << "Count of Output: " << output_num << std::endl;
         for (int idx = 0; idx < output_num; idx++) {
         auto output_name = prefill_models[0].GetOutputName(idx);
         auto output_info =
             prefill_models[0].GetOutputInfo(output_name).AsContiguous();
-        // std::cout << "Output[" << output_name << "] " << output_info <<
-        // std::endl;
+        std::cout << "PrefillModel Output[" <<idx<<"] withname:["<< output_name << "] " << output_info <<
+        std::endl;
         auto output_tensor = tcim::Tensor::CreateHostTensor(output_info);
         prefill_input_map.insert(
             std::pair<std::string, tcim::Tensor>(output_name, output_tensor));
@@ -1373,7 +1381,7 @@ public:
         auto input_name = decode_model.GetInputName(idx);
         auto input_info =
             decode_model.GetInputInfo(input_name).AsContiguous();
-        // std::cout << "Input[" << input_name << "] " << input_info << std::endl;
+        std::cout << "DecodeModel Input[" <<idx<<"] withname:["<<  input_name << "] " << input_info << std::endl;
         auto input_tensor = tcim::Tensor::CreateHostTensor(input_info);
         decode_input_map.insert(
             std::pair<std::string, tcim::Tensor>(input_name, input_tensor));
@@ -1386,8 +1394,8 @@ public:
         auto output_name = decode_model.GetOutputName(idx);
         auto output_info =
             decode_model.GetOutputInfo(output_name).AsContiguous();
-        // std::cout << "Output[" << output_name << "] " << output_info <<
-        // std::endl;
+        std::cout << "DecodeModel Output[" <<idx<<"] withname:["<<  output_name << "] " << output_info <<
+        std::endl;
         auto output_tensor = tcim::Tensor::CreateHostTensor(output_info);
         decode_input_map.insert(
             std::pair<std::string, tcim::Tensor>(output_name, output_tensor));
