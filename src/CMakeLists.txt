@@ -19,6 +19,7 @@ include_directories(${TCIM_RUNTIME_PATH}/include)
 include_directories(${TCIM_RUNTIME_PATH}/examples/common/hpp)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/inih/include)
+include_directories(${PROJECT_SOURCE_DIR}/third_party/spdlog/include)
 
 message("LLAMA_CPP_PATH=${LLAMA_CPP_PATH}")
 message("TCIM_LIBRARY=${TCIM_LIBRARY}")

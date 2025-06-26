@@ -31,6 +31,10 @@
 #include "http_server_c_interface_3.h"
 //#include "hi.h"
 #include "INIReader.h"
+#include "spdlog/spdlog.h"
+#include "spdlog/sinks/stdout_color_sinks.h"
+#include "spdlog/sinks/daily_file_sink.h"
+
 #include "tcim/tcim_runtime.h"
 
 #if (__GNUC__ < 8 && !defined(_MSC_VER))
@@ -2546,7 +2550,9 @@ struct server_context {
       0;  // 0 -> init; 1 -> loaded; 2 -> unloaded; 3 -> infer; -1 -> error;
   bool stop = false;
   bool hm_running = false;
-  int device_id = 0;
+  bool houmo_sampling = true;
+  int instance_no = 0; // Windows下多卡多服务实例场景
+  int device_id = 0;   // Windows下依赖instance_no, Linux下依赖环境变量
 
   common_params *params;
   std::thread ctx_t;
@@ -6111,7 +6117,7 @@ struct server_context {
       // std::cout << std::endl;
       int32_t generate_token=0;
       //default默认的处理流程-没有复杂的后采样
-      if(0) {
+      if (!houmo_sampling) {
         auto selected_output =
             torch::argmax(decode_output_tensor).to(torch::kInt32);
         // std::cout << "selected_output: " << selected_output << std::endl;
@@ -6524,7 +6530,7 @@ struct server_context {
       // std::cout << std::endl;
       int32_t generate_token=0;
       //default默认的处理流程-没有复杂的后采样
-      if(0) {
+      if(!houmo_sampling) {
         auto selected_output =
             torch::argmax(decode_output_tensor).to(torch::kInt32);
         // std::cout << "selected_output: " << selected_output << std::endl;
@@ -7418,7 +7424,7 @@ struct server_context {
       int32_t generate_token=0;
       bool find_chinese=false;
       //default默认的处理流程-没有复杂的后采样
-      if(0) {
+      if (!houmo_sampling) {
         auto selected_output =
             torch::argmax(decode_output_tensor).to(torch::kInt32);
         // std::cout << "selected_output: " << selected_output << std::endl;
@@ -8395,21 +8401,27 @@ std::vector<int16_t> TensorConverter::ToVector(const tcim::Tensor& tcim_tensor) 
 static void log_server_request(const httplib::Request &req,
                                const httplib::Response &res) {
   // skip GH copilot requests when using default port
-  if (req.path == "/v1/health" || req.path == "/v1/completions") {
+  if (req.path == "/health" || req.path == "/v1/completions") {
     return;
   }
 
-  LOG_INF("request: %s %s %s %d\n", req.method.c_str(), req.path.c_str(),
+  const auto record_time =  spdlog::details::os::now();
+  const auto tm = spdlog::details::os::localtime(spdlog::log_clock::to_time_t(record_time));
+  char time_buf[32];
+  std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &tm);
+  LOG_INF("[%s] Request: %s %s %s %d\n", time_buf, req.method.c_str(), req.path.c_str(),
           req.remote_addr.c_str(), res.status);
 
-  LOG_DBG("request:  %s\n", req.body.c_str());
-  LOG_DBG("response: %s\n", res.body.c_str());
+  LOG_DBG("[%s] Request:  %s\n", time_buf, req.body.c_str());
+  LOG_DBG("[%s] Response: %s\n", time_buf, res.body.c_str());
 }
 
+static server_context* ctx_server = nullptr;
+static spdlog::logger* boot_logger = nullptr;
 
 #ifdef _WIN32
 
-int init_params(std::string model_path, const INIReader& config_reader, common_params* &p_params) {
+int init_params(std::string model_path, const INIReader& config_reader, common_params* &p_params, uint8_t instance_no = 0) {
     model_path = model_path + "/";
 
     std::string tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
@@ -8419,7 +8431,14 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
         tok_model_path = model_path + "Qwen3-0.6B-Q8_0.gguf";
     }
 
-    const auto server_port = config_reader.Get("server", "port", "8808");
+    auto server_port = config_reader.GetInteger("server", "port", 8808);
+    if (instance_no == 1) {
+        server_port = 7801;
+    } else if (instance_no == 2) {
+        server_port = 7802;
+    }
+
+    const auto houmo_sampling = config_reader.GetBoolean("server", "houmo_sampling", true);
 
     const std::string log_location = config_reader.Get("log", "location", "UNKNOWN");
     if (log_location == "UNKNOWN") {
@@ -8435,25 +8454,25 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
 
     try {
         if (std::filesystem::create_directories(log_location)) {
-            std::cout << "Log Dir created successfully.\n";
+            boot_logger->info("Log Dir created successfully.");
         } else {
-            std::cout << "Log Dir already exist.\n";
+            boot_logger->info("Log Dir already exist.");
         }
     } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Log Dir created failed, exception: " << e.what() << "\n";
+        boot_logger->error("Log Dir created failed, exception: {}", e.what());
         return -1;
     }
 
-
     const std::time_t t = std::time(nullptr);
-    const std::string log_file = log_location + string_format("houmo-llm-%d.log", t);
+    std::string log_file_name = "houmo-llm-%d.log";
+    if (instance_no != 0) {
+        log_file_name = "houmo-llm-" + std::to_string(instance_no) + "-%d.log";
+    }
+
+    const std::string log_file = log_location + string_format(log_file_name.c_str(), t);
     char* argv[] = {"houmo-llm-demo",
                     "-m",
                     &tok_model_path[0],
-                    "--port",
-                    const_cast<char*>(server_port.c_str()),
-                    "--host",
-                    "0.0.0.0",
                     "--device",
                     "none",
                     "-np",
@@ -8475,18 +8494,14 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
         argc++;
     }
 
-    // own arguments required by this example
-    //common_params *p_params = new common_params();
-
-    // own arguments required by this example
     p_params = new common_params();
-
     if (!common_params_parse(argc, argv, *p_params, LLAMA_EXAMPLE_SERVER)) {
         return -1;
     }
 
-    // struct that contains llama context and inference
-    static server_context* ctx_server = nullptr;
+    p_params->hostname = "0.0.0.0";
+    p_params->port = server_port;
+
     ctx_server = new server_context();
     SRV_INF("ctx_server: %p\n", ctx_server);
 
@@ -8497,6 +8512,8 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
     p_params->sampling.penalty_repeat = 1.05;
     p_params->sampling.penalty_last_n = 60;
     ctx_server->params = p_params;
+    ctx_server->instance_no = instance_no;
+    ctx_server->houmo_sampling = houmo_sampling;
 
     return 0;
 }
@@ -8510,46 +8527,80 @@ static bool server_terminating = false;
  * @return error_code
  */
 int run_server() {
-    std::string configPath = "../config/sys.cfg";
     char exePath[MAX_PATH];
     GetModuleFileName(nullptr, exePath, MAX_PATH); // 获取exe绝对路径
     const auto programPath = std::string(exePath);
-    configPath = std::string(exePath).substr(0, std::string(exePath).find_last_of('\\') + 1) + "..\\config\\sys.cfg";
+    auto program_dir = std::string(exePath).substr(0, std::string(exePath).find_last_of('\\') + 1);
+    const auto program_name = std::string(exePath).substr(std::string(exePath).find_last_of('\\') + 1);
+    int instance_no = 0;
+    if (program_name.find("1.exe") != std::string::npos) {
+        instance_no = 1;
+    } else if (program_name.find("2.exe") != std::string::npos) {
+        instance_no = 2;
+    }
+
+    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    console_sink->set_level(spdlog::level::debug);
+    console_sink->set_pattern("[multi_sink_example] [%^%l%$] %v");
+
+    auto file_sink = std::make_shared<spdlog::sinks::daily_file_sink_mt>(
+        program_dir + "\\boot_log\\service_boot-" + std::to_string(instance_no) + ".log", 0, 0, false);
+    file_sink->set_level(spdlog::level::debug);
+
+    boot_logger = new spdlog::logger("HICPP-BOOT", {console_sink, file_sink});
+    boot_logger->set_level(spdlog::level::debug);
+    spdlog::set_default_logger(std::shared_ptr<spdlog::logger>(boot_logger));
+    spdlog::flush_every(std::chrono::seconds(10));
+
+    const auto configPath = program_dir + "..\\config\\sys.cfg";
 
     const INIReader config_reader(configPath);
     if (config_reader.ParseError() < 0) {
-        LOG_ERR("WINSERVICE cannot parse config/sys.cfg");
+        boot_logger->error("WINSERVICE cannot parse {}", configPath);
         return 1;
     }
 
-    const int thread_count = config_reader.GetInteger("server", "thread_count", 5);
     const std::string cur_model = config_reader.Get("model", "cur_model", "UNKNOWN");
     if (cur_model == "UNKNOWN") {
+        boot_logger->error("WINSERVICE cannot found model");
         return 2;
     }
 
     common_params* p_params = nullptr;
     const std::string cur_model_path = cur_model + "/";
-    if (const int error_code = init_params(cur_model_path, config_reader, p_params); error_code != 0) {
-        return error_code;
+
+    int ret = 0;
+    try {
+        if (const int error_code = init_params(cur_model_path, config_reader, p_params, instance_no); error_code != 0) {
+            return error_code;
+        }
+
+        LOG_INF("WINSERVICE info: cur_model = %s \n", cur_model.c_str());
+
+        boot_logger->info("Server create_instance... , cur_model {}", cur_model);
+
+        HANDLE instance = create_instance(cur_model_path, p_params);
+        if (!instance) {
+            LOG_ERR("instance is null\n");
+        }
+
+        boot_logger->info("Server running");
+
+        while (server_running) {
+            Sleep(1000);
+        }
+
+        ret = destroy_instance(instance);
+    } catch (const std::exception& ex) {
+        boot_logger->error("Server ex: {}", ex.what());
+    } catch (...) {
+        boot_logger->error("Server crashed due to unsupported exception occurred.");
     }
 
-
-    LOG_INF("WINSERVICE info: n_threads = %d, cur_model = %s \n", thread_count, cur_model.c_str());
-
-    HANDLE instance = create_instance(cur_model_path, p_params);
-    if (!instance) {
-        LOG_ERR("instance is null\n");
-    }
-
-    while (server_running) {
-        Sleep(1000);
-    }
-
-    const int ret = destroy_instance(instance);
-
-    printf("ret = %d\n", ret);
+    boot_logger->warn("Server terminated with ret: {}", ret);
     server_terminating = false;
+    Sleep(1000);
+    delete boot_logger;
     return ret;
 }
 
@@ -8638,8 +8689,9 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
     }
 
     // struct that contains llama context and inference
-    static server_context * ctx_server = nullptr;
-    ctx_server = new server_context();
+    if (!ctx_server) {
+        ctx_server = new server_context();
+    }
     SRV_INF("ctx_server: %p\n", ctx_server);
     params params;
     params.top_k = p_params->sampling.top_k;
@@ -8799,7 +8851,13 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
   };
 
   auto middleware_server_state = [&res_error](const httplib::Request& req, httplib::Response& res) {
-      LOG_INF("state 2: %d\n", ctx_server->state.load());
+      if (req.path != "/health") {
+          const auto record_time =  spdlog::details::os::now();
+          const auto tm = spdlog::details::os::localtime(spdlog::log_clock::to_time_t(record_time));
+          char time_buf[32];
+          std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &tm);
+          LOG_INF("[%s] Request come in, current state[0: LOADING_MODEL 1:READY]: %d\n", time_buf, ctx_server->state.load());
+      }
       if (ctx_server->state.load() == SERVER_STATE_LOADING_MODEL) {
           res_error(res, format_error_response("Loading model", ERROR_TYPE_UNAVAILABLE));
           return false;
@@ -8838,8 +8896,23 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
 
   const auto handle_health = [&](const httplib::Request &, httplib::Response &res) {
       // error and loading states are handled by middleware
-      json health = {{"status", "ok"}};
-      res_ok(res, health);
+
+      int slots_processing = 0;
+      for (auto &slot : ctx_server->slots) {
+          if (slot.is_processing()) {
+              ++slots_processing;
+          }
+      }
+
+      const auto slots_idle = ctx_server->slots.size() - slots_processing;
+
+      json status = {
+          { "status", "ok" },
+          { "slots_idle", slots_idle },
+          { "slots_processing", slots_processing }
+      };
+
+      res_ok(res, status);
   };
 
   const auto handle_slots = [&](const httplib::Request &req,
@@ -9984,8 +10057,13 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
     return nullptr;
   }
 
-  auto device_id_str = getenv_or_default("DEVICE_CHOICE", "0").c_str();
-  ctx_server->device_id = atoi(device_id_str);
+  if (ctx_server->instance_no == 0) {
+    auto device_id_str = getenv_or_default("DEVICE_CHOICE", "0").c_str();
+    ctx_server->device_id = atoi(device_id_str);
+  } else {
+    ctx_server->device_id = ctx_server->instance_no - 1; // Instance No started from 1.
+  }
+
   LOG_INF("Device Choice is : %d\n", ctx_server->device_id);
 
   if (model_path.find("14B") != std::string::npos || model_path.find("14b") != std::string::npos) {

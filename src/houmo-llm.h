@@ -16,7 +16,6 @@ struct common_params;
 class INIReader;
 int HTTP_SERVER_API run_server();
 void HTTP_SERVER_API stop_server();
-int HTTP_SERVER_API init_params(std::string model_path, const INIReader& config_reader, common_params* &p_params);
 HANDLE HTTP_SERVER_API create_instance(std::string model_path, common_params* p_params);
 int HTTP_SERVER_API destroy_instance(HANDLE h);
 int HTTP_SERVER_API generate(HANDLE h);

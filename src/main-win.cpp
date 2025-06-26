@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
     // LOG(Info) << "WIN32 Service Mode";
 
     char serviceName[] = "HoumoHI";
+    _putenv("TCIM_BACKEND=Xh1HdiBackend");
 
     SERVICE_TABLE_ENTRY ServiceTable[] = {{serviceName, ServiceMain}, {NULL, NULL}};
     if (!StartServiceCtrlDispatcher(ServiceTable))
