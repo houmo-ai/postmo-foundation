@@ -4,14 +4,15 @@
 #include <chrono>
 #include <thread>
 
-
+extern char* hi_modelpath;
 int main(int argc, char** argv) {
-    const char* hi_modelpath = std::getenv("HICPP_MODEL_PATH");
+    //const char* hi_modelpath = std::getenv("HICPP_MODEL_PATH");
     std::string hPath;
     if(hi_modelpath){
       hPath=hi_modelpath;
+      printf("Find cfg HICPP_MODEL_PATH:%s\r\n",hPath.c_str());
     } else {
-        printf("No Env HICPP_MODEL_PATH Found, read default path:/opt/hicpp/models/DeepSeek-R1-Distill-Qwen-7B-1Batch/4core_8k");
+        printf("No HICPP_MODEL_PATH cfg Found, read default path:/opt/hicpp/models/DeepSeek-R1-Distill-Qwen-7B-1Batch/4core_8k");
         hPath="/opt/hicpp/models/DeepSeek-R1-Distill-Qwen-7B-1Batch/4core_8k";
     }
     std::cout << "env HICPP_MODEL_PATH or default: " << hPath << std::endl;

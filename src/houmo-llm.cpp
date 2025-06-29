@@ -36,6 +36,12 @@
 #include "spdlog/sinks/daily_file_sink.h"
 
 #include "tcim/tcim_runtime.h"
+#include <algorithm>
+#include <cctype>
+#include <locale>
+
+#include "houmo-llm.h"
+#include "houmo-llm.hpp"
 
 #if (__GNUC__ < 8 && !defined(_MSC_VER))
 #include <experimental/filesystem>
@@ -44,16 +50,142 @@ namespace fs = std::experimental::filesystem;
 #include <filesystem>
 namespace fs = std::filesystem;
 #endif
-static int M50=0;
-static int M30=0;
 using json = nlohmann::ordered_json;
 
-#include <algorithm>
-#include <cctype>
-#include <locale>
+static int M50=0;
+static int M30=0;
 
-#include "houmo-llm.h"
-#include "houmo-llm.hpp"
+#if 1
+// 全局配置变量
+static char* hi_num_parallel = nullptr;
+static std::string use_ce_flag;
+char* hi_modelpath = nullptr;
+static bool houmo_sampling_cfg = true;
+
+struct SysCfg {
+    std::string hi_num_parallel; // 服务启动的并发数,默认值1
+    std::string use_ce_flag;     // 开启中英文混合输出的检查标志
+    std::string hi_modelpath;    // 模型路径
+    bool houmo_sampling_cfg;
+};
+
+// 使用静态变量和函数局部静态变量控制初始化顺序
+class ConfigManager {
+private:
+    static ConfigManager& instance() {
+        static ConfigManager instance; // 线程安全的延迟初始化
+        return instance;
+    }
+
+    SysCfg result;
+    bool initialized = false;
+
+    ConfigManager() {
+        // 初始化配置
+        initialize();
+    }
+
+    void initialize() {
+        std::string cfgfile_path = "config/sys.cfg";
+        std::cout << "Loading cfg file from: " << cfgfile_path << std::endl;
+
+        const INIReader config_reader(cfgfile_path);
+        if (config_reader.ParseError() < 0) {
+            std::cerr << "Error: Cannot parse config file: " << cfgfile_path << std::endl;
+            exit(-1);
+        }
+
+        result.hi_num_parallel = config_reader.Get("service", "HICPP_NUM_PARALLEL", "1");
+        result.use_ce_flag = config_reader.Get("service", "USE_CEnglishMixedProcessor", "0");
+        result.hi_modelpath = config_reader.Get("service", "HICPP_MODEL_PATH",
+                                              "/opt/hicpp/models/DeepSeek-R1-Distill-Qwen-7B-1Batch/4core_8k");
+        result.houmo_sampling_cfg=config_reader.GetBoolean("server", "houmo_sampling", true);
+
+        // 复制字符串到独立内存，避免悬空指针
+        if (hi_num_parallel) free(hi_num_parallel);
+        if (hi_modelpath) free(hi_modelpath);
+
+        hi_num_parallel = (char *)result.hi_num_parallel.c_str();
+        use_ce_flag = result.use_ce_flag;
+        hi_modelpath = (char *)result.hi_modelpath.c_str();
+        houmo_sampling_cfg=result.houmo_sampling_cfg;
+
+        std::cout << "After parse: " << cfgfile_path << std::endl;
+        std::cout << "houmo_sampling_cfg: " << houmo_sampling_cfg << std::endl;
+        std::cout << "use_ce_flag(USE_CEnglishMixedProcessor): " << use_ce_flag << std::endl;
+        std::cout << "hi_num_parallel: " << hi_num_parallel << std::endl;
+        std::cout << "hi_modelpath: " << hi_modelpath << std::endl;
+        std::cout << "=========ParseCfgDone==========" << std::endl;
+
+        initialized = true;
+    }
+
+public:
+    static const SysCfg& getConfig() {
+        return instance().result;
+    }
+
+    static bool isInitialized() {
+        return instance().initialized;
+    }
+};
+
+// 确保在main之前初始化
+static struct ForceInitialization {
+    ForceInitialization() {
+        ConfigManager::getConfig();
+    }
+} forceInit;
+
+// 提供一个显式的初始化函数
+void initializeConfig() {
+    ConfigManager::getConfig();
+}
+
+#else  //另一种linuxgcc实现方式
+static char* hi_num_parallel=nullptr;
+static std::string use_ce_flag __attribute__ ((init_priority (199)));
+char* hi_modelpath=nullptr;
+
+struct SysCfg {
+  std::string hi_num_parallel; //服务启动的并发数,默认值1
+  std::string use_ce_flag; //开启中英文混合输出的检查标志，
+  std::string hi_modelpath;  //模型路径
+} __attribute__ ((init_priority (199)));
+
+static SysCfg result  __attribute__ ((init_priority (200)));
+void parse_syscfg(std::string cfgfile_path) {
+
+    const INIReader config_reader(cfgfile_path);
+    if (config_reader.ParseError() < 0) {
+        std::cout<<"Error exit:Cannot parse config file:%s "<< cfgfile_path<<std::endl;
+        exit(-1);
+    }
+    //const int thread_count = config_reader.GetInteger("server", "thread_count", 5);
+    result.hi_num_parallel = config_reader.Get("service", "HICPP_NUM_PARALLEL", "1");
+    result.use_ce_flag=config_reader.Get("service", "USE_CEnglishMixedProcessor", "0");
+    result.hi_modelpath = config_reader.Get("service", "HICPP_MODEL_PATH", "/opt/hicpp/models/DeepSeek-R1-Distill-Qwen-7B-1Batch/4core_8k");
+
+    hi_num_parallel=(char*)result.hi_num_parallel.c_str();
+    use_ce_flag=result.use_ce_flag;
+    hi_modelpath=(char*)result.hi_modelpath.c_str();//
+    std::cout<<"After parse:"<<cfgfile_path<< std::endl;
+    std::cout<<"hi_num_parallel:"<<hi_num_parallel<<std::endl;
+    std::cout<<"use_ce_flag:"<<use_ce_flag<<std::endl;
+    std::cout<<"hi_modelpath:"<<hi_modelpath<<std::endl;
+    std::cout<<"=========ParseCfgDone=========="<<std::endl;
+}
+
+// 从配置文件加载环境变量
+__attribute__((constructor(300)))
+void config_initialize() {
+    std::string cfgfile_path= "config/sys.cfg";
+    std::cout << "Loading cfg file from:" << cfgfile_path <<std::endl;
+    // 执行初始化代码
+    parse_syscfg(cfgfile_path);
+}
+#endif
+
 
 //耗时统计类，支持多线程
 class ScopedTimer {
@@ -544,6 +676,34 @@ public:
     virtual void update(const slot_params& params) = 0;
 };
 
+void CEnglishMixedProcessorImpl_process(float* logits, int n_vocab, const std::vector<llama_token>&);
+//中英文混合输出处理机制
+class CEnglishMixedProcessor : public LogitsProcessor {
+
+public:
+    explicit CEnglishMixedProcessor() {}
+
+    void print_processor_param() override {
+        SRV_INF("%s\r\n","CEnglishMixedProcessor");
+    }
+
+    void process(float* logits, int n_vocab, const std::vector<llama_token>& slot_tokens) override {
+      CEnglishMixedProcessorImpl_process(logits, n_vocab,slot_tokens);
+    }
+
+    void update(const slot_params& params) override {
+    }
+
+    static bool use_flag;
+    static bool find_chinese;
+    static llama_token argmax_generate_token;
+    static server_context *s_ctx;
+};
+bool CEnglishMixedProcessor::find_chinese=false;
+bool CEnglishMixedProcessor::use_flag=false;
+llama_token CEnglishMixedProcessor::argmax_generate_token=0;
+server_context* CEnglishMixedProcessor::s_ctx=nullptr;
+
 class TemperatureProcessor final : public LogitsProcessor {
     float temp;
 
@@ -764,10 +924,22 @@ public:
         }
     }
 
-    void process(float* logits, const int n_vocab, const std::vector<llama_token>& last_tokens, const slot_params& params) const {
-        ScopedTimer timer("houmo_sampling_time");
+    void process(float* logits, const int n_vocab, std::vector<llama_token>& last_tokens, const slot_params& params) const {
+        CEnglishMixedProcessor::find_chinese=false;
+        CEnglishMixedProcessor::argmax_generate_token=0;
+        if(CEnglishMixedProcessor::use_flag) {
+              SRV_DBG("%s\r\n","call CEnglishMixedProcessor popback");
+              CEnglishMixedProcessor::argmax_generate_token=last_tokens.back();
+              last_tokens.pop_back();
+        }
+
+        //ScopedTimer timer("houmo_sampling_time");
         for (const auto& processor : processors) {
             SRV_DBG("--%s\r\n", "call process");
+            if(CEnglishMixedProcessor::find_chinese){
+              SRV_DBG("%s\r\n","++FindChinse or Special Token Dont sample ");
+              break;
+            }
             processor->update(params);
             processor->process(logits, n_vocab, last_tokens);
         }
@@ -2880,6 +3052,21 @@ struct server_context {
   }
 
   void init_houmo_sampling(LogitsProcessorList &processors, ::params* p) {
+    CEnglishMixedProcessor::find_chinese=false;
+    CEnglishMixedProcessor::use_flag=false;
+    CEnglishMixedProcessor::s_ctx=this;
+    this->houmo_sampling=houmo_sampling_cfg;
+    //std::string use_ce_flag=getenv_or_default("USE_CEnglishMixedProcessor","0");
+    if(use_ce_flag.find("1") != std::string::npos) {
+       //进行中英文混合检查
+       processors.add(std::make_unique<CEnglishMixedProcessor>());
+       CEnglishMixedProcessor::use_flag=true;
+       SRV_DBG("Add Chinese-English mixed correction processor use_ce_flag:%s ConfigManager::getConfig().use_ce_flag.c_str():%s  this->houmo_sampling=%d\r\n",use_ce_flag.c_str(),ConfigManager::getConfig().use_ce_flag.c_str(),this->houmo_sampling);
+
+    } else {
+       SRV_DBG("Dont Use Chinese-English mixed correction processor use_ce_flag:%s ConfigManager::getConfig().use_ce_flag.c_str():%s this->houmo_sampling=%d\r\n",use_ce_flag.c_str(),ConfigManager::getConfig().use_ce_flag.c_str(),this->houmo_sampling);
+
+    }
     // 创建处理器列表
     processors.add(std::make_unique<TopKProcessor>(p->top_k));
     processors.add(std::make_unique<TopPProcessor>(p->top_p));
@@ -2891,6 +3078,12 @@ struct server_context {
     // 只保留FrequencyPenaltyProcessor，效果也很差-部分答非所问
     processors.add(std::make_unique<FrequencyPenaltyProcessor>(std::fabs(p->repeat_penalty-1.0)));
 
+    // if(use_ce_flag.find("1") != std::string::npos) {
+    //    //进行中英文混合检查
+    //    processors.add(std::make_unique<CEnglishMixedProcessor>());
+    //    CEnglishMixedProcessor::use_flag=true;
+    //    SRV_DBG("%s\r\n","Add Chinese-English mixed correction processor");
+    // }
   }
 
   void fillinfomap_from_modelinfo(houmo_context *hmctx) {
@@ -3076,6 +3269,7 @@ struct server_context {
     hmctx->prefill_length = 256;
     hmctx->decode_length = 8192;
     hmctx->nblocks = 36;
+    int embed_shape=4096;
     if (model_path.find("qwen2.5") != std::string::npos) {
       hmctx->model_type = "qwen2.5";
     } else if (model_path.find("qwen2") != std::string::npos) {
@@ -3110,10 +3304,45 @@ struct server_context {
         tcim::Module::Option option1(weight_manager);
         tcim::Module::Option option2(weight_manager);
         std::vector<std::string> dummy_tensor_names;
-        for (int i = 0; i < hmctx->nblocks; ++i) {
-            dummy_tensor_names.push_back("model_layers_" + std::to_string(i) + "_self_attn_kcache_input");
-            dummy_tensor_names.push_back("model_layers_" + std::to_string(i) + "_self_attn_vcache_input");
+        std::string klayer_prefix;
+        std::string vlayer_prefix;
+        std::string kcache_suffix_name;
+        std::string vcache_suffix_name;
+        std::string decode_input_name;
+        if(M30){
+            kcache_suffix_name="_self_attn_kcache_input";
+            vcache_suffix_name="_self_attn_vcache_input";
+            decode_input_name="current_length";
+            klayer_prefix="model_layers_";
+            vlayer_prefix="model_layers_";
+        }else if(M50){
+            if((model_path.find("8b") != std::string::npos)||(model_path.find("8B") != std::string::npos)) {
+              hmctx->nblocks=36;
+              kcache_suffix_name="_self_attn_kcache_input.hmcc.format";
+              vcache_suffix_name="_self_attn_vcache_input.hmcc.format";
+              decode_input_name="current_length.hmcc.format";
+              klayer_prefix="model_layers_";
+              vlayer_prefix="model_layers_";
+              hmctx->model_name = "Qwen3-8B";
+            }
+            else if((model_path.find("14b") != std::string::npos)||(model_path.find("14B") != std::string::npos)) {
+              hmctx->nblocks=40;
+              kcache_suffix_name=".hmcc.format";
+              vcache_suffix_name=".hmcc.format";
+              decode_input_name="current_input_length.hmcc.format";
+              klayer_prefix="past_key_cache_";
+              vlayer_prefix="past_value_cache_";
+              embed_shape=5120;
+              hmctx->model_name = "Qwen3-14B";
+            }
+
         }
+
+        for (int i = 0; i < hmctx->nblocks; ++i) {
+            dummy_tensor_names.push_back(klayer_prefix + std::to_string(i) + kcache_suffix_name);
+            dummy_tensor_names.push_back(vlayer_prefix + std::to_string(i) + vcache_suffix_name);
+        }
+
         option2.SetDummyTensors(dummy_tensor_names);
         hmctx->prefill_model = tcim::Module::LoadFromFile((fs::path(HMM_MODEL_PATH) / "prefill.hmm").string(),option1);
         printf("++1 prefill model loaded\r\n");
@@ -3124,20 +3353,19 @@ struct server_context {
 
         // 设置KVCache输入
         for (int i = 0; i < hmctx->nblocks; ++i) {
-            std::string kcache_input_name = "model_layers_" + std::to_string(i) + "_self_attn_kcache_input";
-            std::string vcache_input_name = "model_layers_" + std::to_string(i) + "_self_attn_vcache_input";
+            std::string kcache_input_name = klayer_prefix + std::to_string(i) + kcache_suffix_name;
+            std::string vcache_input_name = vlayer_prefix + std::to_string(i) + vcache_suffix_name;
             auto kcache = hmctx->prefill_model.GetInput(kcache_input_name);
             hmctx->decode_model.SetInput(kcache_input_name, kcache);
             auto vcache = hmctx->prefill_model.GetInput(vcache_input_name);
             hmctx->decode_model.SetInput(vcache_input_name, vcache);
         }
-
         // 设置decode输入
         std::vector<int16_t> current_length = {1};
         printf("++3\r\n");
         //TODO:szj 确认 shape 是1维的1 还是二维的1
-        TensorConverter::FromVector(current_length, decode_input_map.at("current_length"));
-        hmctx->decode_model.SetInput("current_length", decode_input_map.at("current_length"));
+        TensorConverter::FromVector(current_length, decode_input_map.at(decode_input_name));
+        hmctx->decode_model.SetInput(decode_input_name, decode_input_map.at(decode_input_name));
 
         // 加载embedding权重
         // 这里应该实现加载embedding权重的逻辑
@@ -3146,7 +3374,7 @@ struct server_context {
         torch::load(embedding_weight_,(HMM_MODEL_PATH+"/hmquant/quant_embedding_traced.pt").c_str());
         try {
           //torch::load(input, input_path);
-          embedding_weight_ = embedding_weight_.view({-1, 4096});
+          embedding_weight_ = embedding_weight_.view({-1, embed_shape});
           // std::cout << "embedding_weight_ options: " << embedding_weight_.options() << "\n";
           // std::cout << "embedding_weight_ dim: " << embedding_weight_.dim() << "\n";
           // std::cout << "embedding_weight_ size: " << embedding_weight_.size(0) << "\n";
@@ -6225,6 +6453,46 @@ struct server_context {
 
   int houmo_decode_8B(llama_batch batch) {
     SRV_DBG("%s\r\n","++call houmo_decode_8B");
+    int embed_shape =4096;
+    std::string prefill_model_input_1_name;
+    std::string prefill_model_valid_length_name;
+    std::string prefill_model_current_length_name;
+
+    std::string decode_model_input_1_name;
+    std::string decode_model_valid_length_name;
+    std::string decode_model_current_length_name;
+
+    if(M30) {
+      prefill_model_input_1_name="input_1";
+      prefill_model_valid_length_name="valid_length";
+      prefill_model_current_length_name="current_length";
+      decode_model_input_1_name="input_1";
+      decode_model_valid_length_name="valid_length";
+      decode_model_current_length_name=="current_length";
+
+    } else if(M50) {
+      if(hmctx->model_name == "Qwen3-8B") {
+      SRV_DBG("%s\r\n","Qwen3-8B decode");
+      prefill_model_input_1_name="input_1.hmcc.format";
+      prefill_model_valid_length_name="valid_length.hmcc.format";
+      prefill_model_current_length_name="current_length.hmcc.format";
+      decode_model_input_1_name="input_1.hmcc.format";
+      decode_model_valid_length_name="valid_length.hmcc.format";
+      decode_model_current_length_name=="current_length.hmcc.format";
+      }
+      else if(hmctx->model_name == "Qwen3-14B") {
+      SRV_DBG("%s\r\n","Qwen3-14B decode");
+      prefill_model_input_1_name="inputs_embeds.hmcc.format";
+      prefill_model_valid_length_name="past_seq_length.hmcc.format";
+      prefill_model_current_length_name="current_input_length.hmcc.format";
+      decode_model_input_1_name="inputs_embeds.hmcc.format";
+      decode_model_valid_length_name="past_seq_length.hmcc.format";
+      decode_model_current_length_name=="current_input_length.hmcc.format";
+      embed_shape=5120;
+      }
+    }
+
+
     if (decode_pos == 0) {
       SRV_DBG("%s", "prefill stage\n");
       // std::vector<llama_token> tokens(batch.token, batch.token +
@@ -6287,13 +6555,20 @@ struct server_context {
 
         auto effective_length = input_ids.size();
         auto pad_embeds = torch::zeros(
-            {(int64_t)(prefill_length - effective_length), (int64_t)4096},
-            torch::kInt16);
+            {(int64_t)(prefill_length - effective_length), (int64_t)embed_shape},
+            inputs_embeds.dtype());
         auto padded_embeds = torch::cat({inputs_embeds, pad_embeds});
-        padded_embeds =
-            padded_embeds.view({4, prefill_length / 4, 4096}).to(torch::kInt16);
+        if(M30)
+          padded_embeds =padded_embeds.view({4, prefill_length / 4, embed_shape}).to(torch::kInt16);
+        else if(M50)
+          padded_embeds =padded_embeds.view({1, prefill_length, embed_shape});
+        else {
+          SRV_ERR("%s\r\n","Error ChipType");
+          exit(-1);
+        }
 
-        auto input_data = prefill_input_map.at("input_1");
+        if(M30){
+        auto input_data = prefill_input_map.at(prefill_model_input_1_name);
         int16toint16((int16_t *)input_data.Data(),
                      (int16_t *)padded_embeds.data_ptr<int16_t>(),
                      padded_embeds.numel());
@@ -6309,7 +6584,7 @@ struct server_context {
 
         // std::cout << "valid_length_input_tensor: " <<
         // valid_length_input_tensor << std::endl;
-        auto prefill_valid_length = prefill_input_map.at("valid_length");
+        auto prefill_valid_length = prefill_input_map.at(prefill_model_valid_length_name);
         int16toint16((int16_t *)prefill_valid_length.Data(),
                      (int16_t *)valid_length_input_tensor.data_ptr<int16_t>(),
                      valid_length_input_tensor.numel());
@@ -6325,30 +6600,76 @@ struct server_context {
 
         // std::cout << "current_length_input_tensor: " <<
         // current_length_input_tensor << std::endl;
-        auto prefill_current_length = prefill_input_map.at("current_length");
+        auto prefill_current_length = prefill_input_map.at(prefill_model_current_length_name);
         int16toint16((int16_t *)prefill_current_length.Data(),
                      (int16_t *)current_length_input_tensor.data_ptr<int16_t>(),
                      current_length_input_tensor.numel());
 
-        hmctx->prefill_model.SetInput("input_1", input_data);
-        hmctx->prefill_model.SetInput("valid_length", prefill_valid_length);
-        hmctx->prefill_model.SetInput("current_length", prefill_current_length);
+        hmctx->prefill_model.SetInput(prefill_model_input_1_name, input_data);
+        hmctx->prefill_model.SetInput(prefill_model_valid_length_name, prefill_valid_length);
+        hmctx->prefill_model.SetInput(prefill_model_current_length_name, prefill_current_length);
+        } else if(M50) {//XH2=======================
+        auto input_data = prefill_input_map.at(prefill_model_input_1_name);
+        int16toint16((int8_t *)input_data.Data(),
+                     (int8_t *)padded_embeds.data_ptr<at::Half>(),
+                     padded_embeds.numel()*sizeof(at::Half));
+        std::vector<int32_t> valid_length_input = {valid_length};
+        auto valid_length_input_tensor_opts =
+            torch::TensorOptions().dtype(torch::kInt32);
+        auto valid_length_input_tensor =
+            torch::from_blob(valid_length_input.data(),
+                             {int64_t(valid_length_input.size())},
+                             valid_length_input_tensor_opts)
+                .clone();
+
+        // std::cout << "valid_length_input_tensor: " <<
+        // valid_length_input_tensor << std::endl;
+        auto prefill_valid_length = prefill_input_map.at(prefill_model_valid_length_name);
+        int16toint16((int32_t *)prefill_valid_length.Data(),
+                     (int32_t *)valid_length_input_tensor.data_ptr<int32_t>(),
+                     valid_length_input_tensor.numel());
+
+        std::vector<int32_t> current_length_input = {current_length};
+        auto current_length_input_tensor_opts =
+            torch::TensorOptions().dtype(torch::kInt32);
+        auto current_length_input_tensor =
+            torch::from_blob(current_length_input.data(),
+                             {int64_t(current_length_input.size())},
+                             current_length_input_tensor_opts)
+                .clone();
+
+        // std::cout << "current_length_input_tensor: " <<
+        // current_length_input_tensor << std::endl;
+        auto prefill_current_length = prefill_input_map.at(prefill_model_current_length_name);
+        int16toint16((int32_t *)prefill_current_length.Data(),
+                     (int32_t *)current_length_input_tensor.data_ptr<int32_t>(),
+                     current_length_input_tensor.numel());
+
+        hmctx->prefill_model.SetInput(prefill_model_input_1_name, input_data);
+        hmctx->prefill_model.SetInput(prefill_model_valid_length_name, prefill_valid_length);
+        hmctx->prefill_model.SetInput(prefill_model_current_length_name, prefill_current_length);
+
+        }
         hmctx->prefill_model.Run();
         hmctx->prefill_model.Sync();
         // std::cout << "prefill run finished" << std::endl;
       }
 
       tcim::Tensor input_data;
+      torch::Tensor prefill_output_tensor;
       //if (hmctx->model_type == "deepseek") {
       if (1) {
-        input_data =
-            hmctx->prefill_model.GetOutput("Output_lm_head_add_list_0");
+        if(M30)
+          input_data =hmctx->prefill_model.GetOutput("Output_lm_head_add_list_0");
+        else if(M50)
+          input_data =hmctx->prefill_model.GetOutput(hmctx->prefill_model.GetOutputName(0));
       } else {
         input_data = hmctx->prefill_model.GetOutput("output");
       }
 
       SRV_DBG("input_data.info.memSize:%d  input_data.DataType() is:%d\r\n",input_data.Info().MemSize(),input_data.Info().DataType());
       // std::this_thread::sleep_for(std::chrono::seconds(5));
+      if(M30){
       std::vector<int16_t> prefill_output;
       for (int idx = 0; idx < input_data.MemSize() / 2; idx++) {
         auto data = *((int16_t *)input_data.Data() + idx);
@@ -6361,11 +6682,18 @@ struct server_context {
       SRV_DBG("vector<int16_t> prefill_output.size is:%d\r\n ",prefill_output.size());
 
       auto prefill_output_opts = torch::TensorOptions().dtype(torch::kInt16);
-      auto prefill_output_tensor =
+      prefill_output_tensor =
           torch::from_blob(prefill_output.data(),
                            {int64_t(prefill_output.size())},
                            prefill_output_opts)
               .clone();
+      } else if(M50) {
+      auto output_info = input_data.Info().AsContiguous().AsType(tcim::FLOAT32);
+      std::cout << "PrefillOutput info:" << output_info << std::endl;
+      auto prefill_output_tensor_float = tcim::Tensor::CreateHostTensor(output_info);
+      input_data.CastTo(prefill_output_tensor_float);
+      prefill_output_tensor=TensorConverter::ToTorch(prefill_output_tensor_float);
+      }
       // std::cout << "prefill_output options: " <<
       // prefill_output_tensor.options() << std::endl; std::cout <<
       // "prefill_output dim: " << prefill_output_tensor.dim() << std::endl;
@@ -6420,8 +6748,10 @@ struct server_context {
       //     std::cout << prefill_inputs_embeds[0][i] << " ";
       // }
       // std::cout << std::endl;
-      prefill_inputs_embeds =
-          prefill_inputs_embeds.view({1, 1, -1}).to(torch::kInt16);
+      if(M30)
+        prefill_inputs_embeds =prefill_inputs_embeds.view({1, 1, -1}).to(torch::kInt16);
+      else if(M50)
+        prefill_inputs_embeds =prefill_inputs_embeds.view({1, 1, -1});
       // std::cout << "prefill_inputs_embeds options: " <<
       // prefill_inputs_embeds.options() << std::endl; std::cout <<
       // "prefill_inputs_embeds dim: " << prefill_inputs_embeds.dim() <<
@@ -6438,10 +6768,19 @@ struct server_context {
     } else {
       SRV_DBG("%s", "decode stage\n");
       auto invalid_utf8 = false;
-      auto input_data = decode_input_map.at("input_1");
-      int16toint16((int16_t *)input_data.Data(),
-                   (int16_t *)input_emd.data_ptr<int16_t>(), input_emd.numel());
+      auto input_data = decode_input_map.at(decode_model_input_1_name);
 
+      if(M30){
+        int16toint16((int16_t *)input_data.Data(),
+                   (int16_t *)input_emd.data_ptr<int16_t>(), input_emd.numel());
+      }
+      else if(M50) {
+        int16toint16((int8_t *)input_data.Data(),
+                   (int8_t *)input_emd.data_ptr<at::Half>(), input_emd.numel()*sizeof(at::Half));
+      }
+
+      tcim::Tensor decode_valid_length;
+      if(M30) {
       std::vector<int16_t> valid_length_input = {(int16_t)(context_length - 1)};
       auto valid_length_input_tensor_opts =
           torch::TensorOptions().dtype(torch::kInt16);
@@ -6453,13 +6792,36 @@ struct server_context {
 
       // std::cout << "valid_length_input_tensor: " << valid_length_input_tensor
       // << std::endl;
-      auto decode_valid_length = decode_input_map.at("valid_length");
+      decode_valid_length = decode_input_map.at(decode_model_valid_length_name);
       int16toint16((int16_t *)decode_valid_length.Data(),
                    (int16_t *)valid_length_input_tensor.data_ptr<int16_t>(),
                    valid_length_input_tensor.numel());
+      } else if(M50) {
+      int32_t valid_length_for_decode=0;
+      if(hmctx->model_name == "Qwen3-8B") {
+         valid_length_for_decode=(int32_t)(context_length - 1);
+      } else if(hmctx->model_name == "Qwen3-14B") {
+         valid_length_for_decode=(int32_t)(context_length);
+      }
+      std::vector<int32_t> valid_length_input = {valid_length_for_decode};
+      auto valid_length_input_tensor_opts =
+          torch::TensorOptions().dtype(torch::kInt32);
+      auto valid_length_input_tensor =
+          torch::from_blob(valid_length_input.data(),
+                           {int64_t(valid_length_input.size())},
+                           valid_length_input_tensor_opts)
+              .clone();
 
-      hmctx->decode_model.SetInput("input_1", input_data);
-      hmctx->decode_model.SetInput("valid_length", decode_valid_length);
+      // std::cout << "valid_length_input_tensor: " << valid_length_input_tensor
+      // << std::endl;
+      decode_valid_length = decode_input_map.at(decode_model_valid_length_name);
+      int16toint16((int32_t *)decode_valid_length.Data(),
+                   (int32_t *)valid_length_input_tensor.data_ptr<int32_t>(),
+                   valid_length_input_tensor.numel());
+     }
+
+      hmctx->decode_model.SetInput(decode_model_input_1_name, input_data);
+      hmctx->decode_model.SetInput(decode_model_valid_length_name, decode_valid_length);
 
       // clock_t infer_start,infer_end;
       // infer_start = clock();
@@ -6470,8 +6832,12 @@ struct server_context {
       tcim::Tensor decode_output_tensor_float;
       //if (hmctx->model_type == "deepseek") {
       if (1) {
-        decode_data =
-            hmctx->decode_model.GetOutput("Output_lm_head_add_list_0");
+        if(M30) {
+          decode_data =hmctx->decode_model.GetOutput("Output_lm_head_add_list_0");
+        } else if(M50) {
+          SRV_DBG("%s\r\n","++call decode getoupt 0");
+          decode_data =hmctx->decode_model.GetOutput(hmctx->decode_model.GetOutputName(0));
+        }
       } else {
         decode_data = hmctx->decode_model.GetOutput("output");
       }
@@ -6611,7 +6977,10 @@ struct server_context {
       //     std::cout << input_emd[0][i] << " ";
       // }
       // std::cout << std::endl;
-      input_emd = input_emd.view({1, 1, -1}).to(torch::kInt16);
+      if(M30)
+        input_emd = input_emd.view({1, 1, -1}).to(torch::kInt16);
+      else if(M50)
+        input_emd = input_emd.view({1, 1, -1});
       // std::cout << "input_emd options: " << input_emd.options() << std::endl;
       // std::cout << "input_emd dim: " << input_emd.dim() << std::endl;
       // std::cout << "input_emd size: " << input_emd.size(0) << std::endl;
@@ -7039,7 +7408,7 @@ struct server_context {
                        .clone();
         // std::cout << "inp: " << inp << "\n";
         try {
-          ScopedTimer timer("houmo_decode_embedding_forward_time1");
+          //ScopedTimer timer("houmo_decode_embedding_forward_time1");
           inputs_embeds = emb->forward(inp);
         } catch (const c10::Error &e) {
           std::cerr << "error loading the model\n"
@@ -7261,7 +7630,7 @@ struct server_context {
       // std::cout << "prefill_inp: " << prefill_inp << "\n";
       SRV_DBG("++prefill_inp is:%s\r\n", prefill_inp);
       try {
-        ScopedTimer timer("houmo_decode_embedding_forward_time");
+        //ScopedTimer timer("houmo_decode_embedding_forward_time");
         prefill_inputs_embeds = emb->forward(prefill_inp);
       } catch (const c10::Error &e) {
         std::cerr << "error loading the model\n" << e.what_without_backtrace();
@@ -7430,56 +7799,14 @@ struct server_context {
         // std::cout << "selected_output: " << selected_output << std::endl;
         generate_token = *(int32_t *)selected_output.data_ptr<int32_t>();
       } else {
-        int argmax_generate_token=0;
-        if(1){ //TODO remember delete ,only for compare token between argmax and houmo sampling
+        #if 1 //TODO remember delete ,only for compare token between argmax and houmo sampling
         auto selected_output_argmax =
             torch::argmax(decode_output_tensor).to(torch::kInt32);
         // std::cout << "selected_output: " << selected_output << std::endl;
-        argmax_generate_token = *(int32_t *)selected_output_argmax.data_ptr<int32_t>();
+        auto argmax_generate_token = *(int32_t *)selected_output_argmax.data_ptr<int32_t>();
         SRV_DBG("++before houmosample argmax_generate_token=%d \r\n",argmax_generate_token);
-        generate_token=argmax_generate_token;
-        auto houmo_response = common_token_to_piece(ctx, argmax_generate_token);
+        #endif
 
-        if(!containsChinese(houmo_response)&&(!isNumeric(houmo_response))){
-        auto result = torch::topk(decode_output_tensor, 4);
-        torch::Tensor values = std::get<0>(result);
-        torch::Tensor indices = std::get<1>(result);
-        //std::cout << "Method 1: " << std::endl;
-        const int64_t* data = indices.data_ptr<int64_t>();
-        for (int i = 0; i < indices.size(0); i++) {
-            std::cout << "Index " << i << ": " << data[i] << std::endl;
-            //if(data[i]>=llama_vocab_eos(this->vocab)&&data[i]<=151664) {
-            if(llama_vocab_is_control(this->vocab,data[i])||is_special_token(data[i]))
-            {
-              SRV_DBG("1Got Control Token id:%d\r\n",data[i]);
-              find_chinese=true;
-              break;
-            }
-            if(!containsEnglishLetters(houmo_response)) {
-              SRV_DBG("Dont change markdown or other special symbol which is:%s\r\n",houmo_response.c_str());
-              find_chinese=true;
-              break;
-            }
-            //if(data[i]==llama_vocab_eos(this->vocab)) continue;
-
-            auto tmp_string=common_token_to_piece(ctx, data[i]);
-            //if(tmp_string!=houmo_response){
-            if(1) {
-            if(containsChinese(tmp_string)){
-              SRV_DBG("***Success Fix: from english id:%d to %lld || from string: %s to %s\r\n",argmax_generate_token,data[i],houmo_response.c_str(),tmp_string.c_str());
-              generate_token=data[i];
-              houmo_response=tmp_string;
-              find_chinese=true;
-              break;
-            } else {
-              generate_token=argmax_generate_token;
-            }
-            }
-        }
-        }
-        }
-
-        if(!find_chinese){
         //float test_nouse=0.1234;
         //float *logits =&test_nouse;                         // 获取模型输出的logits
         int n_vocab = decode_output.size();                           // 词汇表大小
@@ -7495,58 +7822,46 @@ struct server_context {
             SRV_DBG("HI.CPP >>> [%d][%d] slot.params top_k: %d, top_p: %f, temp: %f, penalty_repeat: %f, penalty_last_n: %d \r\n",
                 slot.id, slot.id_task, slot.params.sampling.top_k, slot.params.sampling.top_p, slot.params.sampling.temp,
                 slot.params.sampling.penalty_repeat, slot.params.sampling.penalty_last_n);
+            if(CEnglishMixedProcessor::use_flag) {
+              SRV_DBG("%s\r\n","use_flag call CEnglishMixedProcessor\r\n");
+              slot.generated_tokens.push_back(argmax_generate_token);
+            }
             hm_sampling_processors.process(p_logits, n_vocab, slot.generated_tokens, slot.params);
           }
           else{
             SRV_ERR("slot.generated_tokens.size() is:%d ,dont need sample\r\n",slot.generated_tokens.size());
           }
         }
+        //防止后采样把特殊字符、数字之类的改成不正确的字符
         // 计算softmax概率
         std::vector<float> probs(n_vocab);
         softmax(p_logits, probs.data(), n_vocab);
         auto opts = torch::TensorOptions().dtype(torch::kFloat32);
         auto tensor = torch::from_blob(probs.data(), {int64_t(probs.size())}, opts).clone();
 
-        auto selected_output = torch::multinomial(tensor, 1).to(torch::kInt32);
-        generate_token = *(int32_t *)selected_output.data_ptr<int32_t>();
-        //修复中英文混搭的情况
-        if(1) {
-           auto houmo_response = common_token_to_piece(ctx, generate_token);
-           if(true){
-              if(!containsChinese(houmo_response)){
-                SRV_DBG("ID:%d find None Chinese string:%s ||try to fix\r\n",generate_token,houmo_response.c_str());
-                auto result = torch::topk(tensor, 4);
-                torch::Tensor values = std::get<0>(result);
-                torch::Tensor indices = std::get<1>(result);
-                //std::cout << "Method 1: " << std::endl;
-                const int64_t* data = indices.data_ptr<int64_t>();
-                for (int i = 0; i < indices.size(0); i++) {
-                    std::cout << "Index " << i << ": " << data[i] << std::endl;
-                    //if(data[i]>=llama_vocab_eos(this->vocab)&&data[i]<=151664) break;
-                    if(llama_vocab_is_control(this->vocab,data[i])||is_special_token(data[i]))
-                    {
-                      SRV_DBG("2Got Control Token id:%d\r\n",data[i]);
-                      break;
-                    }
-                    auto tmp_string=common_token_to_piece(ctx, data[i]);
-                    if(containsChinese(tmp_string)){
-                      SRV_DBG("##Success Fix: from english id:%d to %lld || from string: %s to %s\r\n",generate_token,data[i],houmo_response.c_str(),tmp_string.c_str());
-                      generate_token=data[i];
-                      houmo_response=tmp_string;
-                      break;
-                    }
-                }
-              }
-           }
+        if(CEnglishMixedProcessor::find_chinese) {
+          auto selected_output_max = torch::argmax(tensor).to(torch::kInt32);
+          generate_token=*(int32_t *)selected_output_max.data_ptr<int32_t>();
+          SRV_DBG("++after find_chinese or special: generate_token id=%d \r\n",generate_token);
+        } else{
+          auto selected_output = torch::multinomial(tensor, 1).to(torch::kInt32);
+          generate_token = *(int32_t *)selected_output.data_ptr<int32_t>();
+          SRV_DBG("++after multinomial: generate_token id=%d \r\n",generate_token);
         }
-        }
+
         #if 1 //TODO remember delete ,only for compare token between argmax and houmo sampling
-        SRV_DBG("++after houmosample generate_token=%d \r\n",generate_token);
+        SRV_DBG("++after houmosample generate_token id=%d \r\n",generate_token);
         if(generate_token!=argmax_generate_token) {
            auto houmo_response = common_token_to_piece(ctx, generate_token);
            auto argmax_response= common_token_to_piece(ctx, argmax_generate_token);
+           if(!containsChinese(houmo_response)) {
+            SRV_DBG("Houmo sample changeback: gen idx from %d backto %d , related string from %s backto %s\r\n",
+                 generate_token,argmax_generate_token,houmo_response.c_str(),argmax_response.c_str());
+            generate_token=argmax_generate_token;
+           } else {
            SRV_DBG("Houmo sample change gen idx from %d to %d , related string from %s to %s\r\n",
-                 argmax_generate_token,generate_token,argmax_response,houmo_response);
+                 argmax_generate_token,generate_token,argmax_response.c_str(),houmo_response.c_str());
+           }
 
         }
         #endif
@@ -7567,7 +7882,7 @@ struct server_context {
               .clone();
       // std::cout << "decode_inp: " << decode_inp << "\n";
       try {
-        ScopedTimer timer("houmo_decode_embedding_forward_time");
+        //ScopedTimer timer("houmo_decode_embedding_forward_time");
         input_emd = emb->forward(decode_inp);
       } catch (const c10::Error &e) {
         std::cerr << "error loading the model\n" << e.what_without_backtrace();
@@ -8315,6 +8630,71 @@ struct server_context {
   }
 };
 
+void CEnglishMixedProcessorImpl_process(float* logits, int n_vocab, const std::vector<llama_token>&) {
+        if(!CEnglishMixedProcessor::use_flag) {
+          SRV_DBG("%s \r\n","CEnglishMixedProcessor not used just return");
+          return;
+        }
+        SRV_DBG("%s \r\n", "++apply CEnglishMixedProcessor");
+        llama_token generate_token=0;
+        auto decode_output_opts = torch::TensorOptions().dtype(torch::kFloat);
+        auto decode_output_tensor =torch::from_blob(logits,{int64_t(n_vocab)}, decode_output_opts).clone();
+        SRV_DBG("##before houmosample CEnglishMixedProcessor::argmax_generate_token=%d \r\n",CEnglishMixedProcessor::argmax_generate_token);
+        generate_token=CEnglishMixedProcessor::argmax_generate_token;
+        auto houmo_response = common_token_to_piece(CEnglishMixedProcessor::s_ctx->ctx, CEnglishMixedProcessor::argmax_generate_token);
+
+        if(isNumeric(houmo_response)||
+           llama_vocab_is_control(CEnglishMixedProcessor::s_ctx->vocab,CEnglishMixedProcessor::argmax_generate_token)||
+           CEnglishMixedProcessor::s_ctx->is_special_token(CEnglishMixedProcessor::argmax_generate_token)){
+          SRV_DBG("Found SpecialToken:%s id::%d, Dont change\r\n",houmo_response.c_str(),CEnglishMixedProcessor::argmax_generate_token);
+          CEnglishMixedProcessor::find_chinese=true;
+        } else if(!containsChinese(houmo_response)&&!containsEnglishLetters(houmo_response)) {
+              SRV_DBG("Dont change markdown or other special symbol which is:%s\r\n",houmo_response.c_str());
+              CEnglishMixedProcessor::find_chinese=true;
+        } else if(!containsChinese(houmo_response)){
+        auto result = torch::topk(decode_output_tensor, 4);
+        torch::Tensor values = std::get<0>(result);
+        torch::Tensor indices = std::get<1>(result);
+        //std::cout << "Method 1: " << std::endl;
+        const int64_t* data = indices.data_ptr<int64_t>();
+        for (int i = 0; i < indices.size(0); i++) {
+            std::cout << "Index " << i << ": " << data[i] << std::endl;
+            //if(data[i]>=llama_vocab_eos(CEnglishMixedProcessor::vocab)&&data[i]<=151664) {
+            if(llama_vocab_is_control(CEnglishMixedProcessor::s_ctx->vocab,data[i])||CEnglishMixedProcessor::s_ctx->is_special_token(data[i]))
+            {
+              SRV_DBG("1Got Control Token id:%d\r\n",data[i]);
+              // CEnglishMixedProcessor::find_chinese=true;
+              // break;
+              memset(logits,0,sizeof(float)*n_vocab);
+              logits[data[i]]=10000;
+              generate_token=data[i];
+              continue;
+            }
+            //if(data[i]==llama_vocab_eos(CEnglishMixedProcessor::vocab)) continue;
+
+            auto tmp_string=common_token_to_piece(CEnglishMixedProcessor::s_ctx->ctx, data[i]);
+            //if(tmp_string!=houmo_response){
+            if(containsChinese(tmp_string)){
+              SRV_DBG("***Success Fix: from english id:%d to %lld || from string: %s to %s\r\n",CEnglishMixedProcessor::argmax_generate_token,data[i],houmo_response.c_str(),tmp_string.c_str());
+              generate_token=data[i];
+              houmo_response=tmp_string;
+              CEnglishMixedProcessor::find_chinese=true;
+              memset(logits,0,sizeof(float)*n_vocab);
+              logits[data[i]]=10000;
+              break;
+            } else {
+              generate_token=CEnglishMixedProcessor::argmax_generate_token;
+            }
+        }
+      }
+      if(generate_token!=CEnglishMixedProcessor::argmax_generate_token){
+        auto houmo_response = common_token_to_piece(CEnglishMixedProcessor::s_ctx->ctx, generate_token);
+        auto argmax_response= common_token_to_piece(CEnglishMixedProcessor::s_ctx->ctx, CEnglishMixedProcessor::argmax_generate_token);
+        SRV_DBG("CEnglishMixedProcessor change gen idx from %d to %d , related string from %s to %s\r\n",
+              CEnglishMixedProcessor::argmax_generate_token,generate_token,argmax_response.c_str(),houmo_response.c_str());
+      }
+}
+
 
 //将torch::Tensor转换为tcim::Tensor
 void TensorConverter::FromTorch(const torch::Tensor& torch_tensor, tcim::Tensor &tcim_tensor) {
@@ -8618,12 +8998,12 @@ void stop_server() {
 
 
 HANDLE create_instance(std::string model_path, common_params* p_params = nullptr) {
-    char* hi_num_parallel = std::getenv("HICPP_NUM_PARALLEL");
+    //hi_num_parallel = std::getenv("HICPP_NUM_PARALLEL");
     if(hi_num_parallel){
-      printf("Find ENV: HICPP_NUM_PARALLEL value:%s\r\n",hi_num_parallel);
+      printf("Find cfg: HICPP_NUM_PARALLEL value:%s\r\n",hi_num_parallel);
     } else {
       hi_num_parallel="1";
-      printf("NO ENV: HICPP_NUM_PARALLEL Found use default:%s\r\n",hi_num_parallel);
+      printf("NO HICPP_NUM_PARALLEL cfg Found use default:%s\r\n",hi_num_parallel);
     }
     if (!p_params) {
         model_path = model_path + "/";
@@ -10066,9 +10446,9 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
 
   LOG_INF("Device Choice is : %d\n", ctx_server->device_id);
 
-  if (model_path.find("14B") != std::string::npos || model_path.find("14b") != std::string::npos) {
+  if((model_path.find("qwen3") == std::string::npos) && ((model_path.find("14B") != std::string::npos) || (model_path.find("14b") != std::string::npos))) {
     ctx_server->init_14B(model_path);
-  } else if (model_path.find("qwen3") != std::string::npos && model_path.find("8b") != std::string::npos) {
+  } else if (model_path.find("qwen3") != std::string::npos) {
     ctx_server->init_qwen3_8B(model_path);
   } else {
     LOG_INF("ctx_server->params->n_parallel is:%d \r\n",ctx_server->params->n_parallel);
@@ -10352,9 +10732,9 @@ int completion_load_model(HANDLE h, std::string model_path,
     LOG_ERR("%s: exiting due to model loading error\n", __func__);
     return -1;
   }
-  if ((model_path.find("14B") != std::string::npos) || (model_path.find("14b") != std::string::npos)) {
+  if((model_path.find("qwen3") == std::string::npos) && ((model_path.find("14B") != std::string::npos) || (model_path.find("14b") != std::string::npos))) {
     ctx_server->init_14B(model_path);
-  } else if((model_path.find("qwen3") != std::string::npos)&&(model_path.find("8b") != std::string::npos)) {
+  } else if((model_path.find("qwen3") != std::string::npos)) {
     ctx_server->init_qwen3_8B(model_path);
   } else {
     LOG_INF("ctx_server->params->n_parallel is:%d \r\n",ctx_server->params->n_parallel);

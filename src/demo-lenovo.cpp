@@ -225,10 +225,12 @@ int main(int argc, char ** argv) {
         std::cerr << "Error:Missing param. No inter testcase_id specified!" << std::endl;
         std::cerr << "Usage: " << argv[0] << " testcase_id" << std::endl;
         std::cerr << "testcase_id should be following  number:" << std::endl;
-        std::cerr << "1: test qwen3 8b" << std::endl;
-        std::cerr << "2: test qwen2 7B" << std::endl;
-        std::cerr << "3: test qwen2 14B" << std::endl;
-        std::cerr << "4: test load llm model from membuffer:" << std::endl;
+        std::cerr << "1: M30 test qwen3 8B-8k-4core" << std::endl;
+        std::cerr << "2: M30 test deepseek 14B-8k-4core" << std::endl;
+        std::cerr << "3: M30 test deepseek 7B-4k-4core" << std::endl;
+        std::cerr << "4: M50 test qwen2.5  7B-2k-2core" << std::endl;
+        std::cerr << "5: M50 test qwen3 8B" << std::endl;
+        std::cerr << "9: M30 test deepseek 7B-4k-4core load llm model from membuffer:" << std::endl;
         return -1;
     } else{
         std::string arg = argv[1];
@@ -268,20 +270,33 @@ int main(int argc, char ** argv) {
     switch(testcase_id) {
         case 1: //测试qwen3 从文件加载模型
             model_path = "./models/qwen3-8b-1batch/4core_8k";
-            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count, hwinfo);
+            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
             printf("api_loadmodel_by_path = %d\n", state);
             break;
-        case 2: //测试14B 模型
+        case 2: //测试deepseek qwen 14B从文件加载模型
             model_path = "./models/hmm_deepseek_14b_256_8k_4cores_20250514_26l";
-            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count, hwinfo);
+            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
             printf("api_loadmodel_by_path = %d\n", state);
             break;
-        case 3: //测试qwen2 从文件加载模型
+        case 3: //测试deepseek qwen2 7B从文件加载模型
             model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
-            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count, hwinfo);
+            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
             printf("api_loadmodel_by_path = %d\n", state);
             break;
-        case 4:  //测试从mem加载模型
+        case 4: //M50 测试deepseek qwen2 7B从文件加载模型
+            //model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
+            model_path = "./models/hmm_xh2_qwen2.5_256_8k_2cores_20250610/";
+            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
+            printf("api_loadmodel_by_path = %d\n", state);
+            break;
+        case 5: //M50 测试qwen3 8B从文件加载模型
+            //model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
+            //model_path = "./models/hmm_xh2_qwen2.5_256_8k_2cores_20250610/";
+            model_path = "./models/qwen3-8B";
+            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
+            printf("api_loadmodel_by_path = %d\n", state);
+            break;
+        case 9:  //测试从mem加载模型
             {
             uint8_t *buffers[2]={nullptr};
             constexpr size_t buffers_count=2;
