@@ -71,17 +71,27 @@ void WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
 #endif
 
 int main(int argc, char** argv) {
-    #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
-    #endif
+    _putenv("TCIM_LOG_TAGS=all");
+    _putenv("TCIM_BACKEND=Xh1HdiBackend");
+
+    const char* debug_mode = std::getenv("HICPP_WIN_D");
+    if (debug_mode) {
+        printf(" _   _ ___   ____ ____  ____    ____       _                    ____                      _   \n"
+               "| | | |_ _| / ___|  _ \\|  _ \\  |  _ \\  ___| |__  _   _  __ _   / ___|___  _ __  ___  ___ | | ___ \n"
+               "| |_| || | | |   | |_) | |_) | | | | |/ _ \\ '_ \\| | | |/ _` | | |   / _ \\| '_ \\/ __|/ _ \\| |/ _ \n"
+               "|  _  || | | |___|  __/|  __/  | |_| |  __/ |_) | |_| | (_| | | |__| (_) | | | \\__ \\ (_) | |  __/\n"
+               "|_| |_|___(_)____|_|   |_|     |____/ \\___|_.__/ \\__,_|\\__, |  \\____\\___/|_| |_|___/\\___/|_|\\___|\n"
+               "                                                       |___/                                     \n");
+        run_server();
+        return 0;
+    }
 
 #ifdef WINSERVICE_MODE
     // LOG(Info) << "WIN32 Service Mode";
 
     char serviceName[] = "HoumoHI";
-    _putenv("TCIM_BACKEND=Xh1HdiBackend");
-
     SERVICE_TABLE_ENTRY ServiceTable[] = {{serviceName, ServiceMain}, {NULL, NULL}};
     if (!StartServiceCtrlDispatcher(ServiceTable))
     {

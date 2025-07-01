@@ -28,7 +28,7 @@
 #include <limits>
 #include <ios>
 
-#include "utils/include/utf8_console.h"
+#include "utf8/include/utf8_console.h"
 
 #ifdef _MSC_VER
 #define HTTP_SERVER_API __declspec(dllexport)

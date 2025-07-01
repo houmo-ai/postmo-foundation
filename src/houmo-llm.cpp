@@ -34,6 +34,7 @@
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/sinks/daily_file_sink.h"
+#include "hi_err_redirector.h"
 
 #include "tcim/tcim_runtime.h"
 #include <algorithm>
@@ -86,7 +87,16 @@ private:
     }
 
     void initialize() {
+#ifdef _WIN32
+        char exePath[MAX_PATH];
+        GetModuleFileName(nullptr, exePath, MAX_PATH);
+        const auto programPath = std::string(exePath);
+        auto program_dir = std::string(exePath).substr(0, std::string(exePath).find_last_of('\\') + 1);
+        const auto cfgfile_path = program_dir + "..\\config\\sys.cfg";
+#else
         std::string cfgfile_path = "config/sys.cfg";
+#endif
+
         std::cout << "Loading cfg file from: " << cfgfile_path << std::endl;
 
         const INIReader config_reader(cfgfile_path);
@@ -8798,7 +8808,7 @@ static void log_server_request(const httplib::Request &req,
 
 static server_context* ctx_server = nullptr;
 static spdlog::logger* boot_logger = nullptr;
-
+static HiErrRedirector log_redirector;
 #ifdef _WIN32
 
 int init_params(std::string model_path, const INIReader& config_reader, common_params* &p_params, uint8_t instance_no = 0) {
@@ -8827,9 +8837,9 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
 
     const int log_level = config_reader.GetInteger("log", "level", 0);
 
-    std::string ctx_size = "4096";
+    int ctx_size = 4096;
     if (model_path.find("8k") != std::string::npos || model_path.find("8K") != std::string::npos) {
-        ctx_size = "8192";
+        ctx_size = 8192;
     }
 
     try {
@@ -8849,38 +8859,23 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
         log_file_name = "houmo-llm-" + std::to_string(instance_no) + "-%d.log";
     }
 
+    log_redirector.start(log_location + "hi_cerr_redirected.log");
+
     const std::string log_file = log_location + string_format(log_file_name.c_str(), t);
-    char* argv[] = {"houmo-llm-demo",
-                    "-m",
-                    &tok_model_path[0],
-                    "--device",
-                    "none",
-                    "-np",
-                    "1",
-                    "--ctx-size",
-                    const_cast<char *>(ctx_size.c_str()),
-                    "--no-context-shift",
-                    "--no-warmup",
-                    "--log-verbosity",
-                    const_cast<char*>(std::to_string(log_level).c_str()),
-                    "--log-file",
-                    const_cast<char*>(log_file.c_str()),
-                    nullptr};
-
-    char** p = argv;
-    int argc = 0;
-    while (*p++ != nullptr)
-    {
-        argc++;
+    if (!p_params) {
+        p_params = new common_params();
     }
 
-    p_params = new common_params();
-    if (!common_params_parse(argc, argv, *p_params, LLAMA_EXAMPLE_SERVER)) {
-        return -1;
-    }
-
+    p_params->model = tok_model_path;
+    p_params->n_parallel = 1;
+    p_params->n_ctx = ctx_size;
+    p_params->ctx_shift = false;
+    p_params->warmup = false;
     p_params->hostname = "0.0.0.0";
     p_params->port = server_port;
+    p_params->verbosity = log_level;
+    common_log_set_verbosity_thold(log_level);
+    common_log_set_file(common_log_main(), log_file.c_str());
 
     ctx_server = new server_context();
     SRV_INF("ctx_server: %p\n", ctx_server);
@@ -8921,7 +8916,7 @@ int run_server() {
 
     auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     console_sink->set_level(spdlog::level::debug);
-    console_sink->set_pattern("[multi_sink_example] [%^%l%$] %v");
+    console_sink->set_pattern("[HI.CPP] [%^%l%$] %v");
 
     auto file_sink = std::make_shared<spdlog::sinks::daily_file_sink_mt>(
         program_dir + "\\boot_log\\service_boot-" + std::to_string(instance_no) + ".log", 0, 0, false);
@@ -8987,6 +8982,7 @@ int run_server() {
 void stop_server() {
     LOG_INF("WINSERVICE begin to terminate. \n");
     server_running = false;
+    log_redirector.stop();
     server_terminating = true;
     while (server_terminating) {
         Sleep(1000);

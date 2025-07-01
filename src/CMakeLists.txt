@@ -15,6 +15,7 @@ find_library(LLAMA_CPP_LIBRARY_COMMON NAMES common PATHS ${LLAMA_CPP_LIBRARY_PAT
 find_library(INIH_LIBRARY NAMES inih PATHS ${INIH_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
 find_library(INIH_LIBRARY_CPP NAMES INIReader PATHS ${INIH_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
 
+include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${TCIM_RUNTIME_PATH}/include)
 include_directories(${TCIM_RUNTIME_PATH}/examples/common/hpp)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp/include)
@@ -61,30 +62,20 @@ endif()
 
 
 add_library(utf8_console
-    utils/utf8_console.cpp
-
-    utils/wcwidth.c
-    utils/utfwidth.cpp
-    utils/utf8_cin_windows.cpp
+    utf8/utf8_console.cpp
+    utf8/wcwidth.c
+    utf8/utfwidth.cpp
+    utf8/utf8_cin_windows.cpp
 )
 
-target_include_directories(utf8_console PUBLIC "utils/include")
+target_include_directories(utf8_console PUBLIC "utf8/include")
 
-set(TARGET_SRCS
-
-    utils.hpp
-    httplib.h
-)
 
 set(HOUMO_LLM_SRCS
     hi.h
     houmo-llm.h
     houmo-llm.cpp
-)
-
-set(PUBLIC_ASSETS
-    index.html.gz
-    loading.html
+    utils/hi_err_redirector.cpp
 )
 
 
@@ -126,25 +117,6 @@ else()
 endif()
 
 
-
-# add_executable(${TARGET}-server ${TARGET_SRCS})
-# install(TARGETS ${TARGET}-server RUNTIME)
-# target_include_directories(${TARGET}-server PRIVATE ${CMAKE_SOURCE_DIR})
-# target_link_libraries(${TARGET}-server PRIVATE ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE} ${LLAMA_CPP_LIBRARY_GGML_CPU} "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
-
-# if (LLAMA_SERVER_SSL)
-#     find_package(OpenSSL REQUIRED)
-#     target_link_libraries(${TARGET}-server PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-#     target_compile_definitions(${TARGET}-server PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
-# endif()
-
-# if (WIN32)
-#     TARGET_LINK_LIBRARIES(${TARGET}-server PRIVATE ws2_32)
-# else()
-#     TARGET_LINK_LIBRARIES(${TARGET}-server PRIVATE -lpthread -lm)
-# endif()
-
-# target_compile_features(${TARGET}-server PRIVATE cxx_std_17)
 
 add_executable(${TARGET}-demo-lenovo demo-lenovo.cpp)
 install(TARGETS ${TARGET}-demo-lenovo RUNTIME)

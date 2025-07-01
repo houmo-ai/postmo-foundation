@@ -28,7 +28,7 @@
 #include <limits>
 #include <ios>
 
-#include "utils/include/utf8_console.h"
+#include "utf8/include/utf8_console.h"
 
 void sleep_seconds(int time) {
 #ifdef WIN32
