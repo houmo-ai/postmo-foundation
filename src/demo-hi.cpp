@@ -236,6 +236,7 @@ int main(int argc, char ** argv) {
         std::cerr << "3: M30 test deepseek 7B-4k-4core" << std::endl;
         std::cerr << "4: M50 test qwen2.5  7B-2k-2core" << std::endl;
         std::cerr << "5: M50 test qwen3 8B" << std::endl;
+        std::cerr << "6: M50 test qwen3 14B" << std::endl;
         std::cerr << "9: M30 test deepseek 7B-4k-4core load llm model from membuffer:" << std::endl;
         return -1;
     } else{
@@ -298,7 +299,14 @@ int main(int argc, char ** argv) {
         case 5: //M50 测试qwen3 8B从文件加载模型
             //model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
             //model_path = "./models/hmm_xh2_qwen2.5_256_8k_2cores_20250610/";
-            model_path = "./models/qwen3-8B";
+            model_path = "./models/models_xh2/hmm_xh2_qwen3_8b_256_2k_2cores_20250701";
+            state = infer_loadmodel_by_path(instance, model_path, model_names, model_name_count);
+            printf("infer_loadmodel_by_path = %d\n", state);
+            break;
+        case 6: //M50 测试qwen3 14B从文件加载模型
+            //model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
+            //model_path = "./models/hmm_xh2_qwen2.5_256_8k_2cores_20250610/";
+            model_path = "./models/models_xh2/hmm_xh2_qwen3_14b_256_2k_2cores_20250701/";
             state = infer_loadmodel_by_path(instance, model_path, model_names, model_name_count);
             printf("infer_loadmodel_by_path = %d\n", state);
             break;

@@ -94,6 +94,10 @@ public:
                     if (ret != E_BUFFER_NOT_ENOUGH) {
                         sleep_seconds(100);
                     }
+                    if (-1==ret) {
+                        printf("+++api_Get_Generate_token return -1 just return\r\n");
+                        return;
+                    }
                 } while(ret != E_BUFFER_NOT_ENOUGH);
                 //char * result_c = new char [result_len + 1];
                 //result_c[result_len] = '\0';
@@ -230,6 +234,7 @@ int main(int argc, char ** argv) {
         std::cerr << "3: M30 test deepseek 7B-4k-4core" << std::endl;
         std::cerr << "4: M50 test qwen2.5  7B-2k-2core" << std::endl;
         std::cerr << "5: M50 test qwen3 8B" << std::endl;
+        std::cerr << "6: M50 test qwen3 14B" << std::endl;
         std::cerr << "9: M30 test deepseek 7B-4k-4core load llm model from membuffer:" << std::endl;
         return -1;
     } else{
@@ -292,7 +297,14 @@ int main(int argc, char ** argv) {
         case 5: //M50 测试qwen3 8B从文件加载模型
             //model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
             //model_path = "./models/hmm_xh2_qwen2.5_256_8k_2cores_20250610/";
-            model_path = "./models/qwen3-8B";
+            model_path = "./models/models_xh2/hmm_xh2_qwen3_8b_256_2k_2cores_20250701";
+            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
+            printf("api_loadmodel_by_path = %d\n", state);
+            break;
+        case 6: //M50 测试qwen3 14B从文件加载模型
+            //model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
+            //model_path = "./models/hmm_xh2_qwen2.5_256_8k_2cores_20250610/";
+            model_path = "./models/models_xh2/hmm_xh2_qwen3_14b_256_2k_2cores_20250701/";
             state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
             printf("api_loadmodel_by_path = %d\n", state);
             break;
@@ -497,6 +509,24 @@ int main(int argc, char ** argv) {
         CallBackTimer t(instance);
         t.start(100, api_Get_Generate_token);
         printf("CallBackTimer started: %d\n", 1);
+
+        std::this_thread::sleep_for(std::chrono::seconds(4));
+        while(1) {
+           status = api_status(instance);
+           printf("before stop api_status: %d\n", status);
+
+           api_stop(instance);
+           status = api_status(instance);
+           printf("after stop1 api_status: %d\n", status);
+
+           std::this_thread::sleep_for(std::chrono::seconds(2));
+
+           status = api_status(instance);
+           printf("after stop2 api_status: %d\n", status);
+
+           break;
+
+        }
         int input;
         std::cin >> input;
         printf("CallBackTimer input: %d\n", input);
@@ -569,70 +599,70 @@ int main(int argc, char ** argv) {
     std::cin >> input;
 
 //
-    //SetStdinEcho(true);
-    //while (true) {
-    //    std::cin.clear();
-    //    std::cin.sync();
-    //    //std::cin.ignore(std::numeric_limits<std::streamsize>::max(),'\n');
-    //    std::string prompt;
-    //    std::cout << std::endl;
-    //    std::cout << "输入问题(CTRL + C退出): ";
-    //    //std::cin >> prompt;
-    //    getline(std::cin,prompt);
-    //    printf("\n你的问题: %s\n", prompt.c_str());
-    //    char* result2 = new char [1024];
-    //    size_t result_size2 = 1024;
-    //    ret = api_Generate_stream(instance, prompt.c_str(), &params, params_bytes);
-    //    //printf("\napi_Generate_stream = %d\n", ret);
-//
-    //    //status = api_Generate_status(instance);
-    //    //printf("api_Generate_status: %d\n", status);
-    //    //status = api_status(instance);
-    //    //printf("api_status: %d\n", status);
-    //    std::cout << "回答: " << std::endl;
-    //    if (ret) {
-    //        while (true) {
-    //            ret = api_Get_Generate_token(instance, &result2, &result_size2);
-    //            status = api_Generate_status(instance);
-    //            //printf("api_Generate_status: %d\n", status);
-    //            if (status == 0) {
-    //                //printf("stop found str: %s\n", result2);
-    //                break;
-    //            } else if (ret == 2) {
-    //                sleep_seconds(100);
-    //                //printf("data not ready: %d\n", ret);
-    //                continue;
-    //            } else if (ret == -1) {
-    //                //printf("Error: %d\n", ret);
-    //                break;
-    //            } else if (ret == 1) {
-    //                //printf("not enough: %d\n", result_size2);
-    //                if (result2) {
-    //                    delete result2;
-    //                }
-    //                result2 = new char [result_size2];
-    //                continue;
-    //            } else {
-    //                //printf("content str: %s\n", result2);
-    //                std::smatch results;
-    //                std::string result = result2;
-    //                if (std::regex_search(result, results, std::regex(".*\"content\":\"(.*?)\".*"))) {
-    //                    std::string content = results[1].str();
-    //                    content = std::regex_replace(content, std::regex(R"(\\n)"), "\n");
-    //                    //std::string::size_type index = 0;
-    //                    //while ((index = content.find("\\n", index)) != std::string::npos) {
-    //                    //    content.replace(index, 2, "\n");
-    //                    //    ++index;
-    //                    //}
-    //                    std::cout << content << std::flush;
-    //                }
-    //            }
-    //        }
-    //        std::cout << std::endl;
-    //    }
-    //    //status = api_status(instance);
-    //    //printf("api_status: %d\n", status);
-    //}
+    SetStdinEcho(true);
+    while (true) {
+       std::cin.clear();
+       std::cin.sync();
+       //std::cin.ignore(std::numeric_limits<std::streamsize>::max(),'\n');
+       std::string prompt;
+       std::cout << std::endl;
+       std::cout << "输入问题(CTRL + C退出): ";
+       //std::cin >> prompt;
+       getline(std::cin,prompt);
+       printf("\n你的问题: %s\n", prompt.c_str());
+       char* result2 = new char [4096];
+       size_t result_size2 = 4096;
+       ret = api_Generate_stream(instance, prompt.c_str(), &params, params_bytes);
+       //printf("\napi_Generate_stream = %d\n", ret);
+
+       //status = api_Generate_status(instance);
+       //printf("api_Generate_status: %d\n", status);
+       //status = api_status(instance);
+       //printf("api_status: %d\n", status);
+       std::cout << "回答: " << std::endl;
+       if (ret) {
+           while (true) {
+               ret = api_Get_Generate_token(instance, &result2, &result_size2);
+               status = api_Generate_status(instance);
+               //printf("api_Generate_status: %d\n", status);
+               if (status == 0) {
+                   //printf("stop found str: %s\n", result2);
+                   break;
+               } else if (ret == 2) {
+                   sleep_seconds(100);
+                   //printf("data not ready: %d\n", ret);
+                   continue;
+               } else if (ret == -1) {
+                   //printf("Error: %d\n", ret);
+                   break;
+               } else if (ret == 1) {
+                   //printf("not enough: %d\n", result_size2);
+                   if (result2) {
+                       delete result2;
+                   }
+                   result2 = new char [result_size2];
+                   continue;
+               } else {
+                   //printf("content str: %s\n", result2);
+                   std::smatch results;
+                   std::string result = result2;
+                   if (std::regex_search(result, results, std::regex(".*\"content\":\"(.*?)\".*"))) {
+                       std::string content = results[1].str();
+                       content = std::regex_replace(content, std::regex(R"(\\n)"), "\n");
+                       //std::string::size_type index = 0;
+                       //while ((index = content.find("\\n", index)) != std::string::npos) {
+                       //    content.replace(index, 2, "\n");
+                       //    ++index;
+                       //}
+                       std::cout << content << std::flush;
+                   }
+               }
+           }
+           std::cout << std::endl;
+       }
+       status = api_status(instance);
+       printf("api_status: %d\n", status);
+    }
 
     api_unloadmodel(instance);
     status = api_status(instance);

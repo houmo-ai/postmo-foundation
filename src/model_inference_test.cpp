@@ -1824,14 +1824,14 @@ void save_performance_data(const std::string& model_dir, const std::vector<doubl
 }
 
 int print_torchversion() {
-    // 打印 PyTorch 版本
-    std::cout << "PyTorch 版本: " << TORCH_VERSION_MAJOR << "."
-              << TORCH_VERSION_MINOR << "."
-              << TORCH_VERSION_PATCH << std::endl;
+    //// 打印 PyTorch 版本
+    //std::cout << "PyTorch 版本: " << TORCH_VERSION_MAJOR << "."
+    //          << TORCH_VERSION_MINOR << "."
+    //          << TORCH_VERSION_PATCH << std::endl;
 
-    // 或者使用 torch::version::cudnn() 打印 CuDNN 版本等更多信息
-    std::cout << "CUDA 可用: " << (torch::cuda::is_available() ? "是" : "否") << std::endl;
-    //std::cout << "cuDNN 版本: " << torch::cuda::cudnn_version() << std::endl;
+    //// 或者使用 torch::version::cudnn() 打印 CuDNN 版本等更多信息
+    //std::cout << "CUDA 可用: " << (torch::cuda::is_available() ? "是" : "否") << std::endl;
+    ////std::cout << "cuDNN 版本: " << torch::cuda::cudnn_version() << std::endl;
 
     return 0;
 }

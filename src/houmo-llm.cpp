@@ -41,6 +41,7 @@
 #include <cctype>
 #include <locale>
 
+
 #include "houmo-llm.h"
 #include "houmo-llm.hpp"
 
@@ -62,6 +63,7 @@ static char* hi_num_parallel = nullptr;
 static std::string use_ce_flag;
 char* hi_modelpath = nullptr;
 static bool houmo_sampling_cfg = true;
+static bool model_real_load_flag=false;
 
 struct SysCfg {
     std::string hi_num_parallel; // 服务启动的并发数,默认值1
@@ -69,6 +71,11 @@ struct SysCfg {
     std::string hi_modelpath;    // 模型路径
     bool houmo_sampling_cfg;
 };
+
+bool fileExists(const std::string& path) {
+     std::ifstream file(path);
+    return file.good();  // 若文件打开成功，返回true
+}
 
 // 使用静态变量和函数局部静态变量控制初始化顺序
 class ConfigManager {
@@ -99,6 +106,14 @@ private:
 
         std::cout << "Loading cfg file from: " << cfgfile_path << std::endl;
 
+        if (!fileExists(cfgfile_path)) {
+        //if (1) {
+           std::cout << "forceif1 cfg file doesnt exist: " << cfgfile_path <<" | just use default" <<std::endl;
+           result.hi_num_parallel="1";
+           result.use_ce_flag ="0";
+           result.hi_modelpath = "./models/DeepSeek-R1-Distill-Qwen-7B-1Batch/4core_8k";
+           result.houmo_sampling_cfg =false;
+        } else  {
         const INIReader config_reader(cfgfile_path);
         if (config_reader.ParseError() < 0) {
             std::cerr << "Error: Cannot parse config file: " << cfgfile_path << std::endl;
@@ -110,6 +125,7 @@ private:
         result.hi_modelpath = config_reader.Get("service", "HICPP_MODEL_PATH",
                                               "/opt/hicpp/models/DeepSeek-R1-Distill-Qwen-7B-1Batch/4core_8k");
         result.houmo_sampling_cfg=config_reader.GetBoolean("server", "houmo_sampling", true);
+        }
 
         // 复制字符串到独立内存，避免悬空指针
         if (hi_num_parallel) free(hi_num_parallel);
@@ -120,7 +136,7 @@ private:
         hi_modelpath = (char *)result.hi_modelpath.c_str();
         houmo_sampling_cfg=result.houmo_sampling_cfg;
 
-        std::cout << "After parse: " << cfgfile_path << std::endl;
+        std::cout << "After parse: " << cfgfile_path << " | or default value:"  <<std::endl;
         std::cout << "houmo_sampling_cfg: " << houmo_sampling_cfg << std::endl;
         std::cout << "use_ce_flag(USE_CEnglishMixedProcessor): " << use_ce_flag << std::endl;
         std::cout << "hi_num_parallel: " << hi_num_parallel << std::endl;
@@ -266,6 +282,25 @@ private:
 thread_local std::unordered_map<std::string, long long> ScopedTimer::thread_local_stats_;
 std::unordered_map<std::string, std::pair<long long, int>> ScopedTimer::global_stats_;
 std::mutex ScopedTimer::global_stats_mutex_;
+
+std::string getCurrentTime() {
+    // 获取当前时间点
+    auto now = std::chrono::system_clock::now();
+
+    // 转换为time_t类型用于获取日期和时间
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+
+    // 计算毫秒部分
+    auto duration = now.time_since_epoch();
+    auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count() % 1000;
+
+    // 格式化输出
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %H:%M:%S");
+    ss << '.' << std::setfill('0') << std::setw(3) << millis; // 添加毫秒部分
+    return ss.str();
+}
+
 
 // trim from start (in place)
 inline void ltrim(std::string &s) {
@@ -3266,8 +3301,8 @@ struct server_context {
               std::pair<std::string, tcim::Tensor>(output_name, output_tensor));
         }
   }
-  void init_qwen3_8B(std::string model_path) {
-    SRV_DBG("%s\r\n","++call init_qwen3_8B");
+  void init_qwen3(std::string model_path) {
+    SRV_DBG("%s\r\n","++call init_qwen3");
     model_status = 0;
     hm_model_scale_type=MODEL_8B;
     if (model_path == "") {
@@ -3319,12 +3354,26 @@ struct server_context {
         std::string kcache_suffix_name;
         std::string vcache_suffix_name;
         std::string decode_input_name;
-        if(M30){
+        //if(M30){ //老的xh2 qwen3 8B和14B名字不标准需要打开此宏
+        if(1){
             kcache_suffix_name="_self_attn_kcache_input";
             vcache_suffix_name="_self_attn_vcache_input";
             decode_input_name="current_length";
             klayer_prefix="model_layers_";
             vlayer_prefix="model_layers_";
+
+            if((model_path.find("8b") != std::string::npos)||(model_path.find("8B") != std::string::npos)) {
+              LOG_DBG("%s\r\n","set qwen3-8b 36blocks 4096");
+              hmctx->nblocks=36;
+              hmctx->model_name = "Qwen3-8B";
+            }
+            else if((model_path.find("14b") != std::string::npos)||(model_path.find("14B") != std::string::npos)) {
+              LOG_DBG("%s\r\n","set qwen3-14b 40blocks 5120");
+              hmctx->nblocks=40;
+              embed_shape=5120;
+              hmctx->model_name = "Qwen3-14B";
+            }
+
         }else if(M50){
             if((model_path.find("8b") != std::string::npos)||(model_path.find("8B") != std::string::npos)) {
               hmctx->nblocks=36;
@@ -5430,10 +5479,10 @@ struct server_context {
   }
 
   int completion_stream_generate(json &data) {
-    SRV_INF("this: %p\n", this);
+    LOG_DBG("this: %p\n", this);
     bool stream = json_value(data, "stream", false);
     if (!stream) {
-      SRV_ERR("Error: %s\n", "This is stream api!");
+      LOG_ERR("Error: %s\n", "This is stream api!");
       return -1;
     }
     std::unique_lock<std::mutex> lock(mutex_context);
@@ -5697,6 +5746,7 @@ struct server_context {
     tasks.clear();
     n_finished = 0;
     generate_status = 2;
+    model_status = 1;
     return 0;
   }
 
@@ -6215,7 +6265,7 @@ struct server_context {
       write_utf8_cstr_to_stdout(response.c_str(), invalid_utf8);
       std::cout << std::endl;
       // 下面打印的是正常的response 字符串
-      SRV_DBG("++prefill response is:%s\r\n", response.c_str());
+      LOG_DBG("++prefill response is:%s  atTime:%s\r\n", response.c_str(),getCurrentTime().c_str());
 
       context_length = input_echo_len;
 
@@ -6461,8 +6511,8 @@ struct server_context {
     return 0;
   }
 
-  int houmo_decode_8B(llama_batch batch) {
-    SRV_DBG("%s\r\n","++call houmo_decode_8B");
+  int houmo_decode_qwen3(llama_batch batch) {
+    SRV_DBG("++call houmo_decode_qwen3 atTime:%s\r\n",getCurrentTime().c_str());
     int embed_shape =4096;
     std::string prefill_model_input_1_name;
     std::string prefill_model_valid_length_name;
@@ -6472,13 +6522,22 @@ struct server_context {
     std::string decode_model_valid_length_name;
     std::string decode_model_current_length_name;
 
-    if(M30) {
+    //if(M30) {  //老的xh2a qwen3 8B和14B 名称不标准，打开此处
+    if(1) {
       prefill_model_input_1_name="input_1";
       prefill_model_valid_length_name="valid_length";
       prefill_model_current_length_name="current_length";
       decode_model_input_1_name="input_1";
       decode_model_valid_length_name="valid_length";
       decode_model_current_length_name=="current_length";
+
+      if(hmctx->model_name == "Qwen3-8B") {
+      SRV_DBG("%s\r\n","Qwen3-8B decode");
+      }
+      else if(hmctx->model_name == "Qwen3-14B") {
+      SRV_DBG("%s\r\n","Qwen3-14B decode");
+      embed_shape=5120;
+      }
 
     } else if(M50) {
       if(hmctx->model_name == "Qwen3-8B") {
@@ -6556,7 +6615,13 @@ struct server_context {
                        .clone();
         // std::cout << "inp: " << inp << "\n";
         try {
+          #if defined(__aarch64__)
+          printf("%s\r\n","++prefill 1 forward kInt64");
+          inputs_embeds = emb->forward(inp.to(torch::kInt64));
+          #else
+          printf("%s\r\n","++prefill 1 forward kInt");
           inputs_embeds = emb->forward(inp);
+          #endif
         } catch (const c10::Error &e) {
           std::cerr << "error loading the model\n"
                     << e.what_without_backtrace();
@@ -6662,6 +6727,7 @@ struct server_context {
         }
         hmctx->prefill_model.Run();
         hmctx->prefill_model.Sync();
+        SRV_DBG("++prefill run  round:%d\r\n",round);
         // std::cout << "prefill run finished" << std::endl;
       }
 
@@ -6730,7 +6796,7 @@ struct server_context {
       write_utf8_cstr_to_stdout(response.c_str(), invalid_utf8);
       std::cout << std::endl;
       // 下面打印的是正常的response 字符串
-      SRV_DBG("++prefill response is:%s\r\n", response.c_str());
+      LOG_DBG("++prefill response is:%s  atTime:%s\r\n", response.c_str(),getCurrentTime().c_str());
 
       context_length = input_echo_len;
 
@@ -6744,7 +6810,13 @@ struct server_context {
       // std::cout << "prefill_inp: " << prefill_inp << "\n";
       SRV_DBG("++prefill_inp is:%s\r\n", prefill_inp);
       try {
-        prefill_inputs_embeds = emb->forward(prefill_inp);
+        #if defined(__aarch64__)
+          printf("%s\r\n","++prefill forward kInt64");
+          prefill_inputs_embeds = emb->forward(prefill_inp.to(torch::kInt64));
+        #else
+          printf("%s\r\n","++prefill forward kInt");
+          prefill_inputs_embeds = emb->forward(prefill_inp);
+        #endif
       } catch (const c10::Error &e) {
         std::cerr << "error loading the model\n" << e.what_without_backtrace();
         return -1;
@@ -6975,7 +7047,13 @@ struct server_context {
               .clone();
       // std::cout << "decode_inp: " << decode_inp << "\n";
       try {
+        #if defined(__aarch64__)
+        printf("%s\r\n","++decode forward kInt64");
+        input_emd = emb->forward(decode_inp.to(torch::kInt64));
+        #else
+        printf("%s\r\n","++decode forward kInt");
         input_emd = emb->forward(decode_inp);
+        #endif
       } catch (const c10::Error &e) {
         std::cerr << "error loading the model\n" << e.what_without_backtrace();
         return -1;
@@ -7351,7 +7429,7 @@ struct server_context {
 
   int houmo_decode(llama_batch batch) {
     if (decode_pos == 0) {
-      SRV_DBG("%s", "prefill stage\n");
+      SRV_DBG("houmo_decode prefill stage atTime:%s\n",getCurrentTime().c_str());
       // std::vector<llama_token> tokens(batch.token, batch.token +
       // batch.n_tokens);
       std::vector<llama_token> tokens;
@@ -7412,14 +7490,28 @@ struct server_context {
         }
         // std::cout << "input_ids: " << input_ids << std::endl;
         torch::Tensor inputs_embeds;
+        #if 0 //defined(__aarch64__)
+        SRV_DBG("%s\r\n","++prefill 1 opt to kInt64");
+        printf("%s\r\n","++prefill 1 opt to kInt64");
+        auto opts = torch::TensorOptions().dtype(torch::kInt64);
+        #else
+        SRV_DBG("%s\r\n","++prefill 1 opt to kInt");
+        printf("%s\r\n","++prefill 1 opt to kInt");
         auto opts = torch::TensorOptions().dtype(torch::kInt);
+        #endif
         auto inp = torch::from_blob(input_ids.data(),
                                     {int64_t(input_ids.size())}, opts)
                        .clone();
         // std::cout << "inp: " << inp << "\n";
         try {
           //ScopedTimer timer("houmo_decode_embedding_forward_time1");
+          #if defined(__aarch64__)
+          printf("%s\r\n","++prefill 1 forward kInt64");
+          inputs_embeds = emb->forward(inp.to(torch::kInt64));
+          #else
+          printf("%s\r\n","++prefill 1 forward kInt");
           inputs_embeds = emb->forward(inp);
+          #endif
         } catch (const c10::Error &e) {
           std::cerr << "error loading the model\n"
                     << e.what_without_backtrace();
@@ -7626,13 +7718,20 @@ struct server_context {
       write_utf8_cstr_to_stdout(response.c_str(), invalid_utf8);
       std::cout << std::endl;
       // 下面打印的是正常的response 字符串
-      SRV_DBG("++prefill response is:%s\r\n", response.c_str());
+      LOG_DBG("++prefill response is:%s  atTime:%s\r\n", response.c_str(),getCurrentTime().c_str());
 
       context_length = input_echo_len;
 
       std::vector<llama_token> prefill_input_ids = {prefill_token};
       torch::Tensor prefill_inputs_embeds;
+      #if 0 //defined(__aarch64__)
+      SRV_DBG("%s\r\n","++prefill opt to kInt64");
+      printf("%s\r\n","++prefill opt to kInt64");
+      auto prefill_opts = torch::TensorOptions().dtype(torch::kInt64);
+      #else
+      printf("%s\r\n","++prefill opt to kInt");
       auto prefill_opts = torch::TensorOptions().dtype(torch::kInt);
+      #endif
       auto prefill_inp =
           torch::from_blob(prefill_input_ids.data(),
                            {int64_t(prefill_input_ids.size())}, prefill_opts)
@@ -7641,9 +7740,15 @@ struct server_context {
       SRV_DBG("++prefill_inp is:%s\r\n", prefill_inp);
       try {
         //ScopedTimer timer("houmo_decode_embedding_forward_time");
-        prefill_inputs_embeds = emb->forward(prefill_inp);
+        #if defined(__aarch64__)
+          printf("%s\r\n","++prefill forward kInt64");
+          prefill_inputs_embeds = emb->forward(prefill_inp.to(torch::kInt64));
+        #else
+          printf("%s\r\n","++prefill forward kInt");
+          prefill_inputs_embeds = emb->forward(prefill_inp);
+        #endif
       } catch (const c10::Error &e) {
-        std::cerr << "error loading the model\n" << e.what_without_backtrace();
+        std::cerr << "--error loading the model\n" << e.what_without_backtrace();
         return -1;
       }
       // std::cout << "prefill_inputs_embeds options: " <<
@@ -7885,7 +7990,14 @@ struct server_context {
 
       std::vector<llama_token> decode_input_ids = {generate_token};
       torch::Tensor decode_inputs_embeds;
+      #if 0 //defined(__aarch64__)
+      SRV_DBG("%s\r\n","++decode opt to kInt64");
+      printf("%s\r\n","++decode opt to kInt64");
+      auto decode_opts = torch::TensorOptions().dtype(torch::kInt64);
+      #else
+      printf("%s\r\n","++decode opt to kInt");
       auto decode_opts = torch::TensorOptions().dtype(torch::kInt);
+      #endif
       auto decode_inp =
           torch::from_blob(decode_input_ids.data(),
                            {int64_t(decode_input_ids.size())}, decode_opts)
@@ -7893,9 +8005,15 @@ struct server_context {
       // std::cout << "decode_inp: " << decode_inp << "\n";
       try {
         //ScopedTimer timer("houmo_decode_embedding_forward_time");
+        #if defined(__aarch64__)
+        printf("%s\r\n","++decode forward kInt64");
+        input_emd = emb->forward(decode_inp.to(torch::kInt64));
+        #else
+        printf("%s\r\n","++decode forward kInt");
         input_emd = emb->forward(decode_inp);
+        #endif
       } catch (const c10::Error &e) {
-        std::cerr << "error loading the model\n" << e.what_without_backtrace();
+        std::cerr << "--error loading the model\n" << e.what_without_backtrace();
         return -1;
       }
       // std::cout << "input_emd options: " << input_emd.options() << std::endl;
@@ -7946,7 +8064,8 @@ struct server_context {
       }
 
       if (all_idle) {
-        SRV_DBG("%s", "all slots are idle\n");
+        model_status=1;
+        SRV_DBG("all slots are idle  model_status=%d afte set to 1\n",model_status);
         if (clean_kv_cache) {
           kv_cache_clear();
         }
@@ -8399,7 +8518,7 @@ struct server_context {
                ret=houmo_decode_multibatch(batch);
              break;
         case MODEL_8B:
-             ret=houmo_decode_8B(batch);
+             ret=houmo_decode_qwen3(batch);
              break;
         default:
              SRV_ERR("%s\r\n","hm_model_scale_type not supported,please check!");
@@ -10447,7 +10566,7 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
   if((model_path.find("qwen3") == std::string::npos) && ((model_path.find("14B") != std::string::npos) || (model_path.find("14b") != std::string::npos))) {
     ctx_server->init_14B(model_path);
   } else if (model_path.find("qwen3") != std::string::npos) {
-    ctx_server->init_qwen3_8B(model_path);
+    ctx_server->init_qwen3(model_path);
   } else {
     LOG_INF("ctx_server->params->n_parallel is:%d \r\n",ctx_server->params->n_parallel);
     if(ctx_server->params->n_parallel==1) {
@@ -10623,6 +10742,13 @@ int completion_load_model(HANDLE h, std::string model_path,
     return -1;
   }
   server_context *ctx_server = (server_context *)h;
+
+  if(model_real_load_flag) {
+    LOG_DBG("%s\r\n","model loaded dont load again");
+    ctx_server->model_status=1;
+    return 0;
+  }
+
   if (ctx_server->magic != 12345) {
     LOG_ERR("HANDLE is wrong: %p\n", ctx_server);
     return -1;
@@ -10650,7 +10776,11 @@ int completion_load_model(HANDLE h, std::string model_path,
   LOG_DBG("load tok_model_path:%s\n",tok_model_path.c_str());
 
   std::time_t t = std::time(nullptr);
+  #ifdef _WIN32
+  std::string log_file = string_format("D:\\houmo-llm-%d.log", t);
+  #else
   std::string log_file = string_format("houmo-llm-%d.log", t);
+  #endif
 
   char *argv[] = {"houmo-llm-demo",
                   "-m",
@@ -10733,7 +10863,7 @@ int completion_load_model(HANDLE h, std::string model_path,
   if((model_path.find("qwen3") == std::string::npos) && ((model_path.find("14B") != std::string::npos) || (model_path.find("14b") != std::string::npos))) {
     ctx_server->init_14B(model_path);
   } else if((model_path.find("qwen3") != std::string::npos)) {
-    ctx_server->init_qwen3_8B(model_path);
+    ctx_server->init_qwen3(model_path);
   } else {
     LOG_INF("ctx_server->params->n_parallel is:%d \r\n",ctx_server->params->n_parallel);
     if(ctx_server->params->n_parallel==1) {
@@ -11259,7 +11389,7 @@ int completion_generate_stream(HANDLE h, json &req) {
       data.dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n";
   LOG_DBG("data: %s\n", str.c_str());
 
-  LOG_DBG("Start str generate 666\n");
+  LOG_DBG("Time:%s Start str generate 666\n",getCurrentTime().c_str());
 
   ret = ctx_server->completion_stream_generate(data);
   if (ret == 0) {
@@ -11541,10 +11671,11 @@ bool HTTP_SERVER_API api_loadmodel_by_path(HANDLE handle,
   }
   int ret = completion_load_model(handle, model_path, model_name_list);
   common_log_resume(common_log_main());
-
   if (ret == 0) {
+    model_real_load_flag=true;
     return true;
   }
+  SRV_ERR("%s\r\n","load model failed");
   return false;
 }
 
@@ -11580,9 +11711,17 @@ bool HTTP_SERVER_API api_loadtoken(HANDLE handle, const char *token_fullpath) {
 
 // unload model
 bool HTTP_SERVER_API api_unloadmodel(HANDLE handle) {
-  // return true;
+  //TODO only for Lenovo demo
+  server_context *ctx_server = (server_context *)handle;
+  std::unique_lock<std::mutex> lock(ctx_server->mutex_context);
+  ctx_server->model_status = 2;
+  model_real_load_flag=true;
+  return true;
+
+
   int ret = completion_unload_model(handle);
   LOG_DBG("completion_unload_model: %s\n", ret);
+  model_real_load_flag =false;
   if (ret == 0) {
     return true;
   }
@@ -11592,6 +11731,7 @@ bool HTTP_SERVER_API api_unloadmodel(HANDLE handle) {
 // model status see the enum status
 // return enum status
 int32 HTTP_SERVER_API api_status(HANDLE handle) {
+  LOG_DBG("Call api_status atTime:%s\n",getCurrentTime().c_str());
   int32 status = 0;
   if (handle == nullptr) {
     LOG_ERR("HANDLE is: %p\n", handle);
@@ -11603,6 +11743,7 @@ int32 HTTP_SERVER_API api_status(HANDLE handle) {
     return -1;
   }
   status = ctx_server->model_status;
+  LOG_DBG("Returnfrom api_status atTime:%s\n",getCurrentTime().c_str());
   return status;
 }
 
@@ -11719,13 +11860,14 @@ int32 HTTP_SERVER_API api_token_num(HANDLE handle, const char *prompt) {
   return generate_token_count(handle, prompt);
 }
 
+
 // stream generate
 // bool HTTP_SERVER_API api_Generate_stream(HANDLE handle, const std::string&
 // prompt, const params& params);
 bool HTTP_SERVER_API api_Generate_stream(HANDLE handle, const char *prompt,
                                          const void *gen_params,
                                          size_t gen_params_size) {
-  SRV_DBG("stream prompt: %s\n", prompt);
+  LOG_DBG("Call api_Generate_stream atTime:%s  get stream prompt: %s\n",getCurrentTime().c_str(), prompt);
   std::string pp(prompt);
   std::string input = pp;
   input = std::regex_replace(input, std::regex(R"(\n)"), "\\n");
@@ -11763,8 +11905,10 @@ bool HTTP_SERVER_API api_Generate_stream(HANDLE handle, const char *prompt,
     throw std::runtime_error(std::string("\"json_schema\": ") + e.what());
   }
   if (ret != 0) {
+    LOG_DBG("ReturnFalse from api_Generate_stream atTime:%s\n",getCurrentTime().c_str());
     return false;
   }
+  LOG_DBG("ReturnTrue from api_Generate_stream atTime:%s\n",getCurrentTime().c_str());
   return true;
 }
 
@@ -11773,7 +11917,7 @@ bool HTTP_SERVER_API api_Generate_stream(HANDLE handle, const char *prompt,
 // E_BUFFER_NOT_ENOUGH and result_size return the needed size.
 int32 HTTP_SERVER_API api_Get_Generate_token(HANDLE handle, char **result,
                                              size_t *result_size) {
-  LOG_DBG("+++++++++++++++++++call api_Get_Generate_token\r\n");
+  LOG_DBG("++++call api_Get_Generate_token atTime:%s\r\n",getCurrentTime().c_str());
   int ret = 0;
   try {
     ret = generate_stream_next_token(handle, result, result_size);
@@ -11782,6 +11926,7 @@ int32 HTTP_SERVER_API api_Get_Generate_token(HANDLE handle, char **result,
     std::cout << e.what() << std::endl;
     ret = -1;
   }
+  LOG_DBG("----Returnfrom api_Get_Generate_token atTime:%s\n ",getCurrentTime().c_str());
   return ret;
 }
 //{"content":" ","stop":false,"id_slot":0,"multimodal":false}
@@ -11790,6 +11935,7 @@ int32 HTTP_SERVER_API api_Get_Generate_token(HANDLE handle, char **result,
 // generate status see generater_status
 // return enum generater_status
 int32 HTTP_SERVER_API api_Generate_status(HANDLE handle) {
+  LOG_DBG("Call api_Generate_status atTime:%s\n",getCurrentTime().c_str());
   int32 status = 0;
   if (handle == nullptr) {
     LOG_ERR("HANDLE is: %p\n", handle);
@@ -11802,15 +11948,25 @@ int32 HTTP_SERVER_API api_Generate_status(HANDLE handle) {
     return -1;
   }
   status = ctx_server->generate_status;
+  if(0==ctx_server->generate_status) {
+    ctx_server->model_status =1;
+  }
+  LOG_DBG("Returnfrom api_Generate_status atTime:%s ctx_server->model_status=%d after set to 1\n",getCurrentTime().c_str(),ctx_server->model_status);
+
+
   return status;
 }
 
 // stop generate
 bool HTTP_SERVER_API api_stop(HANDLE handle) {
+  LOG_DBG("Call api_stop atTime:%s\n",getCurrentTime().c_str());
   int ret = generate_stream_stop(handle);
+
   if (ret == 0) {
+    LOG_DBG("Returnfrom api_stop atTime:%s  ret=0\n",getCurrentTime().c_str());
     return true;
   }
+  LOG_DBG("Returnfrom api_stop atTime:%s\n  ret not 0",getCurrentTime().c_str());
   return false;
 }
 
@@ -11848,7 +12004,7 @@ extern "C" {
 #endif
 
 // if fail, return nullptr
-//HANDLE HMINFER_API create_api_instance(params& params);
+//HANDLE HMINFER_API create_infer_instance(params& params);
 HANDLE HMINFER_API create_infer_instance(void* params, size_t params_bytes){
   return create_api_instance(params, params_bytes);
 }
