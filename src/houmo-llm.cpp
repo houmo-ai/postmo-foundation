@@ -10434,9 +10434,11 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
   }
 
   if (ctx_server->instance_no == 0) {
-    auto device_id_str = getenv_or_default("DEVICE_CHOICE", "0").c_str();
-    ctx_server->device_id = atoi(device_id_str);
+    LOG_INF("try to get DEVICE_CHOICE\n");
+    std::string device_id_str = getenv_or_default("DEVICE_CHOICE", "0");
+    ctx_server->device_id = std::stoi(device_id_str);
   } else {
+    LOG_INF("Multi Instance case, device_id use instance_no-1\n");
     ctx_server->device_id = ctx_server->instance_no - 1; // Instance No started from 1.
   }
 

@@ -75,9 +75,16 @@ int main(int argc, char** argv) {
     SetConsoleCP(CP_UTF8);
     _putenv("TCIM_LOG_TAGS=all");
     _putenv("TCIM_BACKEND=Xh1HdiBackend");
+    _putenv("HM_PLATFORM=ASIC");
+
+#ifdef HOUMO_M50
+    _putenv("TCIM_BACKEND=Xh2HalBackend");
+#endif
+
 
     const char* debug_mode = std::getenv("HICPP_WIN_D");
     if (debug_mode) {
+        _putenv("TCIM_RUNTIME_PATH=./hal");
         printf(" _   _ ___   ____ ____  ____    ____       _                    ____                      _   \n"
                "| | | |_ _| / ___|  _ \\|  _ \\  |  _ \\  ___| |__  _   _  __ _   / ___|___  _ __  ___  ___ | | ___ \n"
                "| |_| || | | |   | |_) | |_) | | | | |/ _ \\ '_ \\| | | |/ _` | | |   / _ \\| '_ \\/ __|/ _ \\| |/ _ \n"
@@ -90,6 +97,15 @@ int main(int argc, char** argv) {
 
 #ifdef WINSERVICE_MODE
     // LOG(Info) << "WIN32 Service Mode";
+
+#ifdef HOUMO_M50
+    char exePath[MAX_PATH];
+    GetModuleFileName(nullptr, exePath, MAX_PATH); // 获取exe绝对路径
+    const auto programPath = std::string(exePath);
+    const auto program_dir = std::string(exePath).substr(0, std::string(exePath).find_last_of('\\') + 1);
+    _putenv(("TCIM_RUNTIME_PATH=" + program_dir + "/hal").c_str());
+#endif
+
 
     char serviceName[] = "HoumoHI";
     SERVICE_TABLE_ENTRY ServiceTable[] = {{serviceName, ServiceMain}, {NULL, NULL}};

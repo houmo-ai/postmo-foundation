@@ -32,6 +32,13 @@ message("CMAKE_COMMAND=${CMAKE_COMMAND}")
 message("LLAMA_CPP_LIBRARY=${LLAMA_CPP_LIBRARY}")
 message("LLAMA_CPP_LIBRARY_COMMON=${LLAMA_CPP_LIBRARY_COMMON}")
 
+option(HOUMO_M50 "Enable HOUMO_M50 feature" OFF)  # 默认关闭
+
+if(HOUMO_M50)
+    add_compile_definitions(HOUMO_M50)  # 定义宏 -HOUMO_M50
+    message(STATUS "HOUMO_M50 enabled")
+endif()
+
 
 if(WINSERVICE_MODE)
     add_compile_definitions(WINSERVICE_MODE)
