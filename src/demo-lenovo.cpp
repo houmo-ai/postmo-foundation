@@ -221,28 +221,27 @@ std::vector<char>  read_whole_file(const std::string& filename,uint64_t & modelf
 
 int main(int argc, char ** argv) {
 
-    //test_qwen_template_revert();
-    //printf("++Attention:only test_qwen_template_revert\r\n");
-    //return 0;
-    int testcase_id=0;
-    if (argc != 2) {
-        std::cerr << "Error:Missing param. No inter testcase_id specified!" << std::endl;
-        std::cerr << "Usage: " << argv[0] << " testcase_id" << std::endl;
-        std::cerr << "testcase_id should be following  number:" << std::endl;
-        std::cerr << "1: M30 test qwen3 8B-8k-4core" << std::endl;
-        std::cerr << "2: M30 test deepseek 14B-8k-4core" << std::endl;
-        std::cerr << "3: M30 test deepseek 7B-4k-4core" << std::endl;
-        std::cerr << "4: M50 test qwen2.5  7B-2k-2core" << std::endl;
-        std::cerr << "5: M50 test qwen3 8B" << std::endl;
-        std::cerr << "6: M50 test qwen3 14B" << std::endl;
-        std::cerr << "9: M30 test deepseek 7B-4k-4core load llm model from membuffer:" << std::endl;
-        return -1;
-    } else{
-        std::string arg = argv[1];
-        testcase_id = std::stoi(arg);
-    }
-    std::cout<<"++testcase_id is:"<<testcase_id<<std::endl;
     initialize_utf8_console();
+    std::string path;
+    bool found = false;
+    // 遍历所有命令行参数
+    // 指定模型文件的话，请使用 -m <路径> 格式传入参数
+    // 未带-m 的话默认测试从内存加载模型
+    for (int i = 1; i < argc; ++i) {
+        // 检查当前参数是否为-m
+        if (strcmp(argv[i], "-m") == 0) {
+            // 确保后面还有参数
+            if (i + 1 < argc) {
+                path = argv[i + 1];
+                found = true;
+                break;
+            } else {
+                std::cerr << "错误：-m 选项后面需要指定路径" << std::endl;
+                return 1;
+            }
+        }
+    }
+
     params params;
     params.n_predict = 300;
     params.n_ctx = 4096;
@@ -254,8 +253,6 @@ int main(int argc, char ** argv) {
     params.repeat_last_n = 60;
 
     size_t params_bytes = 0;
-
-
 
     //const char* token_fullpath = "./models/hmm_qwen2_256_4096_4cores_20250317/qwen2-1_5b-instruct-q4_0.gguf";
 
@@ -271,73 +268,38 @@ int main(int argc, char ** argv) {
     int status = api_status(instance);
     printf("api_status: %d\n", status);
     bool state=false;
-    char* model_path=nullptr;
-    switch(testcase_id) {
-        case 1: //测试qwen3 从文件加载模型
-            model_path = "./models/qwen3-8b-1batch/4core_8k";
-            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
-            printf("api_loadmodel_by_path = %d\n", state);
-            break;
-        case 2: //测试deepseek qwen 14B从文件加载模型
-            model_path = "./models/hmm_deepseek_14b_256_8k_4cores_20250514_26l";
-            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
-            printf("api_loadmodel_by_path = %d\n", state);
-            break;
-        case 3: //测试deepseek qwen2 7B从文件加载模型
-            model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
-            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
-            printf("api_loadmodel_by_path = %d\n", state);
-            break;
-        case 4: //M50 测试deepseek qwen2 7B从文件加载模型
-            //model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
-            model_path = "./models/hmm_xh2_qwen2.5_256_8k_2cores_20250610/";
-            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
-            printf("api_loadmodel_by_path = %d\n", state);
-            break;
-        case 5: //M50 测试qwen3 8B从文件加载模型
-            //model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
-            //model_path = "./models/hmm_xh2_qwen2.5_256_8k_2cores_20250610/";
-            model_path = "./models/models_xh2/hmm_xh2_qwen3_8b_256_2k_2cores_20250701";
-            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
-            printf("api_loadmodel_by_path = %d\n", state);
-            break;
-        case 6: //M50 测试qwen3 14B从文件加载模型
-            //model_path = "./models/hmm_deepseek_256_4096_4cores_20250317/";
-            //model_path = "./models/hmm_xh2_qwen2.5_256_8k_2cores_20250610/";
-            model_path = "./models/models_xh2/hmm_xh2_qwen3_14b_256_2k_2cores_20250701/";
-            state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
-            printf("api_loadmodel_by_path = %d\n", state);
-            break;
-        case 9:  //测试从mem加载模型
-            {
-            uint8_t *buffers[2]={nullptr};
-            constexpr size_t buffers_count=2;
-            uint64_t model_filesizes[buffers_count]={0};
-            std::string prefill_model_path="./models/hmm_deepseek_256_4096_4cores_20250317/deepseek_prefill.hmm";
-            //std::string prefill_model_path="./models/hmm_deepseek_256_4096_4cores_20250317/yolov5m.hmm";
-            std::vector<char> prefill_model=read_whole_file(prefill_model_path,model_filesizes[0]);
-            std::string decode_model_path="./models/hmm_deepseek_256_4096_4cores_20250317/deepseek_decode.hmm";
-            std::vector<char> decode_model=read_whole_file(decode_model_path,model_filesizes[1]);
+    char* model_path=(char*)path.c_str();
+    if (found) {
+        std::cout << "成功解析到模型路径-测试从文件加载推理模型：" << path << std::endl;
+        api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
+        printf("api_loadmodel_by_path = %d\n", state);
+    } else {
+        std::cout << "未找到-m选项,默认测试从内存buffer加载推理模型" << std::endl;
+        uint8_t *buffers[1]={nullptr};
+        constexpr size_t buffers_count=1;
+        uint64_t model_filesizes[buffers_count]={0};
+        std::string prefill_model_path="./models/HiModel-Qwen2.5-7B-4batch-F16-2k-4core-xh1-v0.0.1.gguf";
 
-            buffers[0]=(uint8_t *)prefill_model.data();
-            buffers[1]=(uint8_t *)decode_model.data();
-            printf("++buffers[0] is %p\r\n",buffers[0]);
-            printf("++buffers[1] is %p\r\n",buffers[1]);
+        std::vector<char> p_model=read_whole_file(prefill_model_path,model_filesizes[0]);
+        buffers[0]=(uint8_t *)p_model.data();
+        printf("buffers is:%p\r\n",buffers);
+        printf("model_filesizes is:%p\r\n",model_filesizes);
+        printf("++buffers[0] is %p\r\n",buffers[0]);
 
-            //如果需要保存模型文件对比原始文件可以用下面的方法
-            //save_raw_data_1(buffers[0],model_filesizes[0],"prefill_from_vectordata.hmm");
-            for(int i=0;i<buffers_count;i++) {
-            printf("++model index:%d model_filesizes is %llu\r\n",i,model_filesizes[i]);
-            }
-            //return 0;
-            state = api_loadmodel_by_buffer(instance, buffers, model_filesizes, buffers_count, hwinfo);
-            printf("api_loadmodel_by_buffer = %d\n", state);
-            break;
-            }
-        default:
-            std::cerr <<"++Error not supported testcase_id"<<std::endl;
-            exit(-1);
+        char magic_string[5]={0};
+        memcpy(magic_string,buffers[0],4);
+        printf("in demohi magic string is:%s\r\n",magic_string);
+
+        //如果需要保存模型文件对比原始文件可以用下面的方法
+        //save_raw_data_1(buffers[0],model_filesizes[0],"prefill_from_vectordata.hmm");
+        for(int i=0;i<buffers_count;i++) {
+        printf("++model index:%d model_filesizes is %llu\r\n",i,model_filesizes[i]);
+        }
+        //return 0;
+        state = api_loadmodel_by_buffer(instance, buffers, model_filesizes, buffers_count,hwinfo);
+        printf("api_loadmodel_by_buffer = %d\n", state);
     }
+
     status = api_status(instance);
     printf("-api_status: %d\n", status);
 

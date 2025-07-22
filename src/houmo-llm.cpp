@@ -6,6 +6,12 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "utils.hpp"
+#if ENABLE_HOUMO_LLAMACPP
+#include "sampling.h"
+#include "speculative.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
+#endif
 
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
@@ -41,6 +47,18 @@
 #include <cctype>
 #include <locale>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <fcntl.h>
+#include <io.h>
+#include <tchar.h>
+#include <psapi.h>
+#include <strsafe.h>
+#else
+#include <sys/mman.h>
+#include <sys/syscall.h>
+#include <linux/memfd.h>
+#endif
 
 #include "houmo-llm.h"
 #include "houmo-llm.hpp"
@@ -56,7 +74,7 @@ using json = nlohmann::ordered_json;
 
 static int M50=0;
 static int M30=0;
-
+//#define ENABLE_HOUMO_LLAMACPP (1)
 #if 1
 // 全局配置变量
 static char* hi_num_parallel = nullptr;
@@ -64,18 +82,371 @@ static std::string use_ce_flag;
 char* hi_modelpath = nullptr;
 static bool houmo_sampling_cfg = true;
 static bool model_real_load_flag=false;
+static bool open_console_flag=false;
+static std::unordered_map<std::string, std::string> llm_params_from_cfg;
+// 全局变量保存argv指针
+HTTP_SERVER_API char** global_argv=nullptr;
+HTTP_SERVER_API int global_argc=0;
+
+// 判断一个参数是否是选项（以'-'开头）
+bool is_option(const char* arg) {
+    return arg != nullptr && arg[0] == '-';
+}
+
+// 获取选项的标准化名称（去除 '-' 并统一格式）
+std::string get_normalized_option(const char* arg) {
+    if (arg == nullptr) return "";
+
+    // 处理长选项（--开头）
+    if (arg[0] == '-' && arg[1] == '-') {
+        return std::string(arg + 2); // "--port" -> "port"
+    }
+    // 处理短选项（-开头）
+    else if (arg[0] == '-') {
+        return std::string(arg + 1); // "-m" -> "m"
+    }
+    return "";
+}
+
+// 判断下一个参数是否为选项值（非选项即为值）
+bool next_is_value(char* argv[], int current_index, int max_length) {
+    // 检查是否有下一个参数，且下一个参数不是选项
+    return (current_index + 1 < max_length) &&
+           (argv[current_index + 1] != nullptr) &&
+           !is_option(argv[current_index + 1]);
+}
+
+// 计算数组长度（不包含末尾的NULL）
+int get_argv_length(char* argv[]) {
+    int len = 0;
+    if (argv == nullptr) return 0;
+    while (argv[len] != nullptr) {
+        len++;
+    }
+    return len;
+}
+
+// 合并两个argv数组，自动处理所有选项及其值，全局选项值优先
+char** merge_argv_automatic(char* global[], char* custom[]) {
+    if (custom == nullptr || custom[0] == nullptr) {
+        return nullptr; // 处理空输入
+    }
+
+    int global_len = get_argv_length(global);
+    int custom_len = get_argv_length(custom);
+
+    // 存储全局选项及其值（用于去重和值优先）
+    std::unordered_map<std::string, std::pair<const char*, const char*>> global_options;
+    // 存储最终合并的参数列表
+    std::vector<char*> merged;
+
+    // 第一步：添加custom_argv的第一个元素（程序名）到首位
+    merged.push_back(custom[0]);
+
+    // 第二步：处理global_argv，收集选项和值，并添加到结果（跳过程序名）
+    for (int i = 0; i < global_len; i++) {
+        // 跳过global_argv的程序名（第一个元素）
+        if (i == 0) continue;
+
+        if (is_option(global[i])) {
+            std::string opt_name = get_normalized_option(global[i]);
+            const char* opt_value = nullptr;
+
+            // 自动判断是否有后续值
+            if (next_is_value(global, i, global_len)) {
+                opt_value = global[i + 1];
+                // 添加选项和值到结果
+                merged.push_back(global[i]);
+                merged.push_back(global[i + 1]);
+                i++; // 跳过已处理的值
+            } else {
+                // 没有值的选项（如--no-warmup）
+                merged.push_back(global[i]);
+            }
+
+            // 存储选项信息（无论是否有值）
+            global_options[opt_name] = {global[i], opt_value};
+        } else {
+            // 非选项参数直接添加
+            merged.push_back(global[i]);
+        }
+    }
+
+    // 第三步：处理custom_argv的其余元素（从索引1开始）
+    for (int i = 1; i < custom_len; i++) {
+        if (is_option(custom[i])) {
+            std::string opt_name = get_normalized_option(custom[i]);
+            // 检查全局是否已有此选项
+            if (global_options.find(opt_name) != global_options.end()) {
+                // 全局已有此选项，跳过当前选项及其值（如果有）
+                if (next_is_value(custom, i, custom_len)) {
+                    i++; // 跳过值
+                }
+                continue;
+            }
+
+            // 全局没有此选项，添加到结果
+            if (next_is_value(custom, i, custom_len)) {
+                merged.push_back(custom[i]);
+                merged.push_back(custom[i + 1]);
+                i++; // 跳过已处理的值
+            } else {
+                merged.push_back(custom[i]);
+            }
+        } else {
+            // 非选项参数直接添加
+            merged.push_back(custom[i]);
+        }
+    }
+
+    // 添加终止符
+    merged.push_back(nullptr);
+
+    // 转换为char**并返回
+    char** result = new char*[merged.size()];
+    std::copy(merged.begin(), merged.end(), result);
+
+    return result;
+}
+
+// 更新合并后的数组中的指定选项值
+void update_merged_argv_values(char** merged_argv,
+                              const std::unordered_map<std::string, std::string>& updates) {
+    if (merged_argv == nullptr) return;
+
+    int len = get_argv_length(merged_argv);
+
+    for (int i = 0; i < len; i++) {
+        if (is_option(merged_argv[i])) {
+            std::string opt_name = get_normalized_option(merged_argv[i]);
+
+            // 检查是否需要更新此选项的值
+            auto it = updates.find(opt_name);
+            if (it != updates.end() && next_is_value(merged_argv, i, len)) {
+                // 更新选项值（注意：这里假设值是静态分配或生命周期足够长的字符串）
+                merged_argv[i + 1] = const_cast<char*>(it->second.c_str());
+                std::cout<<"change "<<merged_argv[i]<< " to " << merged_argv[i + 1] <<std::endl;
+                i++; // 跳过已处理的值
+            }
+        }
+    }
+}
+
+// 辅助函数：去除字符串首尾空白
+std::string trim(const std::string& s) {
+    if (s.empty()) return "";
+
+    auto start = s.begin();
+    while (start != s.end() && std::isspace(static_cast<unsigned char>(*start))) {
+        start++;
+    }
+
+    auto end = s.end();
+    do {
+        end--;
+    } while (std::distance(start, end) > 0 && std::isspace(static_cast<unsigned char>(*end)));
+
+    return std::string(start, end + 1);
+}
+
+// 读取INI文件中[llm_params]节下的所有配置项
+void read_llm_params(const std::string& cfg_file_path, std::unordered_map<std::string, std::string>& llm_params) {
+    // 清空输出map，避免累积旧数据
+    llm_params.clear();
+
+    std::ifstream file(cfg_file_path);
+    if (!file.is_open()) {
+        std::cerr << "错误：无法打开配置文件 '" << cfg_file_path << "'" << std::endl;
+        return;
+    }
+
+    std::string line;
+    bool in_llm_params_section = false;
+    int line_number = 0;
+
+    // 逐行读取文件
+    while (std::getline(file, line)) {
+        line_number++;
+        std::string trimmed_line = trim(line);
+
+        // 调试信息：显示当前处理的行
+        // std::cout << "处理行 " << line_number << ": " << trimmed_line << std::endl;
+
+        // 跳过空行
+        if (trimmed_line.empty()) {
+            continue;
+        }
+
+        // 处理注释行（支持行内注释）
+        size_t comment_pos = trimmed_line.find(';');
+        if (comment_pos == std::string::npos) {
+            comment_pos = trimmed_line.find('#');
+        }
+        if (comment_pos != std::string::npos) {
+            trimmed_line = trim(trimmed_line.substr(0, comment_pos));
+            if (trimmed_line.empty()) {
+                continue;
+            }
+        }
+
+        // 检查是否是节标题
+        if (trimmed_line.front() == '[' && trimmed_line.back() == ']') {
+            // 提取节名称（去除方括号）
+            std::string section = trimmed_line.substr(1, trimmed_line.size() - 2);
+            section = trim(section);
+
+            // 严格区分大小写的判断
+            bool is_target = (section == "llm_params");
+            in_llm_params_section = is_target;
+
+            // 调试信息：显示节切换
+            // if (is_target) {
+            //     std::cout << "进入 [llm_params] 节 (行 " << line_number << ")" << std::endl;
+            // } else if (in_llm_params_section) {
+            //     std::cout << "离开 [llm_params] 节 (行 " << line_number << ")" << std::endl;
+            // }
+        }
+        // 如果在[llm_params]节中，处理键值对
+        else if (in_llm_params_section) {
+            // 查找等号位置（支持多个等号的情况，取第一个）
+            size_t eq_pos = trimmed_line.find('=');
+            if (eq_pos == std::string::npos) {
+                // 没有等号的行，视为无效配置项
+                std::cerr << "警告：在[llm_params]节中发现无效行（无等号），行 " << line_number << ": " << line << std::endl;
+                continue;
+            }
+
+            // 提取键和值
+            std::string key = trim(trimmed_line.substr(0, eq_pos));
+            std::string value = trim(trimmed_line.substr(eq_pos + 1));
+
+            if (key.empty()) {
+                std::cerr << "警告：在[llm_params]节中发现空键，行 " << line_number << ": " << line << std::endl;
+                continue;
+            }
+
+            // 处理值为空的情况（允许空值）
+            llm_params[key] = value;
+        }
+    }
+
+    file.close();
+
+    // 输出统计信息
+    size_t element_count = llm_params.size();
+    std::cout << "配置文件 '" << cfg_file_path << "' 中 [llm_params] 节包含 " << element_count << " 个配置项" << std::endl;
+
+    // 打印所有读取到的配置项
+    for (const auto& pair : llm_params) {
+        std::cout << "配置项: " << pair.first << " = " << pair.second << std::endl;
+    }
+
+    // 如果没有读取到配置项，给出可能的原因
+    if (element_count == 0) {
+        std::cout << "可能的原因：" << std::endl;
+        std::cout << "1. 配置文件中没有 [llm_params] 节" << std::endl;
+        std::cout << "2. [llm_params] 节中没有有效的键值对" << std::endl;
+        std::cout << "3. 节名称大小写不匹配（应为 llm_params）" << std::endl;
+    }
+}
 
 struct SysCfg {
     std::string hi_num_parallel; // 服务启动的并发数,默认值1
     std::string use_ce_flag;     // 开启中英文混合输出的检查标志
     std::string hi_modelpath;    // 模型路径
     bool houmo_sampling_cfg;
+    bool open_console_window;
 };
 
 bool fileExists(const std::string& path) {
      std::ifstream file(path);
     return file.good();  // 若文件打开成功，返回true
 }
+
+#ifdef _WIN32
+bool IsLoadedFromConsole() {
+    // 如果返回非NULL，表示调用进程有控制台窗口
+    return GetConsoleWindow() != NULL;
+}
+
+// 获取LastError的详细信息
+std::wstring GetLastErrorAsString() {
+    DWORD errorCode = GetLastError();
+    if (errorCode == 0) return L"No error";
+
+    LPWSTR messageBuffer = nullptr;
+    size_t size = FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, errorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPWSTR)&messageBuffer, 0, NULL
+    );
+
+    std::wstring message(messageBuffer, size);
+    LocalFree(messageBuffer);
+    return message;
+}
+
+// 导出函数，用于创建并打开新控制台窗口
+extern "C" __declspec(dllexport) bool CreateNewConsole() {
+
+    // 检查是否已有控制台
+    if (IsLoadedFromConsole()) {
+        std::wcout << "错误: 进程已有控制台，无法分配新的控制台窗口!" << std::endl;
+        return false;
+    }
+    bool freeconsolestatus=FreeConsole();
+    wchar_t buffer[256]={0};
+    swprintf_s(buffer, L"FreeConsole return %d\r\n", freeconsolestatus);
+    OutputDebugStringW(buffer);
+
+    // 尝试分配新的控制台窗口
+    if (!AllocConsole()) {
+        DWORD error = GetLastError();
+        std::wcout << "AllocConsole 失败，错误码: " << error << ", 详情: "
+                  << GetLastErrorAsString() << std::endl;
+        OutputDebugStringW((L"AllocConsole Failed with reason:"+GetLastErrorAsString()).c_str());
+        return false;
+    } else{// 分配新的控制台窗口
+        // 设置控制台标题
+        SetConsoleTitleA("HoumoLLM DLL Debug Console");
+
+        // 重定向标准输入输出流
+        FILE* fp;
+
+        // 重定向标准输出
+        freopen_s(&fp, "CONOUT$", "w", stdout);
+        std::cout.clear();
+
+        // 重定向标准错误
+        freopen_s(&fp, "CONOUT$", "w", stderr);
+        std::cerr.clear();
+
+        // 重定向标准输入
+        freopen_s(&fp, "CONIN$", "r", stdin);
+        std::cin.clear();
+
+        // 设置宽字符模式
+        //_setmode(_fileno(stdout), _O_U16TEXT);
+        //_setmode(_fileno(stderr), _O_U16TEXT);
+        //_setmode(_fileno(stdin), _O_U16TEXT);
+
+        // 输出测试信息
+        // system("chcp 936");
+        // std::wcout.imbue(std::locale("chs"));
+        SetConsoleOutputCP(CP_UTF8);
+        std::cout << "新控制台窗口已创建!" << std::endl;
+        std::cout << "DLL 控制台输出在此窗口" << std::endl;
+        printf("Hello New window\r\n");
+        return true;
+    }
+}
+
+// 导出函数，用于关闭控制台窗口
+extern "C" __declspec(dllexport) void CloseConsole() {
+    FreeConsole();
+}
+
+#endif
 
 // 使用静态变量和函数局部静态变量控制初始化顺序
 class ConfigManager {
@@ -113,6 +484,7 @@ private:
            result.use_ce_flag ="0";
            result.hi_modelpath = "./models/DeepSeek-R1-Distill-Qwen-7B-1Batch/4core_8k";
            result.houmo_sampling_cfg =false;
+           result.open_console_window =true;
         } else  {
         const INIReader config_reader(cfgfile_path);
         if (config_reader.ParseError() < 0) {
@@ -125,6 +497,8 @@ private:
         result.hi_modelpath = config_reader.Get("service", "HICPP_MODEL_PATH",
                                               "/opt/hicpp/models/DeepSeek-R1-Distill-Qwen-7B-1Batch/4core_8k");
         result.houmo_sampling_cfg=config_reader.GetBoolean("server", "houmo_sampling", true);
+        result.open_console_window=config_reader.GetBoolean("log", "open_console_window", true);
+        read_llm_params(cfgfile_path,llm_params_from_cfg);
         }
 
         // 复制字符串到独立内存，避免悬空指针
@@ -135,15 +509,24 @@ private:
         use_ce_flag = result.use_ce_flag;
         hi_modelpath = (char *)result.hi_modelpath.c_str();
         houmo_sampling_cfg=result.houmo_sampling_cfg;
+        open_console_flag=result.open_console_window;
 
         std::cout << "After parse: " << cfgfile_path << " | or default value:"  <<std::endl;
         std::cout << "houmo_sampling_cfg: " << houmo_sampling_cfg << std::endl;
         std::cout << "use_ce_flag(USE_CEnglishMixedProcessor): " << use_ce_flag << std::endl;
         std::cout << "hi_num_parallel: " << hi_num_parallel << std::endl;
         std::cout << "hi_modelpath: " << hi_modelpath << std::endl;
+        std::cout << "open_console_flag: " << open_console_flag << std::endl;
         std::cout << "=========ParseCfgDone==========" << std::endl;
 
         initialized = true;
+
+        if(open_console_flag) {
+          #ifdef _WIN32
+            CreateNewConsole();
+          #else  //reserve for linux os
+          #endif
+        }
     }
 
 public:
@@ -622,6 +1005,9 @@ struct slot_params {
   std::string oaicompat_model;
   std::string oaicompat_cmpl_id;
   common_chat_format oaicompat_chat_format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+  #if ENABLE_HOUMO_LLAMACPP
+  common_chat_syntax           oaicompat_chat_syntax;
+  #endif
 
   json to_json() const {
     std::vector<std::string> samplers;
@@ -637,9 +1023,65 @@ struct slot_params {
 
     auto grammar_triggers = json::array();
     for (const auto &trigger : sampling.grammar_triggers) {
-      grammar_triggers.push_back(trigger.to_json<json>());
+      #if ENABLE_HOUMO_LLAMACPP
+        server_grammar_trigger ct(trigger);
+        grammar_triggers.push_back(ct.to_json());
+      #else
+        grammar_triggers.push_back(trigger.to_json<json>());
+      #endif
     }
-
+    #if ENABLE_HOUMO_LLAMACPP
+    return json {
+            {"n_predict",                 n_predict},     // Server configured n_predict
+            {"seed",                      sampling.seed},
+            {"temperature",               sampling.temp},
+            {"dynatemp_range",            sampling.dynatemp_range},
+            {"dynatemp_exponent",         sampling.dynatemp_exponent},
+            {"top_k",                     sampling.top_k},
+            {"top_p",                     sampling.top_p},
+            {"min_p",                     sampling.min_p},
+            {"top_n_sigma",               sampling.top_n_sigma},
+            {"xtc_probability",           sampling.xtc_probability},
+            {"xtc_threshold",             sampling.xtc_threshold},
+            {"typical_p",                 sampling.typ_p},
+            {"repeat_last_n",             sampling.penalty_last_n},
+            {"repeat_penalty",            sampling.penalty_repeat},
+            {"presence_penalty",          sampling.penalty_present},
+            {"frequency_penalty",         sampling.penalty_freq},
+            {"dry_multiplier",            sampling.dry_multiplier},
+            {"dry_base",                  sampling.dry_base},
+            {"dry_allowed_length",        sampling.dry_allowed_length},
+            {"dry_penalty_last_n",        sampling.dry_penalty_last_n},
+            {"dry_sequence_breakers",     sampling.dry_sequence_breakers},
+            {"mirostat",                  sampling.mirostat},
+            {"mirostat_tau",              sampling.mirostat_tau},
+            {"mirostat_eta",              sampling.mirostat_eta},
+            {"stop",                      antiprompt},
+            {"max_tokens",                n_predict}, // User configured n_predict
+            {"n_keep",                    n_keep},
+            {"n_discard",                 n_discard},
+            {"ignore_eos",                sampling.ignore_eos},
+            {"stream",                    stream},
+            {"logit_bias",                format_logit_bias(sampling.logit_bias)},
+            {"n_probs",                   sampling.n_probs},
+            {"min_keep",                  sampling.min_keep},
+            {"grammar",                   sampling.grammar},
+            {"grammar_lazy",              sampling.grammar_lazy},
+            {"grammar_triggers",          grammar_triggers},
+            {"preserved_tokens",          sampling.preserved_tokens},
+            {"chat_format",               common_chat_format_name(oaicompat_chat_syntax.format)},
+            {"reasoning_format",          common_reasoning_format_name(oaicompat_chat_syntax.reasoning_format)},
+            {"reasoning_in_content",      oaicompat_chat_syntax.reasoning_in_content},
+            {"thinking_forced_open",      oaicompat_chat_syntax.thinking_forced_open},
+            {"samplers",                  samplers},
+            {"speculative.n_max",         speculative.n_max},
+            {"speculative.n_min",         speculative.n_min},
+            {"speculative.p_min",         speculative.p_min},
+            {"timings_per_token",         timings_per_token},
+            {"post_sampling_probs",       post_sampling_probs},
+            {"lora",                      lora},
+        };
+    #else
     return json{
         {"n_predict", n_predict},  // Server configured n_predict
         {"seed", sampling.seed},
@@ -686,6 +1128,7 @@ struct slot_params {
         {"post_sampling_probs", post_sampling_probs},
         {"lora", lora},
     };
+    #endif
   }
 };
 
@@ -1196,7 +1639,21 @@ struct server_task {
       SRV_DBG("Grammar lazy: %s\n",
               params.sampling.grammar_lazy ? "true" : "false");
     }
-
+    #if ENABLE_HOUMO_LLAMACPP
+    {
+            auto it = data.find("chat_format");
+            if (it != data.end()) {
+                params.oaicompat_chat_syntax.format = static_cast<common_chat_format>(it->get<int>());
+                SRV_INF("Chat format: %s\n", common_chat_format_name(params.oaicompat_chat_syntax.format));
+            } else {
+                params.oaicompat_chat_syntax.format = defaults.oaicompat_chat_syntax.format;
+            }
+            params.oaicompat_chat_syntax.reasoning_format = params_base.reasoning_format;
+            params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (params_base.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
+            params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
+            params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
+    }
+    #else
     {
       auto it = data.find("chat_format");
       if (it != data.end()) {
@@ -1208,6 +1665,7 @@ struct server_task {
         params.oaicompat_chat_format = defaults.oaicompat_chat_format;
       }
     }
+    #endif
 
     {
       const auto preserved_tokens = data.find("preserved_tokens");
@@ -1230,6 +1688,37 @@ struct server_task {
       const auto grammar_triggers = data.find("grammar_triggers");
       if (grammar_triggers != data.end()) {
         for (const auto &t : *grammar_triggers) {
+          #if ENABLE_HOUMO_LLAMACPP
+            server_grammar_trigger ct(t);
+            if (ct.value.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
+                const auto & word = ct.value.value;
+                auto ids = common_tokenize(vocab, word, /* add_special= */ false, /* parse_special= */ true);
+                if (ids.size() == 1) {
+                    auto token = ids[0];
+                    if (std::find(params.sampling.preserved_tokens.begin(), params.sampling.preserved_tokens.end(), (llama_token) token) == params.sampling.preserved_tokens.end()) {
+                        throw std::runtime_error("Grammar trigger word should be marked as preserved token: " + word);
+                    }
+                    SRV_DBG("Grammar trigger token: %d (`%s`)\n", token, word.c_str());
+                    common_grammar_trigger trigger;
+                    trigger.type = COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN;
+                    trigger.value = word;
+                    trigger.token = token;
+                    params.sampling.grammar_triggers.push_back(std::move(trigger));
+                } else {
+                    SRV_DBG("Grammar trigger word: `%s`\n", word.c_str());
+                    params.sampling.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, word});
+                }
+            } else {
+                if (ct.value.type == COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN) {
+                    SRV_DBG("Grammar trigger pattern: `%s`\n", ct.value.value.c_str());
+                } else if (ct.value.type == COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL) {
+                    SRV_DBG("Grammar trigger pattern full: `%s`\n", ct.value.value.c_str());
+                } else {
+                    throw std::runtime_error("Unknown grammar trigger type");
+                }
+                params.sampling.grammar_triggers.emplace_back(std::move(ct.value));
+            }
+          #else
           auto ct = common_grammar_trigger::from_json(t);
           if (ct.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
             const auto &word = ct.value;
@@ -1261,6 +1750,7 @@ struct server_task {
           } else {
             params.sampling.grammar_triggers.push_back(ct);
           }
+          #endif
         }
       }
       if (params.sampling.grammar_lazy &&
@@ -1500,6 +1990,11 @@ struct server_task_result_cmpl_final : server_task_result {
   std::string oaicompat_model;
   std::string oaicompat_cmpl_id;
   common_chat_format oaicompat_chat_format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+  #if ENABLE_HOUMO_LLAMACPP
+  common_chat_msg    oaicompat_msg;
+  std::vector<common_chat_msg_diff> oaicompat_msg_diffs;
+  #endif
+
 
   virtual int get_index() override { return index; }
 
@@ -1593,12 +2088,74 @@ struct server_task_result_cmpl_final : server_task_result {
     return res;
   }
 
+  #if 0//ENABLE_HOUMO_LLAMACPP
+  json to_json_oaicompat_chat() {
+      std::string finish_reason = "length";
+      common_chat_msg msg;
+      if (!oaicompat_msg.empty()) {
+          msg = oaicompat_msg;
+      } else {
+          msg.role = "assistant";
+          msg.content = content;
+      }
+      if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+          finish_reason = msg.tool_calls.empty() ? "stop" : "tool_calls";
+      }
+
+      json choice {
+          {"finish_reason", finish_reason},
+          {"index", 0},
+          {"message", msg.to_json_oaicompat<json>()},
+      };
+
+      if (!stream && probs_output.size() > 0) {
+          choice["logprobs"] = json{
+              {"content", completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs)},
+          };
+      }
+
+      std::time_t t = std::time(0);
+
+      json res = json {
+          {"choices",            json::array({choice})},
+          {"created",            t},
+          {"model",              oaicompat_model},
+          {"system_fingerprint", build_info},
+          {"object",             "chat.completion"},
+          {"usage", json {
+              {"completion_tokens", n_decoded},
+              {"prompt_tokens",     n_prompt_tokens},
+              {"total_tokens",      n_decoded + n_prompt_tokens}
+          }},
+          {"id", oaicompat_cmpl_id}
+      };
+
+      // extra fields for debugging purposes
+      if (verbose) {
+          res["__verbose"] = to_json_non_oaicompat();
+      }
+      if (timings.prompt_n >= 0) {
+          res.push_back({"timings", timings.to_json()});
+      }
+
+      return res;
+  }
+  #else
   json to_json_oaicompat_chat() {
     std::string finish_reason = "length";
     common_chat_msg msg;
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
       SRV_DBG("Parsing chat message: %s\n", content.c_str());
+      #if ENABLE_HOUMO_LLAMACPP
+      common_chat_syntax           oaicompat_chat_syntax;
+      oaicompat_chat_syntax.format=oaicompat_chat_format;
+      auto msg = common_chat_parse(
+        content,
+        /* is_partial= */ stop != STOP_TYPE_EOS,
+        oaicompat_chat_syntax);
+      #else
       msg = common_chat_parse(content, oaicompat_chat_format);
+      #endif
       finish_reason = msg.tool_calls.empty() ? "stop" : "tool_calls";
     } else {
       msg.content = content;
@@ -1672,6 +2229,8 @@ struct server_task_result_cmpl_final : server_task_result {
 
     return res;
   }
+  #endif
+
 
   json to_json_oaicompat_chat_stream() {
     std::time_t t = std::time(0);
@@ -2771,7 +3330,7 @@ struct server_context {
   int instance_no = 0; // Windows下多卡多服务实例场景
   int device_id = 0;   // Windows下依赖instance_no, Linux下依赖环境变量
 
-  common_params *params;
+  common_params *params=nullptr;
   std::thread ctx_t;
   std::thread srv_t;
   httplib::Server *svr;
@@ -2819,6 +3378,11 @@ struct server_context {
   llama_model *model = nullptr;
   llama_context *ctx = nullptr;
 
+  #if ENABLE_HOUMO_LLAMACPP
+  // multimodal
+  mtmd_context * mctx = nullptr;
+  #endif
+
   const llama_vocab *vocab = nullptr;
 
   llama_model *model_dft = nullptr;
@@ -2846,6 +3410,9 @@ struct server_context {
   float slot_prompt_similarity = 0.0f;
 
   common_chat_templates_ptr chat_templates;
+  #if ENABLE_HOUMO_LLAMACPP
+  oaicompat_parser_options  oai_parser_opt;
+  #endif
 
   // server_context() {}
   //
@@ -3003,6 +3570,121 @@ struct server_context {
     }
   }
 
+  #if ENABLE_HOUMO_LLAMACPP
+  bool load_model(const common_params & params, std::string model_path) {
+    GetChipType();
+    SRV_INF("loading model '%s'\n", params.model.path.c_str());
+
+    params_base = params;
+
+    llama_init = common_init_from_params(params_base);
+
+    model = llama_init.model.get();
+    ctx   = llama_init.context.get();
+
+    if (model == nullptr) {
+        SRV_ERR("failed to load model, '%s'\n", params_base.model.path.c_str());
+        return false;
+    }
+
+    vocab = llama_model_get_vocab(model);
+
+    n_ctx = llama_n_ctx(ctx);
+
+    add_bos_token = llama_vocab_get_add_bos(vocab);
+    has_eos_token = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
+
+    if (!params_base.speculative.model.path.empty() || !params_base.speculative.model.hf_repo.empty()) {
+        SRV_INF("loading draft model '%s'\n", params_base.speculative.model.path.c_str());
+
+        auto params_dft = params_base;
+
+        params_dft.devices      = params_base.speculative.devices;
+        params_dft.model        = params_base.speculative.model;
+        params_dft.n_ctx        = params_base.speculative.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_base.speculative.n_ctx;
+        params_dft.n_gpu_layers = params_base.speculative.n_gpu_layers;
+        params_dft.n_parallel   = 1;
+        params_dft.cache_type_k = params_base.speculative.cache_type_k;
+        params_dft.cache_type_v = params_base.speculative.cache_type_v;
+
+        llama_init_dft = common_init_from_params(params_dft);
+
+        model_dft = llama_init_dft.model.get();
+
+        if (model_dft == nullptr) {
+            SRV_ERR("failed to load draft model, '%s'\n", params_base.speculative.model.path.c_str());
+            return false;
+        }
+
+        if (!common_speculative_are_compatible(ctx, llama_init_dft.context.get())) {
+            SRV_ERR("the draft model '%s' is not compatible with the target model '%s'\n", params_base.speculative.model.path.c_str(), params_base.model.path.c_str());
+
+            return false;
+        }
+
+        const int n_ctx_dft = llama_n_ctx(llama_init_dft.context.get());
+
+        cparams_dft = common_context_params_to_llama(params_dft);
+        cparams_dft.n_batch = n_ctx_dft;
+
+        // the context is not needed - we will create one for each slot
+        llama_init_dft.context.reset();
+    }
+
+    chat_templates = common_chat_templates_init(model, params_base.chat_template);
+    try {
+        common_chat_format_example(chat_templates.get(), params.use_jinja);
+    } catch (const std::exception & e) {
+        SRV_WRN("%s: Chat template parsing error: %s\n", __func__, e.what());
+        SRV_WRN("%s: The chat template that comes with this model is not yet supported, falling back to chatml. This may cause the model to output suboptimal responses\n", __func__);
+        chat_templates = common_chat_templates_init(model, "chatml");
+    }
+
+    std::string & mmproj_path = params_base.mmproj.path;
+    if (!mmproj_path.empty()) {
+        mtmd_context_params mparams = mtmd_context_params_default();
+        mparams.use_gpu       = params_base.mmproj_use_gpu;
+        mparams.print_timings = false;
+        mparams.n_threads     = params_base.cpuparams.n_threads;
+        mparams.verbosity     = params_base.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
+        mctx = mtmd_init_from_file(mmproj_path.c_str(), model, mparams);
+        if (mctx == nullptr) {
+            SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
+            return false;
+        }
+        SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
+
+        if (params_base.ctx_shift) {
+            params_base.ctx_shift = false;
+            SRV_WRN("%s\n", "ctx_shift is not supported by multimodal, it will be disabled");
+        }
+
+        if (params_base.n_cache_reuse) {
+            params_base.n_cache_reuse = 0;
+            SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
+        }
+
+        if (!params_base.speculative.model.path.empty()) {
+            SRV_ERR("%s\n", "err: speculative decode is not supported by multimodal");
+            return false;
+        }
+    }
+
+    if (!llama_memory_can_shift(llama_get_memory(ctx))) {
+        if (params_base.ctx_shift) {
+            params_base.ctx_shift = false;
+            SRV_WRN("%s\n", "ctx_shift is not supported by this context, it will be disabled");
+        }
+
+        if (params_base.n_cache_reuse) {
+            params_base.n_cache_reuse = 0;
+            SRV_WRN("%s\n", "cache_reuse is not supported by this context, it will be disabled");
+        }
+    }
+
+    return true;
+  }
+  #else
   bool load_model(const common_params &params, std::string model_path) {
     GetChipType();
     SRV_INF("loading model '%s'\n", params.model.c_str());
@@ -3095,6 +3777,7 @@ struct server_context {
 
     return true;
   }
+  #endif
 
   void init_houmo_sampling(LogitsProcessorList &processors, ::params* p) {
     CEnglishMixedProcessor::find_chinese=false;
@@ -3366,12 +4049,14 @@ struct server_context {
               LOG_DBG("%s\r\n","set qwen3-8b 36blocks 4096");
               hmctx->nblocks=36;
               hmctx->model_name = "Qwen3-8B";
+              params->model_alias=hmctx->model_name;
             }
             else if((model_path.find("14b") != std::string::npos)||(model_path.find("14B") != std::string::npos)) {
               LOG_DBG("%s\r\n","set qwen3-14b 40blocks 5120");
               hmctx->nblocks=40;
               embed_shape=5120;
               hmctx->model_name = "Qwen3-14B";
+              params->model_alias=hmctx->model_name;
             }
 
         }else if(M50){
@@ -3383,6 +4068,7 @@ struct server_context {
               klayer_prefix="model_layers_";
               vlayer_prefix="model_layers_";
               hmctx->model_name = "Qwen3-8B";
+              params->model_alias=hmctx->model_name;
             }
             else if((model_path.find("14b") != std::string::npos)||(model_path.find("14B") != std::string::npos)) {
               hmctx->nblocks=40;
@@ -3393,6 +4079,7 @@ struct server_context {
               vlayer_prefix="past_value_cache_";
               embed_shape=5120;
               hmctx->model_name = "Qwen3-14B";
+              params->model_alias=hmctx->model_name;
             }
 
         }
@@ -3904,6 +4591,85 @@ struct server_context {
     hm_sampling_processors.print_processors_param();
   }
 
+  #if ENABLE_HOUMO_LLAMACPP
+  void init_hm_llama(std::string model_path) {
+    model_status = 0;
+    hm_model_scale_type=MODEL_7B;
+    params->model_alias=model_path;
+
+    const int32_t n_ctx_slot = n_ctx / params_base.n_parallel;
+
+    SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);
+
+    for (int i = 0; i < params_base.n_parallel; i++) {
+      server_slot slot;
+
+      slot.id = i;
+      slot.ctx = ctx;
+      slot.n_ctx = n_ctx_slot;
+      slot.n_predict = params_base.n_predict;
+
+      if (model_dft) {
+        slot.batch_spec =
+            llama_batch_init(params_base.speculative.n_max + 1, 0, 1);
+
+        slot.ctx_dft = llama_init_from_model(model_dft, cparams_dft);
+        if (slot.ctx_dft == nullptr) {
+          SRV_ERR("%s", "failed to create draft context\n");
+          return;
+        }
+
+        slot.spec = common_speculative_init(slot.ctx_dft);
+        if (slot.spec == nullptr) {
+          SRV_ERR("%s", "failed to create speculator\n");
+          return;
+        }
+      }
+
+      SLT_INF(slot, "new slot n_ctx_slot = %d\n", slot.n_ctx);
+
+      slot.params.sampling = params_base.sampling;
+
+      slot.callback_on_release = [this](int) {
+        queue_tasks.pop_deferred_task();
+      };
+
+      slot.reset();
+
+      slots.push_back(slot);
+    }
+
+    default_generation_settings_for_props = slots[0].to_json();
+
+    // the update_slots() logic will always submit a maximum of n_batch or
+    // n_parallel tokens note that n_batch can be > n_ctx (e.g. for non-causal
+    // attention models such as BERT where the KV cache is not used)
+    {
+      const int32_t n_batch = llama_n_batch(ctx);
+
+      // only a single seq_id per token is needed
+      batch = llama_batch_init(std::max(n_batch, params_base.n_parallel), 0, 1);
+    }
+
+    metrics.init();
+    model_status = 1;
+    hm_sampling_processors.print_processors_param();
+
+    //TODO szj check add this to init qwen3 8B or 14B
+    oai_parser_opt = {
+            /* use_jinja             */ params_base.use_jinja,
+            /* prefill_assistant     */ params_base.prefill_assistant,
+            /* reasoning_format      */ params_base.reasoning_format,
+            /* chat_template_kwargs  */ params_base.default_template_kwargs,
+            /* common_chat_templates */ chat_templates.get(),
+            /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
+            /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
+            /* enable_thinking       */ params_base.reasoning_budget != 0,
+        };
+  }
+  #endif
+
+
   void init(std::string model_path) {
     model_status = 0;
     hm_model_scale_type=MODEL_7B;
@@ -4276,6 +5042,20 @@ struct server_context {
     metrics.init();
     model_status = 1;
     hm_sampling_processors.print_processors_param();
+
+    #if ENABLE_HOUMO_LLAMACPP
+    //TODO szj check add this to init qwen3 8B or 14B
+    oai_parser_opt = {
+            /* use_jinja             */ params_base.use_jinja,
+            /* prefill_assistant     */ params_base.prefill_assistant,
+            /* reasoning_format      */ params_base.reasoning_format,
+            /* chat_template_kwargs  */ params_base.default_template_kwargs,
+            /* common_chat_templates */ chat_templates.get(),
+            /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
+            /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
+            /* enable_thinking       */ params_base.reasoning_budget != 0,
+        };
+    #endif
   }
 
   template <typename T>
@@ -4292,6 +5072,7 @@ struct server_context {
 
   void init_by_buffer(HANDLE h, uint8_t **buffers, size_t *bufferSize,
                       size_t buffers_count, hardware_info hwinfo) {
+    #if ENABLE_HOUMO_LLAMACPP==0
     std::cout << "++enter 1: buffers_count is:" << buffers_count << std::endl;
     if (0 == buffers_count) {
       std::cout << "++enter 2 buffers_count is invalid:" << std::endl;
@@ -4584,7 +5365,9 @@ struct server_context {
                  current_length_input_tensor.numel());
 
     hmctx->decode_model.SetInput("current_length", decode_current_length);
-
+    #else
+    SRV_INF("%s\r\n","load modelbuffer from houmollamacpp");
+    #endif
     const int32_t n_ctx_slot = n_ctx / params_base.n_parallel;
 
     SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);
@@ -5603,10 +6386,10 @@ struct server_context {
     printf("next stop: %d\n", stop);
     SRV_INF("confirm: %d\n", confirm);
     if (stop && !confirm) {
-      SRV_WRN("%s\n", "stop and not confirm, ignore it.");
+      SRV_WRN("%s\n", "stop and not confirm, ignore it--return 1 E_BUFFER_NOT_ENOUGH.");
       generate_status = 0;
       // result_str = "Stopped";
-      return -1;
+      return 1;
     }
 
     if (task_ids.size() == 0 && !confirm) {
@@ -8507,6 +9290,11 @@ struct server_context {
       };
 
       int ret = 0;
+
+      #if ENABLE_HOUMO_LLAMACPP
+      SRV_DBG("%s\r\n","++call hm llama_decode");
+      ret = llama_decode(ctx, batch_view);
+      #else
       switch(hm_model_scale_type) {
         case MODEL_14B:
              ret=houmo_decode_14B(batch);
@@ -8523,6 +9311,7 @@ struct server_context {
         default:
              SRV_ERR("%s\r\n","hm_model_scale_type not supported,please check!");
       }
+      #endif
       metrics.on_decoded(slots);
 
       if (ret != 0) {
@@ -8590,8 +9379,24 @@ struct server_context {
         }
 
         const int tok_idx = slot.i_batch - i;
-
+        #if ENABLE_HOUMO_LLAMACPP
+        llama_token id = common_sampler_sample(slot.smpl, ctx, tok_idx);
+        if(id!=tok_idx) {
+           auto houmo_response = common_token_to_piece(ctx, id);
+           auto argmax_response= common_token_to_piece(ctx, tok_idx);
+           if(0)//(!containsChinese(houmo_response))
+           {
+            SRV_DBG("##HMLLama sample changeback: gen idx from %d backto %d , related string from %s backto %s\r\n",
+                 id,tok_idx,houmo_response.c_str(),argmax_response.c_str());
+            id=tok_idx;
+           } else {
+           SRV_DBG("##HMLLama sample change gen idx from %d to %d , related string from %s to %s\r\n",
+                 tok_idx,id,argmax_response.c_str(),houmo_response.c_str());
+           }
+        }
+        #else
         llama_token id = next_ids[slot.id];
+        #endif
         SRV_DBG("++call common_sampler_accept 99 slots size is:%d  slot.i_batch=%d i=%d || tok_idx=%d  token_id=%d  slot.id=%d\r\n",slots.size(),slot.i_batch,i,tok_idx, id,slot.id);
         slot.i_batch = -1;
 
@@ -8984,8 +9789,11 @@ int init_params(std::string model_path, const INIReader& config_reader, common_p
     if (!p_params) {
         p_params = new common_params();
     }
-
+    #if ENABLE_HOUMO_LLAMACPP
+    p_params->model.path= tok_model_path;
+    #else
     p_params->model = tok_model_path;
+    #endif
     p_params->n_parallel = 1;
     p_params->n_ctx = ctx_size;
     p_params->ctx_shift = false;
@@ -9121,6 +9929,14 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
       printf("NO HICPP_NUM_PARALLEL cfg Found use default:%s\r\n",hi_num_parallel);
     }
     if (!p_params) {
+        #if ENABLE_HOUMO_LLAMACPP
+        std::string tok_model_path=model_path;
+        LOG_INF("##Loading HiModel file:%s\r\n",tok_model_path.c_str());
+        if (!fileExists(tok_model_path)) {
+          LOG_ERR("Error:CreateInstance HiModel file:%s  not exists,Please check sys.cfg\r\n",tok_model_path);
+          exit(-1);
+        }
+        #else
         model_path = model_path + "/";
 
         std::string tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
@@ -9129,11 +9945,17 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
         } else if (model_path.find("qwen3") != std::string::npos) {
             tok_model_path = model_path + "Qwen3-0.6B-Q8_0.gguf";
         }
+        #endif
 
         std::string ctx_size = "4096";
         if (model_path.find("8k") != std::string::npos || model_path.find("8K") != std::string::npos) {
             ctx_size = "8192";
         }
+        //TODO only for test must delete
+        // #if ENABLE_HOUMO_LLAMACPP
+        // tok_model_path="/data/home/zhenjiang/llama_cpp_houmo/llama.cpp/models/qwen3-8b-1batch/4core_8k/4core_8k-10B-4core_8k-F16.gguf";
+        // LOG_INF("###Attention: Test mode loading fixed himodel:%s \r\n",tok_model_path.c_str());
+        // #endif
 
         std::time_t t = std::time(nullptr);
         std::string log_file = string_format("houmo-llm-%d.log", t);
@@ -9157,7 +9979,17 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
                         (char*)log_file.c_str(),
                         NULL};
 
-        char** p = argv;
+        // 合并数组并去重
+        char** merged_argv = merge_argv_automatic(global_argv, argv);
+
+        // 打印合并结果
+        std::cout << "##合并去重后的参数列表：" << std::endl;
+        int merged_argc = get_argv_length(merged_argv);
+        for (int i = 0; i < merged_argc; i++) {
+            std::cout << "参数 " << i << ": " << merged_argv[i] << std::endl;
+        }
+
+        char** p = merged_argv;
         int argc = 0;
         while (*p++ != NULL)
         {
@@ -9176,7 +10008,17 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
         p_params->sampling.penalty_repeat = 1.05;
         p_params->sampling.penalty_last_n = 60;
 
-        if (!common_params_parse(argc, argv, *p_params, LLAMA_EXAMPLE_SERVER)) {
+        // 更新合并后的数组中的值-以配置文件中的值为最终参数
+        update_merged_argv_values(merged_argv, llm_params_from_cfg);
+
+        // 打印更新后的结果
+        std::cout << "更新后的[最终]参数列表：" << std::endl;
+        merged_argc = get_argv_length(merged_argv);
+        for (int i = 0; i < merged_argc; i++) {
+            std::cout << "参数 " << i << ": " << merged_argv[i] << std::endl;
+        }
+
+        if (!common_params_parse(argc, merged_argv, *p_params, LLAMA_EXAMPLE_SERVER)) {
             return nullptr;
         }
 
@@ -9681,6 +10523,32 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
     }
   };
 
+  #if ENABLE_HOUMO_LLAMACPP
+  const auto handle_props = [&res_ok](const httplib::Request &, httplib::Response & res) {
+    // this endpoint is publicly available, please only return what is safe to be exposed
+    json data = {
+        { "default_generation_settings", ctx_server->default_generation_settings_for_props },
+        { "total_slots",                 ctx_server->params_base.n_parallel },
+        { "model_path",                  ctx_server->params_base.model.path },
+        { "modalities",                  json{
+            {"vision", ctx_server->oai_parser_opt.allow_image},
+            {"audio",  ctx_server->oai_parser_opt.allow_audio},
+        } },
+        { "chat_template",               common_chat_templates_source(ctx_server->chat_templates.get()) },
+        { "bos_token",                   common_token_to_piece(ctx_server->ctx, llama_vocab_bos(ctx_server->vocab), /* special= */ true)},
+        { "eos_token",                   common_token_to_piece(ctx_server->ctx, llama_vocab_eos(ctx_server->vocab), /* special= */ true)},
+        { "build_info",                  build_info },
+    };
+    if (ctx_server->params_base.use_jinja) {
+        auto tool_use_src = common_chat_templates_source(ctx_server->chat_templates.get(), "tool_use");
+        if (tool_use_src) {
+            data["chat_template_tool_use"] = tool_use_src;
+        }
+    }
+
+    res_ok(res, data);
+    };
+  #else
   const auto handle_props = [&res_ok](const httplib::Request &,
                                       httplib::Response &res) {
     // this endpoint is publicly available, please only return what is safe to
@@ -9709,6 +10577,7 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
 
     res_ok(res, data);
   };
+  #endif
 
   const auto handle_props_change = [&res_error, &res_ok](
                                        const httplib::Request &req,
@@ -10314,6 +11183,97 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
     res_ok(res, root);
   };
 
+  #if ENABLE_HOUMO_LLAMACPP
+  const auto handle_rerank = [&res_error, &res_ok](const httplib::Request & req, httplib::Response & res) {
+        if (!ctx_server->params_base.embedding || ctx_server->params_base.pooling_type != LLAMA_POOLING_TYPE_RANK) {
+            res_error(res, format_error_response("This server does not support reranking. Start it with `--reranking`", ERROR_TYPE_NOT_SUPPORTED));
+            return;
+        }
+
+        const json body = json::parse(req.body);
+
+        // TODO: implement
+        //int top_n = 1;
+        //if (body.count("top_n") != 1) {
+        //    top_n = body.at("top_n");
+        //} else {
+        //    res_error(res, format_error_response("\"top_n\" must be provided", ERROR_TYPE_INVALID_REQUEST));
+        //    return;
+        //}
+
+        // if true, use TEI API format, otherwise use Jina API format
+        // Jina: https://jina.ai/reranker/
+        // TEI: https://huggingface.github.io/text-embeddings-inference/#/Text%20Embeddings%20Inference/rerank
+        bool is_tei_format = body.contains("texts");
+
+        json query;
+        if (body.count("query") == 1) {
+            query = body.at("query");
+            if (!query.is_string()) {
+                res_error(res, format_error_response("\"query\" must be a string", ERROR_TYPE_INVALID_REQUEST));
+                return;
+            }
+        } else {
+            res_error(res, format_error_response("\"query\" must be provided", ERROR_TYPE_INVALID_REQUEST));
+            return;
+        }
+
+        std::vector<std::string> documents = json_value(body, "documents",
+                                             json_value(body, "texts", std::vector<std::string>()));
+        if (documents.empty()) {
+            res_error(res, format_error_response("\"documents\" must be a non-empty string array", ERROR_TYPE_INVALID_REQUEST));
+            return;
+        }
+
+        llama_tokens tokenized_query = tokenize_input_prompts(ctx_server->vocab, query, /* add_special */ false, true)[0];
+
+        // create and queue the task
+        json responses = json::array();
+        bool error = false;
+        std::unordered_set<int> task_ids;
+        {
+            std::vector<server_task> tasks;
+            auto tokenized_docs = tokenize_input_prompts(ctx_server->vocab, documents, /* add_special */ false, true);
+            tasks.reserve(tokenized_docs.size());
+            for (size_t i = 0; i < tokenized_docs.size(); i++) {
+                auto tmp = format_rerank(ctx_server->vocab, tokenized_query, tokenized_docs[i]);
+                server_task task   = server_task(SERVER_TASK_TYPE_RERANK);
+                task.id            = ctx_server->queue_tasks.get_new_id();
+                task.index         = i;
+                task.prompt_tokens = format_rerank(ctx_server->vocab, tokenized_query,
+                                           tokenized_docs[i]);//server_tokens(tmp, ctx_server->mctx != nullptr);
+                tasks.push_back(std::move(task));
+            }
+
+            task_ids = server_task::get_list_id(tasks);
+            ctx_server->queue_results.add_waiting_tasks(tasks);
+            ctx_server->queue_tasks.post(tasks);
+        }
+
+        ctx_server->receive_multi_results(task_ids, [&](std::vector<server_task_result_ptr> & results) {
+            for (auto & res : results) {
+                GGML_ASSERT(dynamic_cast<server_task_result_rerank*>(res.get()) != nullptr);
+                responses.push_back(res->to_json());
+            }
+        }, [&](const json & error_data) {
+            res_error(res, error_data);
+            error = true;
+        }, req.is_connection_closed);
+
+        if (error) {
+            return;
+        }
+
+        // write JSON response
+        json root = format_response_rerank(
+            body,
+            responses,
+            is_tei_format,
+            documents);
+
+        res_ok(res, root);
+    };
+  #else
   const auto handle_rerank = [&res_error, &res_ok](const httplib::Request &req,
                                                    httplib::Response &res) {
     if (!ctx_server->params_base.reranking ||
@@ -10411,6 +11371,7 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
         format_response_rerank(body, responses, is_tei_format, documents);
     res_ok(res, root);
   };
+  #endif
 
   const auto handle_lora_adapters_list = [&](const httplib::Request &,
                                              httplib::Response &res) {
@@ -10562,7 +11523,10 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
   }
 
   LOG_INF("Device Choice is : %d\n", ctx_server->device_id);
-
+  #if ENABLE_HOUMO_LLAMACPP
+  LOG_INF("##Call enable houmollamacpp init\r\n");
+  ctx_server->init_hm_llama(model_path);
+  #else
   if((model_path.find("qwen3") == std::string::npos) && ((model_path.find("14B") != std::string::npos) || (model_path.find("14b") != std::string::npos))) {
     ctx_server->init_14B(model_path);
   } else if (model_path.find("qwen3") != std::string::npos) {
@@ -10578,6 +11542,7 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
       ctx_server->init_batch(model_path);
     }
   }
+  #endif
 
   ctx_server->state.store(SERVER_STATE_READY);
 
@@ -10600,10 +11565,18 @@ HANDLE create_instance(std::string model_path, common_params* p_params = nullptr
   ctx_server->ctx_t =
       std::thread([&]() { ctx_server->queue_tasks.start_loop(); });
 
+  #if ENABLE_HOUMO_LLAMACPP
+  std::string req_body = string_format(
+      "{\"messages\":[{\"content\":\"你好！\",\"role\":\"user\"}],\"stream\":"
+      "false,\"model\": \"%s\", \"max_tokens\": 20}",
+      "fixed_hm_llama_qwen3_8b_szj");
+  #else
   std::string req_body = string_format(
       "{\"messages\":[{\"content\":\"你好！\",\"role\":\"user\"}],\"stream\":"
       "false,\"model\": \"%s\", \"max_tokens\": 20}",
       ctx_server->hmctx->model_name.c_str());
+  #endif
+  printf("++after make reqbody before call oaicompat_completion_params_parse\r\n");
   // std::string req_body =
   // "{\"messages\":[{\"content\":\"现在假设你是一名会议记录人员，需要你对一段会议记录的每一句话依次进行文本规整化，并直接返回规整化后的文本，回答的文本中不要增加任何额外内容。要求：1、规整化后的文本要忠于原始会议记录，保留会议记录中全部的有用信息；2、去除原文中明显的无意义表达；3、如果原文中存在明显的错别字，也需要进行改正。4、不要删除任何有用的信息。5、请用中文进行回答。6、不允许在回答中添加编造成分。7、如果原始会议记录中存在明显重复的表达，需用清晰通顺的方式改写。8、需注意原文中的数值不得擅自修改。原始会议记录为：“哦，喂啊。啊，你讲啊啊啊。”\",\"role\":\"user\"}],\"stream\":true,\"model\":\"Qwen2.5-32B-Instruct\"}";
   json data = oaicompat_completion_params_parse(
@@ -10727,9 +11700,21 @@ HANDLE completion_create_instance(void* param) {
     SRV_DBG("ctx_server->model: %p\n", ctx_server->model);
     SRV_DBG("ctx_server->ctx: %p\n", ctx_server->ctx);
     SRV_DBG("ctx_server->params: %p\n", ctx_server->params);
+
     ctx_server->model_path = getenv_or_default("HM_MODEL_PATH", "./models/hmm_deepseek_256_4096_4cores_20250317/");
     const auto p = static_cast<::params*>(param);
     ctx_server->init_houmo_sampling(ctx_server->hm_sampling_processors, p);
+    #if ENABLE_HOUMO_LLAMACPP
+    if(!ctx_server->params){
+      ctx_server->params=new common_params();
+      LOG_DBG("++%s \r\n","new common_params");
+    }
+    ctx_server->params->sampling.top_k = p->top_k ;
+    ctx_server->params->sampling.top_p = p->top_p ;
+    ctx_server->params->sampling.temp = p->temperature ;
+    ctx_server->params->sampling.penalty_repeat = p->repeat_penalty ;
+    ctx_server->params->sampling.penalty_last_n = p->repeat_last_n ;
+    #endif
   }
 
   return ctx_server;
@@ -10757,6 +11742,16 @@ int completion_load_model(HANDLE h, std::string model_path,
     model_path = "./";
   }
 
+  #if ENABLE_HOUMO_LLAMACPP
+  //std::string tok_model_path="/data/home/zhenjiang/llama_cpp_houmo/llama.cpp/models/qwen3-8b-1batch/4core_8k/4core_8k-10B-4core_8k-F16.gguf";
+  // LOG_INF("###Attention: Test mode loading fixed himodel:%s \r\n",tok_model_path.c_str());
+  std::string tok_model_path=model_path;
+  LOG_INF("--Loading  HiModel file:%s \r\n",tok_model_path.c_str());
+  if (!fileExists(tok_model_path)) {
+    LOG_ERR("Error:HiModel file:%s  not exists,Please check model params passed to this function\r\n",tok_model_path);
+    exit(-1);
+  }
+  #else
   model_path = model_path + "/";
   LOG_DBG("model_name_list size = %d\n", model_name_list.size());
   std::string tok_model_path = model_path + "qwen2-1_5b-instruct-q4_0.gguf";
@@ -10765,6 +11760,7 @@ int completion_load_model(HANDLE h, std::string model_path,
   } else if(tok_model_path.find("qwen3") != std::string::npos) {
     tok_model_path = model_path + "Qwen3-0.6B-Q8_0.gguf";
   }
+  #endif
 
   std::string ctx_size = "4096";
   if (model_path.find("8k") != std::string::npos || model_path.find("8K") != std::string::npos) {
@@ -10777,10 +11773,21 @@ int completion_load_model(HANDLE h, std::string model_path,
 
   std::time_t t = std::time(nullptr);
   #ifdef _WIN32
-  std::string log_file = string_format("D:\\houmo-llm-%d.log", t);
+    //std::string log_file = string_format("D:\\houmo-llm-%d.log", t);
+    char* userProfile = getenv("APPDATA");
+    if (userProfile!= nullptr) {
+        std::cout << "userdata dir: " << userProfile << std::endl;
+    } else {
+        userProfile="D:\\";
+        std::cout << "get userdatadir failed,write do D:\\,please makesure D exists" << std::endl;
+    }
+    std::string log_folder(userProfile);
+    std::string file_name = string_format("\\houmo-llm-%d.log", t);
+    std::string log_file = log_folder+file_name;
   #else
-  std::string log_file = string_format("houmo-llm-%d.log", t);
+    std::string log_file = string_format("houmo-llm-%d.log", t);
   #endif
+    std::cout<<"final logfile path:"<<log_file<< std::endl;
 
   char *argv[] = {"houmo-llm-demo",
                   "-m",
@@ -10819,6 +11826,18 @@ int completion_load_model(HANDLE h, std::string model_path,
   }
 
   common_init();
+
+  #if ENABLE_HOUMO_LLAMACPP
+  p_params->sampling.top_k=ctx_server->params->sampling.top_k;
+  p_params->sampling.top_p=ctx_server->params->sampling.top_p;
+  p_params->sampling.temp=ctx_server->params->sampling.temp;
+  p_params->sampling.penalty_repeat=ctx_server->params->sampling.penalty_repeat;
+  p_params->sampling.penalty_last_n=ctx_server->params->sampling.penalty_last_n;
+  if(ctx_server->params) {
+    LOG_DBG("--%s\r\n","delete ctx_server->params");
+    delete ctx_server->params;
+  }
+  #endif
 
   ctx_server->params = p_params;
 
@@ -10860,6 +11879,10 @@ int completion_load_model(HANDLE h, std::string model_path,
     LOG_ERR("%s: exiting due to model loading error\n", __func__);
     return -1;
   }
+
+  #if ENABLE_HOUMO_LLAMACPP
+  ctx_server->init_hm_llama(model_path);
+  #else
   if((model_path.find("qwen3") == std::string::npos) && ((model_path.find("14B") != std::string::npos) || (model_path.find("14b") != std::string::npos))) {
     ctx_server->init_14B(model_path);
   } else if((model_path.find("qwen3") != std::string::npos)) {
@@ -10875,6 +11898,7 @@ int completion_load_model(HANDLE h, std::string model_path,
       ctx_server->init_batch(model_path);
     }
   }
+  #endif
   LOG_DBG("%s","++before store\r\n");
   ctx_server->state.store(SERVER_STATE_READY);
   LOG_DBG("%s","++after store\r\n");
@@ -10897,11 +11921,17 @@ int completion_load_model(HANDLE h, std::string model_path,
   // ctx_server->queue_tasks.start_loop();
   ctx_server->ctx_t =
       std::thread([&]() { ctx_server->queue_tasks.start_loop(); });
-
+  #if ENABLE_HOUMO_LLAMACPP
+  std::string req_body = string_format(
+      "{\"messages\":[{\"content\":\"你好！\",\"role\":\"user\"}],\"stream\":"
+      "false,\"model\": \"%s\", \"max_tokens\": 20}",
+      "fixed_hm_llama_qwen3_8b_szj");
+  #else
   std::string req_body = string_format(
       "{\"messages\":[{\"content\":\"你好！\",\"role\":\"user\"}],\"stream\":"
       "false,\"model\": \"%s\", \"max_tokens\": 20}",
       ctx_server->hmctx->model_name.c_str());
+  #endif
   // std::string req_body =
   // "{\"messages\":[{\"content\":\"现在假设你是一名会议记录人员，需要你对一段会议记录的每一句话依次进行文本规整化，并直接返回规整化后的文本，回答的文本中不要增加任何额外内容。要求：1、规整化后的文本要忠于原始会议记录，保留会议记录中全部的有用信息；2、去除原文中明显的无意义表达；3、如果原文中存在明显的错别字，也需要进行改正。4、不要删除任何有用的信息。5、请用中文进行回答。6、不允许在回答中添加编造成分。7、如果原始会议记录中存在明显重复的表达，需用清晰通顺的方式改写。8、需注意原文中的数值不得擅自修改。原始会议记录为：“哦，喂啊。啊，你讲啊啊啊。”\",\"role\":\"user\"}],\"stream\":true,\"model\":\"Qwen2.5-32B-Instruct\"}";
   json data = oaicompat_completion_params_parse(
@@ -11009,6 +12039,24 @@ int completion_load_model(HANDLE h, std::string model_path,
   return 0;
 }
 
+// 构造格式为 "add1_add2_add3.mem" 的字符串
+std::string constructMemoryString(void**add1, void* add2, int add3) {
+    std::stringstream ss;
+
+    // 将void**转换为十六进制字符串（通常地址用十六进制表示，保持16位长度）
+    ss << std::hex << std::setfill('0') << std::setw(16)
+       << reinterpret_cast<uint64_t>(add1) << "_";
+
+    // 将void*转换为十六进制字符串
+    ss << std::hex << std::setfill('0') << std::setw(16)
+       << reinterpret_cast<uint64_t>(add2) << "_";
+
+    // 将int转换为十进制字符串
+    ss << std::dec << add3 << ".mem";
+
+    return ss.str();
+}
+
 int completion_load_model_by_buffer(HANDLE h, uint8_t **buffers,
                                     size_t *bufferSize, size_t buffers_count,
                                     hardware_info hwinfo) {
@@ -11027,6 +12075,10 @@ int completion_load_model_by_buffer(HANDLE h, uint8_t **buffers,
   if (tok_model_path.find("deepseek") != std::string::npos) {
     tok_model_path = model_path + "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf";
   }
+  #if ENABLE_HOUMO_LLAMACPP
+  tok_model_path=constructMemoryString((void**)buffers,bufferSize,buffers_count);
+  std::cout<<"++tok_model_path from mem:" <<tok_model_path<<std::endl;
+  #endif
 
   std::string ctx_size = "4096";
   if (model_path.find("8k") != std::string::npos || model_path.find("8K") != std::string::npos) {
@@ -11074,6 +12126,18 @@ int completion_load_model_by_buffer(HANDLE h, uint8_t **buffers,
 
   common_init();
 
+  #if ENABLE_HOUMO_LLAMACPP
+  p_params->sampling.top_k=ctx_server->params->sampling.top_k;
+  p_params->sampling.top_p=ctx_server->params->sampling.top_p;
+  p_params->sampling.temp=ctx_server->params->sampling.temp;
+  p_params->sampling.penalty_repeat=ctx_server->params->sampling.penalty_repeat;
+  p_params->sampling.penalty_last_n=ctx_server->params->sampling.penalty_last_n;
+
+  if(ctx_server->params) {
+    LOG_DBG("**%s\r\n","delete ctx_server->params");
+    delete ctx_server->params;
+  }
+  #endif
   ctx_server->params = p_params;
 
   llama_backend_init();
@@ -11110,10 +12174,12 @@ int completion_load_model_by_buffer(HANDLE h, uint8_t **buffers,
   // load the model
   LOG_DBG("%s: loading model\n", __func__);
 
+
   if (!ctx_server->load_model(*ctx_server->params, model_path)) {
     LOG_ERR("%s: exiting due to model loading error\n", __func__);
     return -1;
   }
+
   LOG_INF("%s", "++before call init_by_buffer\r\n");
   ctx_server->init_by_buffer(h, buffers, bufferSize, buffers_count, hwinfo);
   LOG_INF("%s", "++after call init_by_buffer\r\n");
@@ -11135,10 +12201,17 @@ int completion_load_model_by_buffer(HANDLE h, uint8_t **buffers,
   ctx_server->ctx_t =
       std::thread([&]() { ctx_server->queue_tasks.start_loop(); });
 
+  #if ENABLE_HOUMO_LLAMACPP
+  std::string req_body = string_format(
+      "{\"messages\":[{\"content\":\"你好！\",\"role\":\"user\"}],\"stream\":"
+      "false,\"model\": \"%s\", \"max_tokens\": 20}",
+      "fixed_hm_llama_qwen3_8b_szj");
+  #else
   std::string req_body = string_format(
       "{\"messages\":[{\"content\":\"你好！\",\"role\":\"user\"}],\"stream\":"
       "false,\"model\": \"%s\", \"max_tokens\": 20}",
       ctx_server->hmctx->model_name.c_str());
+  #endif
   // std::string req_body =
   // "{\"messages\":[{\"content\":\"现在假设你是一名会议记录人员，需要你对一段会议记录的每一句话依次进行文本规整化，并直接返回规整化后的文本，回答的文本中不要增加任何额外内容。要求：1、规整化后的文本要忠于原始会议记录，保留会议记录中全部的有用信息；2、去除原文中明显的无意义表达；3、如果原文中存在明显的错别字，也需要进行改正。4、不要删除任何有用的信息。5、请用中文进行回答。6、不允许在回答中添加编造成分。7、如果原始会议记录中存在明显重复的表达，需用清晰通顺的方式改写。8、需注意原文中的数值不得擅自修改。原始会议记录为：“哦，喂啊。啊，你讲啊啊啊。”\",\"role\":\"user\"}],\"stream\":true,\"model\":\"Qwen2.5-32B-Instruct\"}";
   json data = oaicompat_completion_params_parse(
@@ -11264,10 +12337,17 @@ int generate(HANDLE h) {
 
   LOG_DBG("ctx_server->params: %p\n", ctx_server->params);
 
+  #if ENABLE_HOUMO_LLAMACPP
+   std::string req_body = string_format(
+      "{\"messages\":[{\"content\":\"你好！\",\"role\":\"user\"}],\"stream\":"
+      "false,\"model\": \"%s\", \"max_tokens\": 20}",
+      "fixed_hm_llama_qwen3_8b_szj");
+  #else
   std::string req_body = string_format(
       "{\"messages\":[{\"content\":\"你好！\",\"role\":\"user\"}],\"stream\":"
       "false,\"model\": \"%s\", \"max_tokens\": 20}",
       ctx_server->hmctx->model_name.c_str());
+  #endif
   // std::string req_body =
   // "{\"messages\":[{\"content\":\"现在假设你是一名会议记录人员，需要你对一段会议记录的每一句话依次进行文本规整化，并直接返回规整化后的文本，回答的文本中不要增加任何额外内容。要求：1、规整化后的文本要忠于原始会议记录，保留会议记录中全部的有用信息；2、去除原文中明显的无意义表达；3、如果原文中存在明显的错别字，也需要进行改正。4、不要删除任何有用的信息。5、请用中文进行回答。6、不允许在回答中添加编造成分。7、如果原始会议记录中存在明显重复的表达，需用清晰通顺的方式改写。8、需注意原文中的数值不得擅自修改。原始会议记录为：“哦，喂啊。啊，你讲啊啊啊。”\",\"role\":\"user\"}],\"stream\":true,\"model\":\"Qwen2.5-32B-Instruct\"}";
   json data = oaicompat_completion_params_parse(
@@ -11341,11 +12421,17 @@ int generate_stream(HANDLE h) {
     LOG_ERR("HANDLE is wrong: %p\n", ctx_server);
     return -1;
   }
-
+  #if ENABLE_HOUMO_LLAMACPP
+  std::string req_body = string_format(
+      "{\"messages\":[{\"content\":\"你好！\",\"role\":\"user\"}],\"stream\":"
+      "true,\"model\": \"%s\", \"max_tokens\": 20}",
+      "fixed_hm_llama_qwen3_8b_szj");
+  #else
   std::string req_body = string_format(
       "{\"messages\":[{\"content\":\"你好！\",\"role\":\"user\"}],\"stream\":"
       "true,\"model\": \"%s\", \"max_tokens\": 20}",
       ctx_server->hmctx->model_name.c_str());
+  #endif
   json data = oaicompat_completion_params_parse(
       json::parse(req_body), ctx_server->params_base.use_jinja,
       ctx_server->params_base.reasoning_format,
@@ -11508,12 +12594,12 @@ int generate_stream_next_token(HANDLE h, char **result, size_t *result_size) {
   int ret = 0;
   if (result != nullptr && *result) {
     SRV_INF("%s",
-            "++confirm True：completion_stream_generate_next_token_str\r\n");
+            "++confirm True:completion_stream_generate_next_token_str\r\n");
     ret =
         ctx_server->completion_stream_generate_next_token_str(result_json_str);
   } else {
     SRV_INF("%s",
-            "--confirm False：completion_stream_generate_next_token_str\r\n");
+            "--confirm False:completion_stream_generate_next_token_str\r\n");
     ret = ctx_server->completion_stream_generate_next_token_str(result_json_str,
                                                                 false);
   }
@@ -11767,8 +12853,13 @@ int32 HTTP_SERVER_API api_Generate(HANDLE handle, const char *prompt,
   std::string req_body =
       "{\"messages\":[{\"content\":\"%s”\",\"role\":\"user\"}],\"stream\":"
       "false,\"model\": \"%s\", \"max_tokens\": %d}";
+  #if ENABLE_HOUMO_LLAMACPP
+  req_body = string_format(req_body.c_str(), prompt,
+                          "fixed_hm_llama_qwen3_8b_szj", p->n_predict);
+  #else
   req_body = string_format(req_body.c_str(), prompt,
                            ctx_server->hmctx->model_name.c_str(), p->n_predict);
+  #endif
   json req = json::parse(req_body);
   std::string decode_result;
   int ret = completion_generate(handle, req, decode_result);
@@ -11887,9 +12978,18 @@ bool HTTP_SERVER_API api_Generate_stream(HANDLE handle, const char *prompt,
     std::string req_body =
         "{\"messages\":[{\"content\":\"%s\",\"role\":\"user\"}],\"stream\":"
         "true,\"model\": \"%s\", \"max_tokens\": %d}";
+
+    #if ENABLE_HOUMO_LLAMACPP
+    req_body =
+        string_format(req_body.c_str(), input.c_str(),
+                      "fixed_hm_llama_qwen3_8b_szj", p->n_predict);
+    #else
     req_body =
         string_format(req_body.c_str(), input.c_str(),
                       ctx_server->hmctx->model_name.c_str(), p->n_predict);
+    #endif
+
+
     // SRV_INF("req_body: %s\n", req_body.c_str());
     // std::cout.flush();
     // bool flag = true;

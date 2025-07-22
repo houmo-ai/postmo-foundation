@@ -5,7 +5,12 @@
 #include <thread>
 
 extern char* hi_modelpath;
+extern char** global_argv;
+extern int global_argc;
 int main(int argc, char** argv) {
+    // 保存到全局变量
+    global_argc = argc;
+    global_argv = argv;
     //const char* hi_modelpath = std::getenv("HICPP_MODEL_PATH");
     std::string hPath;
     if(hi_modelpath){

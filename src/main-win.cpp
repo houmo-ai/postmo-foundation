@@ -11,13 +11,14 @@
 #ifdef _WIN32
 
 
-
 // 全局状态句柄
 SERVICE_STATUS_HANDLE g_StatusHandle = nullptr;
 SERVICE_STATUS g_ServiceStatus = {0};
+#pragma comment(lib,"houmo-llm.lib")
+extern  __declspec(dllimport) int global_argc;
+extern  __declspec(dllimport) char**global_argv;
 
 std::thread srv_t;
-
 
 void ReportSvcStatus(const DWORD currentState, const DWORD win32ExitCode, const DWORD waitHint) {
     static DWORD checkPoint = 1;
@@ -76,6 +77,9 @@ int main(int argc, char** argv) {
     _putenv("TCIM_LOG_TAGS=all");
     _putenv("TCIM_BACKEND=Xh1HdiBackend");
     _putenv("HM_PLATFORM=ASIC");
+    // 保存到全局变量
+    global_argc = argc;
+    global_argv = argv;
 
 #ifdef HOUMO_M50
     _putenv("TCIM_BACKEND=Xh2HalBackend");

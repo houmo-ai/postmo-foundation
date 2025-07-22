@@ -1,9 +1,22 @@
 set(TARGET houmo-llm)
 
+#cmake -DENABLE_HMLLAMACPP=OFF .. 加载公版llama.cpp
+option(ENABLE_HMLLAMACPP "Enable Houmo LLama.cpp" ON)  # 默认编译
+
+if(ENABLE_HMLLAMACPP)
+    add_definitions(-DENABLE_HOUMO_LLAMACPP=1)
+else()
+    add_definitions(-DENABLE_HOUMO_LLAMACPP=0)
+endif()
+
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 set(TCIM_RUNTIME_PATH $ENV{TCIM_RUNTIME_PATH})
+if(ENABLE_HMLLAMACPP)
+set(LLAMA_CPP_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo")
+else()
 set(LLAMA_CPP_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/llama.cpp")
+endif()
 set(INIH_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/inih")
 
 find_library(TCIM_LIBRARY NAMES tcim_runtime_lite ai_core hdplrt riscv PATHS ${TCIM_RUNTIME_PATH}/lib NO_DEFAULT_PATH)
@@ -12,13 +25,20 @@ find_library(LLAMA_CPP_LIBRARY_GGML NAMES ggml PATHS ${LLAMA_CPP_LIBRARY_PATH}/l
 find_library(LLAMA_CPP_LIBRARY_GGML_BASE NAMES ggml-base PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
 find_library(LLAMA_CPP_LIBRARY_GGML_CPU NAMES ggml-cpu PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
 find_library(LLAMA_CPP_LIBRARY_COMMON NAMES common PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
+if(ENABLE_HMLLAMACPP)
+find_library(LLAMA_CPP_LIBRARY_MTMD NAMES mtmd PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
+endif()
 find_library(INIH_LIBRARY NAMES inih PATHS ${INIH_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
 find_library(INIH_LIBRARY_CPP NAMES INIReader PATHS ${INIH_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
 
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${TCIM_RUNTIME_PATH}/include)
 include_directories(${TCIM_RUNTIME_PATH}/examples/common/hpp)
-include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp/include)
+if(ENABLE_HMLLAMACPP)
+  include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include)
+else()
+  include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp/include)
+endif()
 include_directories(${PROJECT_SOURCE_DIR}/third_party/inih/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/spdlog/include)
 
@@ -53,7 +73,12 @@ endif()
 
 if(UNIX)
 message(STATUS "##Linking libstdc++.so under path(if exists):/opt/hicpp/lib/ for Linux/Unix")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -L/opt/hicpp/lib/ -lstdc++")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -L/opt/hicpp/lib/ -lstdc++ ")
+endif()
+
+if(ENABLE_HMLLAMACPP)
+message(STATUS "##Linking ${LLAMA_CPP_LIBRARY_MTMD}   for mtmd")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -L${LLAMA_CPP_LIBRARY_PATH}/lib -lmtmd ")
 endif()
 
 find_package(Torch REQUIRED)
@@ -89,8 +114,13 @@ set(HOUMO_LLM_SRCS
 add_library(${TARGET} ${HOUMO_LLM_SRCS})
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 
-target_link_libraries(${TARGET} PRIVATE ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+if(ENABLE_HMLLAMACPP)
+target_link_libraries(${TARGET} PRIVATE ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_MTMD} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
+else()
+target_link_libraries(${TARGET} PRIVATE ${LLAMA_CPP_LIBRARY_COMMON}  ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+        ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}"  ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
+endif()
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 

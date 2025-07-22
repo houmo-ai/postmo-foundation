@@ -23,5 +23,7 @@ int HTTP_SERVER_API generate_stream(HANDLE h);
 int HTTP_SERVER_API generate_stream_next_token_all(HANDLE h);
 int HTTP_SERVER_API generate_stream_next_token(HANDLE h, char ** result, size_t* result_size);
 void HTTP_SERVER_API api_get_info(HANDLE handle);
-
+// 声明全局变量（带 DLL 可见性标记）
+//HTTP_SERVER_API int global_argc;
+//HTTP_SERVER_API char** global_argv;
 #endif // HOUMO_LLM_H
