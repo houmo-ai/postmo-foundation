@@ -88,7 +88,9 @@ int main(int argc, char** argv) {
 
     const char* debug_mode = std::getenv("HICPP_WIN_D");
     if (debug_mode) {
+#ifdef HOUMO_M50
         _putenv("TCIM_RUNTIME_PATH=./hal");
+#endif
         printf(" _   _ ___   ____ ____  ____    ____       _                    ____                      _   \n"
                "| | | |_ _| / ___|  _ \\|  _ \\  |  _ \\  ___| |__  _   _  __ _   / ___|___  _ __  ___  ___ | | ___ \n"
                "| |_| || | | |   | |_) | |_) | | | | |/ _ \\ '_ \\| | | |/ _` | | |   / _ \\| '_ \\/ __|/ _ \\| |/ _ \n"

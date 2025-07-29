@@ -107,18 +107,18 @@ set(HOUMO_LLM_SRCS
     hi.h
     houmo-llm.h
     houmo-llm.cpp
-    utils/hi_err_redirector.cpp
 )
 
+add_definitions(-DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
 
 add_library(${TARGET} ${HOUMO_LLM_SRCS})
-target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR} ../include)
 
 if(ENABLE_HMLLAMACPP)
-target_link_libraries(${TARGET} PRIVATE ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_MTMD} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+target_link_libraries(${TARGET} PRIVATE hlie-base ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_MTMD} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 else()
-target_link_libraries(${TARGET} PRIVATE ${LLAMA_CPP_LIBRARY_COMMON}  ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+target_link_libraries(${TARGET} PRIVATE hlie-base ${LLAMA_CPP_LIBRARY_COMMON}  ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}"  ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 endif()
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
@@ -230,3 +230,5 @@ else()
 endif()
 
 target_compile_features(${TARGET}-modelinference_test PRIVATE cxx_std_17)
+
+add_subdirectory(hlie_base)

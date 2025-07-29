@@ -3,6 +3,8 @@ cmake-build-*
 out
 CMakeSettings.json
 third_party/llama.cpp/lib*
+third_party/llama.cpp_houmo
 third_party/boost
 src/houmo-tcim-runtime
 src/libtorch
+*.patch

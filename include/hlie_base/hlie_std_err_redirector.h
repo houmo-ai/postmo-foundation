@@ -1,5 +1,5 @@
-#ifndef HI_ERR_REDIRECTOR
-#define HI_ERR_REDIRECTOR
+#ifndef HLIE_STD_ERR_REDIRECTOR
+#define HLIE_STD_ERR_REDIRECTOR
 
 #include <cstdio>
 #include <spdlog/sinks/rotating_file_sink.h>
@@ -7,11 +7,9 @@
 
 #include <fcntl.h>
 
-class SpdlogRedirectBuffer : public std::streambuf {
-public:
-    SpdlogRedirectBuffer(const spdlog::level::level_enum level, const std::shared_ptr<spdlog::logger>& logger) :
-        level_(level), logger_(logger) {}
+#include "hlie_base/hlie_base.h"
 
+class SpdlogRedirectBuffer : public std::streambuf {
 protected:
     int overflow(int c) override {
         if (c != EOF) {
@@ -31,23 +29,21 @@ protected:
 private:
     void flush() {
         if (!buffer_.empty()) {
-            logger_->log(level_, buffer_);
+            spdlog::default_logger()->error(buffer_);
             buffer_.clear();
         }
     }
 
     std::string buffer_;
-    spdlog::level::level_enum level_;
-    std::shared_ptr<spdlog::logger> logger_;
 };
 
 
-class HiErrRedirector {
+class HLIE_API HLIEStdErrRedirector {
 public:
-    HiErrRedirector() = default;
-    ~HiErrRedirector() = default;
+    HLIEStdErrRedirector() = default;
+    ~HLIEStdErrRedirector() = default;
 
-    void start(const std::string& log_filename);
+    void start();
     void stop() const;
 
 private:
