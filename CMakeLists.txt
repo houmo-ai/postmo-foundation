@@ -43,6 +43,7 @@ if (MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:/bigobj>")
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/wd4251>") # 同一个项目，没事
 endif()
 
 #

@@ -12,7 +12,7 @@ BraceWrapping:
   AfterCaseLabel: true
   AfterClass: false
   AfterControlStatement: false
-  AfterEnum: true
+  AfterEnum: false
   AfterFunction: false
   AfterNamespace: false
   AfterStruct: false
@@ -27,8 +27,9 @@ BraceWrapping:
   SplitEmptyNamespace: true
 BreakBeforeBraces: Custom
 AllowShortBlocksOnASingleLine: Never
+AllowShortEnumsOnASingleLine: false
 AllowShortIfStatementsOnASingleLine: false
-AllowShortFunctionsOnASingleLine: Empty
+AllowShortFunctionsOnASingleLine: InlineOnly
 BreakConstructorInitializers: AfterColon
 BreakConstructorInitializersBeforeComma: false
 ColumnLimit: 140

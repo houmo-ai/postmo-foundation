@@ -1,5 +1,5 @@
-#ifndef HLIE_COMMON_H
-#define HLIE_COMMON_H
+#ifndef HLIE_BASE_H
+#define HLIE_BASE_H
 
 #ifndef HLIE_API
 #if defined _WIN32 || defined __CYGWIN__

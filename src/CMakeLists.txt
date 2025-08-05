@@ -40,6 +40,7 @@ else()
   include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp/include)
 endif()
 include_directories(${PROJECT_SOURCE_DIR}/third_party/inih/include)
+include_directories(${PROJECT_SOURCE_DIR}/third_party/sd.cpp/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/spdlog/include)
 
 message("LLAMA_CPP_PATH=${LLAMA_CPP_PATH}")
@@ -115,10 +116,10 @@ add_library(${TARGET} ${HOUMO_LLM_SRCS})
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR} ../include)
 
 if(ENABLE_HMLLAMACPP)
-target_link_libraries(${TARGET} PRIVATE hlie-base ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_MTMD} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+target_link_libraries(${TARGET} PRIVATE hlie-base hlie-app ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_MTMD} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 else()
-target_link_libraries(${TARGET} PRIVATE hlie-base ${LLAMA_CPP_LIBRARY_COMMON}  ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+target_link_libraries(${TARGET} PRIVATE hlie-base hlie-app ${LLAMA_CPP_LIBRARY_COMMON}  ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}"  ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 endif()
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
@@ -135,7 +136,7 @@ if (WIN32)
     add_executable(${TARGET}-hi-cpp-win main-win.cpp)
     install(TARGETS ${TARGET}-hi-cpp-win RUNTIME)
     target_include_directories(${TARGET}-hi-cpp-win PRIVATE ${CMAKE_SOURCE_DIR})
-    target_link_libraries(${TARGET}-hi-cpp-win PRIVATE houmo-llm ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+    target_link_libraries(${TARGET}-hi-cpp-win PRIVATE houmo-llm hlie-app ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
     TARGET_LINK_LIBRARIES(${TARGET}-hi-cpp-win PRIVATE ws2_32)
     target_compile_features(${TARGET}-hi-cpp-win PRIVATE cxx_std_17)
@@ -144,7 +145,7 @@ elseif(UNIX)
     add_executable(${TARGET}-hi-cpp-linux main-linux.cpp)
     install(TARGETS ${TARGET}-hi-cpp-linux RUNTIME)
     target_include_directories(${TARGET}-hi-cpp-linux PRIVATE ${CMAKE_SOURCE_DIR})
-    target_link_libraries(${TARGET}-hi-cpp-linux PRIVATE houmo-llm ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+    target_link_libraries(${TARGET}-hi-cpp-linux PRIVATE houmo-llm hlie-app ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 
     TARGET_LINK_LIBRARIES(${TARGET}-hi-cpp-linux PRIVATE -lpthread -lm)
@@ -232,3 +233,4 @@ endif()
 target_compile_features(${TARGET}-modelinference_test PRIVATE cxx_std_17)
 
 add_subdirectory(hlie_base)
+add_subdirectory(hlie_app)

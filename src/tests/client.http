@@ -22,6 +22,17 @@ Content-Type: application/json
 
 ###
 
+GET http://127.0.0.1:8809/health
+Content-Type: application/json
+
+###
+
+GET http://127.0.0.1:8809/v1/models
+Content-Type: application/json
+
+
+###
+
 POST http://localhost:8808/v1/chat/completions
 Content-Type: application/json
 

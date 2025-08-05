@@ -18,13 +18,6 @@ namespace {
         return result;
     }
 
-    std::string to_lower(const std::string& str) {
-        std::string result = str;
-        std::transform(result.begin(), result.end(), result.begin(),
-                       [](unsigned char c){ return std::tolower(c); });
-        return result;
-    }
-
     std::string replace_dot_with_underscore(const std::string& str) {
         std::string result = str;
         std::replace(result.begin(), result.end(), '.', '_');
@@ -38,10 +31,15 @@ namespace {
     }
 }
 
-int HLIEConfigService::parse_from_file(const std::string& file_path) {
-    config_reader_ = std::make_shared<INIReader>(file_path);
+int HLIEConfigService::parse() {
+    if (file_path_.empty()) {
+        LOG_ERROR("file path is empty");
+        return -1;
+    }
+
+    config_reader_ = std::make_shared<INIReader>(file_path_);
     if (config_reader_->ParseError() < 0) {
-        LOG_ERROR("parse config file failed from {}", file_path);
+        LOG_ERROR("parse config file failed from {}", file_path_);
         return -1;
     }
 
@@ -106,38 +104,6 @@ bool HLIEConfigService::get_bool(const std::string& section, const std::string& 
 
     const auto result = config_reader_->GetBoolean(section, key, default_value);
     return result;
-}
-
-int HLIEModelInfo::parse_from_file(const std::string& file_path) {
-    try {
-        std::ifstream file(file_path);
-        if (!file.is_open()) {
-            LOG_ERROR("Error: Could not open file: {}", file_path);
-            return -3;
-        }
-
-        nlohmann::json config;
-        file >> config;
-
-        model_name_ = config.value("ModelName", "");
-        model_type_ = config.value("ModelType", "");
-        model_type_ = to_lower(model_type_);
-        context_size_ = config.value("ContextSize", 0);
-        cores_ = config.value("Cores", 0);
-        xh_version_ = config.value("XHVersion", 1);
-        is_multi_model_ = config.value("IsMM", false);
-        params_ = config.value("Params", "");
-        mm_proj_path_ = config.value("MMProj", "");
-        model_version_ = config.value("Version", "");
-    } catch (const nlohmann::json::exception& ex) {
-        LOG_ERROR("JSON Error: {}", ex.what());
-        return -2;
-    } catch (const std::exception& ex) {
-        LOG_ERROR("General Error: {}", ex.what());
-        return -1;
-    }
-
-    return 0;
 }
 
 HLIE_NAMESPACE_END

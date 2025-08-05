@@ -62,6 +62,7 @@
 #include "houmo-llm.h"
 #include "houmo-llm.hpp"
 
+#include "hlie_app/hlie_model_info.h"
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_logger.h"
 
@@ -9818,27 +9819,27 @@ static void log_server_request(const httplib::Request &req,
 static server_context* ctx_server = nullptr;
 static std::shared_ptr<spdlog::logger> boot_logger = nullptr;
 static HLIEStdErrRedirector log_redirector;
-static hm_HLIE::HLIEConfigService config_service;
+static std::shared_ptr<hm_HLIE::HLIEConfigService> config_service;
 
 #ifdef _WIN32
 
 int init_params(const std::string& model_dir, common_params* &p_params, uint8_t instance_no = 0) {
-    auto server_port = config_service.get_int("server", "port", 8808);
+    auto server_port = config_service->get_int("server", "port", 8808);
     if (instance_no == 1) {
         server_port = 7801;
     } else if (instance_no == 2) {
         server_port = 7802;
     }
 
-    const auto houmo_sampling = config_service.get_bool("server", "houmo_sampling", true);
+    const auto houmo_sampling = config_service->get_bool("server", "houmo_sampling", true);
 
-    const std::string log_location = config_service.get_string("log", "location");
+    const std::string log_location = config_service->get_string("log", "location");
     if (log_location.empty()) {
         LOG_ERROR("Cannot found log location config");
         return -1;
     }
 
-    const int log_level = config_service.get_int("log", "level", 0);
+    const int log_level = config_service->get_int("log", "level", 0);
 
     try {
         if (std::filesystem::create_directories(log_location)) {
@@ -9923,7 +9924,7 @@ int run_server() {
     char exePath[MAX_PATH];
     GetModuleFileName(nullptr, exePath, MAX_PATH); // 获取exe绝对路径
     const auto programPath = std::string(exePath);
-    auto program_dir = std::string(exePath).substr(0, std::string(exePath).find_last_of('\\') + 1);
+    const auto program_dir = std::string(exePath).substr(0, std::string(exePath).find_last_of('\\') + 1);
     const auto program_name = std::string(exePath).substr(std::string(exePath).find_last_of('\\') + 1);
     int instance_no = 0;
     if (program_name.find("1.exe") != std::string::npos) {
@@ -9937,11 +9938,13 @@ int run_server() {
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
 
     spdlog::flush_every(std::chrono::seconds(10));
-    if (const auto configPath = program_dir + "..\\config\\sys.cfg"; config_service.parse_from_file(configPath) < 0) {
+    const auto configPath = program_dir + "..\\config\\sys.cfg";
+    config_service = std::make_shared<hm_HLIE::HLIEConfigService>(configPath);
+    if (config_service->parse() < 0) {
         return -5;
     }
 
-    const std::string cur_model = config_service.get_string("model", "cur_model");
+    const std::string cur_model = config_service->get_string("model", "cur_model");
     if (cur_model.empty()) {
         boot_logger->error("WINSERVICE cannot found model");
         return 2;

@@ -52,7 +52,7 @@ public:
     static std::shared_ptr<spdlog::logger> init_default_logger(const std::string& log_file_name, const std::string& module_name,
                                                                spdlog::level::level_enum level);
 
-    static std::shared_ptr<spdlog::logger> HLIELogger::create_logger(const std::string& log_file_name, const std::string& module_name,
+    static std::shared_ptr<spdlog::logger> create_logger(const std::string& log_file_name, const std::string& module_name,
                                                               spdlog::level::level_enum level);
 
     static std::shared_ptr<spdlog::logger> get_logger(const std::string& module_name);

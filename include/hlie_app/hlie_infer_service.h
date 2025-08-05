@@ -6,18 +6,19 @@
 #define HLIE_INFER_SERVICE_H
 
 #include "hlie_base/hlie_base.h"
+#include "hlie_base/hlie_blocking_queue.h"
 
 HLIE_NAMESPACE_BEGIN
 
 class HLIEModelInfo;
 
-class HLIEInferService {
+class HLIE_API HLIEInferService {
 public:
     HLIEInferService() = default;
     ~HLIEInferService() = default;
-    int init(const HLIEModelInfo & model_desc);
 
 
+    void generate_images();
 };
 
 HLIE_NAMESPACE_END

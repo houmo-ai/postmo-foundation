@@ -1,8 +1,11 @@
+#include <chrono>
 #include <cstdio>
 #include <iostream>
-#include "houmo-llm.h"
-#include <chrono>
 #include <thread>
+#include "houmo-llm.h"
+
+#include "hlie_app/hlie_app_controller.h"
+
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -29,20 +32,37 @@ void ReportSvcStatus(const DWORD currentState, const DWORD win32ExitCode, const 
     SetServiceStatus(g_StatusHandle, &g_ServiceStatus);
 }
 
+hm_HLIE::HLIEWinAppController appController;
+
 void WINAPI Handler(const DWORD controlCode) {
     switch (controlCode)
     {
     case SERVICE_CONTROL_STOP:
         ReportSvcStatus(SERVICE_STOP_PENDING, NO_ERROR, 0);
-        stop_server();
+        // stop_server();
+        appController.stop();
         break;
     default:
         break;
     }
 }
 
+void run() {
+    int ret = appController.initialize();
+    if (ret < 0) {
+        std::cout << "ServiceWorkerThread appController failed to initialize:" << ret << std::endl;
+        return;
+    }
+
+    ret = appController.run();
+    std::cout << "ServiceWorkerThread appController run, exit code:" << ret << std::endl;
+}
+
 void ServiceWorkerThread() {
     run_server();
+
+    // New Way
+    // run();
     ReportSvcStatus(SERVICE_STOPPED, NO_ERROR, 0);
 }
 
@@ -98,6 +118,8 @@ int main(int argc, char** argv) {
                "|_| |_|___(_)____|_|   |_|     |____/ \\___|_.__/ \\__,_|\\__, |  \\____\\___/|_| |_|___/\\___/|_|\\___|\n"
                "                                                       |___/                                     \n");
         run_server();
+        // New Way
+        // run();
         return 0;
     }
 
