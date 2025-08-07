@@ -4,10 +4,9 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <condition_variable>
 
 #include "hlie_base/hlie_base.h"
-#include "hlie_base/hlie_config_service.h"
-#include "hlie_workflow.h"
 
 HLIE_NAMESPACE_BEGIN
 
@@ -22,25 +21,20 @@ public:
 
     virtual int initialize() = 0;
 
-    virtual int run() = 0;
+    virtual int run();
 
-    virtual void stop() {
-        if (workflow_) {
-            workflow_->stop();
-        }
-        is_running_.store(false);
-        cv_.notify_one();
-    }
+    virtual void stop();
 
 protected:
     std::shared_ptr<HLIEWorkflow> workflow_;
     std::shared_ptr<HLIEWebService> web_service_;
-    std::shared_ptr<HLIEConfigService> sys_config_;
     std::atomic<bool> is_running_{false};
     std::mutex mutex_;
     std::condition_variable cv_;
 };
 
+
+#ifdef _WIN32
 
 class HLIE_API HLIEWinAppController final : public HLIEAppController {
 public:
@@ -48,8 +42,19 @@ public:
     ~HLIEWinAppController() override = default;
 
     int initialize() override;
-    int run() override;
 };
+
+#else
+
+class HLIE_API HLIELinuxAppController final : public HLIEAppController {
+public:
+    HLIELinuxAppController() = default;
+    ~HLIELinuxAppController() override = default;
+
+    int initialize() override;
+};
+
+#endif
 
 HLIE_NAMESPACE_END
 

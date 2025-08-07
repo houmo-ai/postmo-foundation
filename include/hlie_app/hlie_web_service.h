@@ -22,7 +22,7 @@ public:
 
     void init(int n_threads_http);
 
-    int run(std::string host_name, int port);
+    int run(const std::string& host_name = "0.0.0.0", int port = 8808);
 
     void register_routers() const;
     void register_post(const std::string& path, httplib::Server::Handler&& func) const;

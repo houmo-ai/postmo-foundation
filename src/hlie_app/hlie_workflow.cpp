@@ -8,47 +8,90 @@
 #include "hlie_app/hlie_model_service.h"
 #include "hlie_app/hlie_sd_model_service.h"
 #include "hlie_base/hlie_common_define.h"
+#include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_exception.h"
 #include "hlie_base/hlie_logger.h"
+#include "INIReader.h"
 
 HLIE_NAMESPACE_BEGIN
 
-int HLIEWorkflow::initialize(const std::string& model_path) {
-    if (model_path.empty()) {
+namespace {
+    std::vector<HLIEModelInfo> load_model_infos_from_directory(const std::string& directory_path) {
+        std::vector<HLIEModelInfo> model_infos;
+
+        try {
+            // 检查目录是否存在
+            if (!std::filesystem::exists(directory_path)) {
+                LOG_ERROR("Directory does not exist: {}", directory_path);
+                return model_infos;
+            }
+
+            if (!std::filesystem::is_directory(directory_path)) {
+                LOG_ERROR("Path is not a directory: {}", directory_path);
+                return model_infos;
+            }
+
+            // 遍历目录中的所有文件
+            for (const auto& entry : std::filesystem::directory_iterator(directory_path)) {
+                // 检查是否为JSON文件
+                if (entry.is_regular_file() && entry.path().extension() == ".json") {
+                    const std::string file_path = entry.path().string();
+                    LOG_INFO("Parsing model info from file: {}", file_path);
+
+                    HLIEModelInfo model_info;
+                    if (model_info.parse_from_file(file_path) == 0) {
+                        model_infos.push_back(std::move(model_info));
+                        LOG_INFO("Successfully parsed model info from: {}", file_path);
+                    } else {
+                        LOG_ERROR("Failed to parse model info from: {}", file_path);
+                    }
+                }
+            }
+        } catch (const std::filesystem::filesystem_error& e) {
+            LOG_ERROR("Filesystem error when reading directory {}: {}", directory_path, e.what());
+        } catch (const std::exception& e) {
+            LOG_ERROR("Exception when reading directory {}: {}", directory_path, e.what());
+        }
+
+        LOG_INFO("Loaded {} model info files from directory: {}", model_infos.size(), directory_path);
+        return model_infos;
+    }
+}
+
+int HLIEWorkflow::initialize(const std::string& model_dir) {
+    if (model_dir.empty()) {
         LOG_ERROR("model path is empty");
         return -1;
     }
 
-    const auto info_path = std::filesystem::path(model_path) / "info.json";
-    LOG_INFO("model info path: {}", info_path.string());
-    HLIEModelInfo model_info;
-    if (model_info.parse_from_file(info_path.string()) < 0) {
-        LOG_ERROR("model info parse failed");
+    const auto model_infos = load_model_infos_from_directory(model_dir);
+    if (model_infos.empty()) {
+        LOG_ERROR("No valid model info files found in directory: {}", model_dir);
         return -1;
     }
 
-    const auto model_type = model_info.get_model_type();
-    if (model_type.empty()) {
-        LOG_ERROR("model_type empty");
-        return -1;
-    }
+    // 处理每个模型信息
+    for (const auto& model_info : model_infos) {
+        const auto model_type = model_info.get_model_type();
+        if (model_type.empty()) {
+            LOG_WARN("Skipping model with empty type");
+            continue;
+        }
 
-    LOG_INFO("model_type: {}", model_type);
+        LOG_INFO("Processing model_type: {}", model_type);
 
-    if (model_type == HLIEModelType::SD3) {
-        LOG_INFO("Begin to init the SDModelService");
-        sd_model_service_ = std::make_shared<SDModelService>();
-        sd_model_service_->init(model_path, model_info);
-    }
-
-    if (model_type == HLIEModelType::Qwen3 || model_type == HLIEModelType::Qwen25 || model_type == HLIEModelType::DeepSeek) {
-        LOG_INFO("Begin to init the LLModelService");
-        llm_model_service_ = std::make_shared<LLModelService>();
-        llm_model_service_->init(model_path, model_info);
+        if (model_type == HLIEModelType::SD3) {
+            LOG_INFO("Initializing SDModelService");
+            sd_model_service_ = std::make_shared<SDModelService>();
+            sd_model_service_->init(model_dir, model_info);
+        } else if (model_type == HLIEModelType::Qwen3 || model_type == HLIEModelType::Qwen25 || model_type == HLIEModelType::DeepSeek) {
+            LOG_INFO("Initializing LLModelService");
+            llm_model_service_ = std::make_shared<LLModelService>();
+            llm_model_service_->init(model_dir, model_info);
+        }
     }
 
     // 设计上可以在多卡上面同时运行不同类型的模型
-    // 同模型多卡的运行也要支持
 
     return 0;
 }
@@ -71,10 +114,6 @@ void HLIEWorkflow::stop() const {
     if (llm_model_service_) {
         llm_model_service_->stop();
     }
-}
-
-std::shared_ptr<HLIEInferService> HLIEWorkflow::get_infer_service() const {
-    return infer_service_;
 }
 
 std::shared_ptr<IHLIEModelService> HLIEWorkflow::get_model_service(const std::string& type) const {

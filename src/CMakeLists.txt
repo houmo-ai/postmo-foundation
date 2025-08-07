@@ -136,7 +136,7 @@ if (WIN32)
     add_executable(${TARGET}-hi-cpp-win main-win.cpp)
     install(TARGETS ${TARGET}-hi-cpp-win RUNTIME)
     target_include_directories(${TARGET}-hi-cpp-win PRIVATE ${CMAKE_SOURCE_DIR})
-    target_link_libraries(${TARGET}-hi-cpp-win PRIVATE houmo-llm hlie-app ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+    target_link_libraries(${TARGET}-hi-cpp-win PRIVATE hlie-app hlie-base ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
     TARGET_LINK_LIBRARIES(${TARGET}-hi-cpp-win PRIVATE ws2_32)
     target_compile_features(${TARGET}-hi-cpp-win PRIVATE cxx_std_17)
@@ -145,7 +145,7 @@ elseif(UNIX)
     add_executable(${TARGET}-hi-cpp-linux main-linux.cpp)
     install(TARGETS ${TARGET}-hi-cpp-linux RUNTIME)
     target_include_directories(${TARGET}-hi-cpp-linux PRIVATE ${CMAKE_SOURCE_DIR})
-    target_link_libraries(${TARGET}-hi-cpp-linux PRIVATE houmo-llm hlie-app ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+    target_link_libraries(${TARGET}-hi-cpp-linux PRIVATE houmo-llm hlie-app hlie-base ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 
     TARGET_LINK_LIBRARIES(${TARGET}-hi-cpp-linux PRIVATE -lpthread -lm)

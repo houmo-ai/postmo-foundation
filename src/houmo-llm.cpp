@@ -9939,8 +9939,8 @@ int run_server() {
 
     spdlog::flush_every(std::chrono::seconds(10));
     const auto configPath = program_dir + "..\\config\\sys.cfg";
-    config_service = std::make_shared<hm_HLIE::HLIEConfigService>(configPath);
-    if (config_service->parse() < 0) {
+    config_service = std::make_shared<hm_HLIE::HLIEConfigService>();
+    if (config_service->parse(configPath) < 0) {
         return -5;
     }
 

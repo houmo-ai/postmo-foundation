@@ -3,9 +3,10 @@
 
 #include <memory>
 #include <string>
-#include <utility>
+#include <unordered_map>
 
 #include "hlie_base.h"
+#include "hlie_singleton.h"
 
 class INIReader;
 
@@ -15,11 +16,11 @@ HLIE_NAMESPACE_BEGIN
 
 class HLIE_API HLIEConfigService {
 public:
-    explicit HLIEConfigService(std::string config_path): file_path_(std::move(config_path)) {}
+    HLIEConfigService() = default;
 
     ~HLIEConfigService() = default;
 
-    int parse();
+    int parse(const std::string& config_path);
 
     [[nodiscard]] std::shared_ptr<INIReader> get_reader() const;
 
@@ -27,9 +28,15 @@ public:
     [[nodiscard]] std::string get_string(const std::string& section, const std::string& key, const std::string& default_value = "", bool env_first = false) const;
     [[nodiscard]] bool get_bool(const std::string & section, const std::string & key, bool default_value, bool env_first = false) const;
 
+    void set_args(int argc, char** argv);
+    const std::unordered_map<std::string, std::string>& get_args() const;
+
 private:
+
     std::shared_ptr<INIReader> config_reader_;
     std::string file_path_;
+
+    std::unordered_map<std::string, std::string> args_;
 };
 
 HLIE_NAMESPACE_END

@@ -7,7 +7,6 @@
 #include <vector>
 
 
-#include "hi.h"
 #include "hlie_base/hlie_blocking_queue.h"
 #include "hlie_model_service.h"
 #include "httplib.h"

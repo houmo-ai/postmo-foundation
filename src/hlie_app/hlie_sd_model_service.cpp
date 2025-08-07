@@ -73,7 +73,7 @@ void SDModelService::process() {
         // 处理队列关闭的情况
         LOG_ERROR("run exception: {} ", ex.what());
         // Todo: 挽救措施，重新拉起
-        Sleep(3000);
+        std::this_thread::sleep_for(std::chrono::seconds(3));
         process();
     }
 }

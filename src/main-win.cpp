@@ -2,24 +2,15 @@
 #include <cstdio>
 #include <iostream>
 #include <thread>
-#include "houmo-llm.h"
 
+#include "hlie_base/hlie_config_service.h"
 #include "hlie_app/hlie_app_controller.h"
-
-#ifdef _WIN32
 #include <Windows.h>
-#endif
-
-
-#ifdef _WIN32
 
 
 // 全局状态句柄
 SERVICE_STATUS_HANDLE g_StatusHandle = nullptr;
 SERVICE_STATUS g_ServiceStatus = {0};
-#pragma comment(lib,"houmo-llm.lib")
-extern  __declspec(dllimport) int global_argc;
-extern  __declspec(dllimport) char**global_argv;
 
 std::thread srv_t;
 
@@ -48,6 +39,7 @@ void WINAPI Handler(const DWORD controlCode) {
 }
 
 void run() {
+    // 1、初始化配置服务，保存参数
     int ret = appController.initialize();
     if (ret < 0) {
         std::cout << "ServiceWorkerThread appController failed to initialize:" << ret << std::endl;
@@ -59,10 +51,10 @@ void run() {
 }
 
 void ServiceWorkerThread() {
-    run_server();
+    // run_server();
 
     // New Way
-    // run();
+    run();
     ReportSvcStatus(SERVICE_STOPPED, NO_ERROR, 0);
 }
 
@@ -88,18 +80,15 @@ void WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     // ServiceMain 返回，线程接管工作
 }
 
-
-#endif
-
 int main(int argc, char** argv) {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
     _putenv("TCIM_LOG_TAGS=all");
     _putenv("TCIM_BACKEND=Xh1HdiBackend");
     _putenv("HM_PLATFORM=ASIC");
-    // 保存到全局变量
-    global_argc = argc;
-    global_argv = argv;
+
+    const auto& config_service = hm_HLIE::Singleton<hm_HLIE::HLIEConfigService>::instance();
+    config_service->set_args(argc, argv);
 
 #ifdef HOUMO_M50
     _putenv("TCIM_BACKEND=Xh2HalBackend");
@@ -117,9 +106,9 @@ int main(int argc, char** argv) {
                "|  _  || | | |___|  __/|  __/  | |_| |  __/ |_) | |_| | (_| | | |__| (_) | | | \\__ \\ (_) | |  __/\n"
                "|_| |_|___(_)____|_|   |_|     |____/ \\___|_.__/ \\__,_|\\__, |  \\____\\___/|_| |_|___/\\___/|_|\\___|\n"
                "                                                       |___/                                     \n");
-        run_server();
+        // run_server();
         // New Way
-        // run();
+        run();
         return 0;
     }
 

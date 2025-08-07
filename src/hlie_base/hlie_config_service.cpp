@@ -13,8 +13,7 @@ HLIE_NAMESPACE_BEGIN
 namespace {
     std::string to_upper(const std::string& str) {
         std::string result = str;
-        std::transform(result.begin(), result.end(), result.begin(),
-                       [](unsigned char c){ return std::toupper(c); });
+        std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) { return std::toupper(c); });
         return result;
     }
 
@@ -29,9 +28,20 @@ namespace {
         const std::string upper_key = to_upper(key);
         return ENV_VAR_PREFIX + upper_section + "__" + upper_key;
     }
-}
 
-int HLIEConfigService::parse() {
+    bool is_option(const char* arg) {
+        return arg != nullptr && arg[0] == '-';
+    }
+
+    // 判断下一个参数是否为选项值（非选项即为值）
+    bool next_is_value(char* argv[], int current_index, int max_length) {
+        // 检查是否有下一个参数，且下一个参数不是选项
+        return (current_index + 1 < max_length) && (argv[current_index + 1] != nullptr) && !is_option(argv[current_index + 1]);
+    }
+} // namespace
+
+int HLIEConfigService::parse(const std::string& config_path) {
+    file_path_ = config_path;
     if (file_path_.empty()) {
         LOG_ERROR("file path is empty");
         return -1;
@@ -50,7 +60,7 @@ std::shared_ptr<INIReader> HLIEConfigService::get_reader() const {
     return config_reader_;
 }
 
-int HLIEConfigService::get_int(const std::string & section, const std::string & key, const int default_value, const bool env_first) const {
+int HLIEConfigService::get_int(const std::string& section, const std::string& key, const int default_value, const bool env_first) const {
     if (env_first) {
         const std::string env_var = env_var_name(section, key);
 
@@ -67,7 +77,8 @@ int HLIEConfigService::get_int(const std::string & section, const std::string & 
     return result;
 }
 
-std::string HLIEConfigService::get_string(const std::string & section, const std::string & key, const std::string& default_value, const bool env_first) const {
+std::string HLIEConfigService::get_string(const std::string& section, const std::string& key, const std::string& default_value,
+                                          const bool env_first) const {
     if (env_first) {
         const std::string env_var = env_var_name(section, key);
         if (const char* env_value = std::getenv(env_var.c_str()); env_value != nullptr) {
@@ -104,6 +115,25 @@ bool HLIEConfigService::get_bool(const std::string& section, const std::string& 
 
     const auto result = config_reader_->GetBoolean(section, key, default_value);
     return result;
+}
+
+void HLIEConfigService::set_args(const int argc, char** argv) {
+    args_.clear();
+    for (int i = 0; i < argc; ++i) {
+        if (const auto opt = argv[i]; is_option(opt)) {
+            if (next_is_value(argv, i, argc)) {
+                args_[opt] = argv[i + 1];
+                i++;
+            } else {
+                args_[opt] = "";
+            }
+            LOG_INFO("program arg: {} {}", opt, args_[opt]);
+        }
+    }
+}
+
+const std::unordered_map<std::string, std::string>& HLIEConfigService::get_args() const {
+    return args_;
 }
 
 HLIE_NAMESPACE_END

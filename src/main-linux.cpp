@@ -1,16 +1,46 @@
-#include <cstdio>
-#include <iostream>
-#include "houmo-llm.h"
 #include <chrono>
-#include <thread>
+#include <cstdio>
+#include "hlie_app/hlie_app_controller.h"
+#include "hlie_base/hlie_config_service.h"
 
-extern char* hi_modelpath;
-extern char** global_argv;
-extern int global_argc;
+#include <iostream>
+#include <thread>
+#include <unistd.h>
+// #include "houmo-llm.h"
+
+// extern char* hi_modelpath;
+// extern char** global_argv;
+// extern int global_argc;
 int main(int argc, char** argv) {
     // 保存到全局变量
-    global_argc = argc;
-    global_argv = argv;
+    // global_argc = argc;
+    // global_argv = argv;
+    if (geteuid() != 0) {
+        std::cerr << "Error: Not running as root!" << std::endl;
+        return 1;
+    }
+
+    std::cout << "Running as root." << std::endl;
+
+    const auto& config_service = hm_HLIE::Singleton<hm_HLIE::HLIEConfigService>::instance();
+    config_service->set_args(argc, argv);
+
+    hm_HLIE::HLIELinuxAppController appController;
+    std::cout << "11111." << std::endl;
+    int ret = appController.initialize();
+    std::cout << "22222." << std::endl;
+    if (ret < 0) {
+        std::cout << "HLIECpp appController failed to initialize:" << ret << std::endl;
+        return ret;
+    }
+
+    ret = appController.run();
+    std::cout << "HLIECpp appController run, exit code:" << ret << std::endl;
+    return ret;
+
+
+    /*
+
     //const char* hi_modelpath = std::getenv("HICPP_MODEL_PATH");
     std::string hPath;
     if(hi_modelpath){
@@ -42,9 +72,9 @@ int main(int argc, char** argv) {
       }
     }
 
-    int ret = destroy_instance(instance);
+    // int ret = destroy_instance(instance);
     printf("ret = %d\n", ret);
     std::cin >> input;
-    printf("exit = %d!\n", input);
+    printf("exit = %d!\n", input);*/
     return 0;
 }

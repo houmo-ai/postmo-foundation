@@ -4,9 +4,12 @@
 #include <mutex>
 #include <unordered_set>
 
+#include "INIReader.h"
 #include "common.h"
 #include "hlie_app/hlie_model_info.h"
+#include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_logger.h"
+#include "hlie_base/hlie_singleton.h"
 #include "hlie_base/hlie_util.h"
 #include "mtmd.h"
 #include "spdlog/fmt/bundled/base.h"
@@ -17,15 +20,61 @@ HLIE_NAMESPACE_BEGIN
 int LLModelService::init(const std::string& model_path, const HLIEModelInfo& model_info) {
     llama_server_ = std::make_unique<LlamaServer>();
 
-    common_params params;
-    params.model.path = HlieUtil::join_paths(model_path, model_info.get_model_name());
-    params.n_parallel = model_info.get_batch_num();
-    params.n_ctx = model_info.get_context_size();
-    params.ctx_shift = false;
-    params.warmup = false;
+    std::unordered_map<std::string, std::string> llm_params;
+    // 程序内特定参数
+    llm_params["--model"] = HlieUtil::join_paths(model_path, model_info.get_model_name());
+    llm_params["--parallel"] = std::to_string(model_info.get_batch_num());
+    llm_params["--ctx-size"] = std::to_string(model_info.get_context_size());
+    llm_params["--no-context-shift"] = "";
+    llm_params["--no-warmup"] = "";
 
-    if (model_info.get_is_multi_model()) {
-        params.mmproj.path = model_path + model_info.get_mm_proj_path();
+    // 第二优先级是程序入口参数
+    const auto& config_service = Singleton<HLIEConfigService>::instance();
+    auto args_from_main = config_service->get_args();
+    for (auto [key, value] : args_from_main) {
+        if (key == "--port") { // 改为由上册控制，非llama-server参数
+            continue;
+        }
+        llm_params[key] = value;
+    }
+
+    // 最高优先级是配置文件
+    const auto config_reader = config_service->get_reader();
+    HLIE_CHECK_NULL_RETURN(config_reader, -1);
+    // 获取llama-server同款运行参数
+    const std::vector<std::string> keys = config_reader->Keys("llm_params");
+    for (const auto& key : keys) {
+        const std::string value = config_reader->Get("llm_params", key, "");
+        llm_params[key] = value;
+    }
+
+    LOG_INFO("Start to merge llama-server params");
+    std::vector<char*> argv_vector;
+    argv_vector.push_back(const_cast<char*>("houmo-llm"));
+
+    for (const auto& [key, value] : llm_params) {
+        LOG_INFO("param: {} = {}", key, value);
+        argv_vector.push_back(const_cast<char*>(key.c_str()));
+        if (!value.empty()) {
+            argv_vector.push_back(const_cast<char*>(value.c_str()));
+        }
+    }
+
+    // 添加终止符
+    argv_vector.push_back(nullptr);
+
+    // 转换为char**数组
+    char** argv = argv_vector.data();
+    const int argc = static_cast<int>(argv_vector.size() - 1); // 不包括终止符nullptr
+    common_params params;
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
+        LOG_ERROR("Failed to merge llama-server params, try to abandon it.");
+    } else {
+        LOG_INFO("Successfully merged llama-server params");
+    }
+
+    if (model_info.get_is_multi_model() && !model_info.get_mm_proj_path().empty()) {
+        params.mmproj.path = HlieUtil::join_paths(model_path, model_info.get_mm_proj_path());
     }
 
     // 服务化版本自定义初始后采样参数配置
@@ -155,25 +204,13 @@ void LLModelService::handle_chat_completions(const httplib::Request& req, httpli
 void LLModelService::handle_completions(const httplib::Request& req, httplib::Response& res) const {
     json data = json::parse(req.body);
     std::vector<raw_buffer> files; // dummy
-    handle_completions_impl(
-        SERVER_TASK_TYPE_COMPLETION,
-        data,
-        files,
-        req.is_connection_closed,
-        res,
-        OAICOMPAT_TYPE_NONE);
+    handle_completions_impl(SERVER_TASK_TYPE_COMPLETION, data, files, req.is_connection_closed, res, OAICOMPAT_TYPE_NONE);
 }
 
 void LLModelService::handle_completions_oai(const httplib::Request& req, httplib::Response& res) const {
     json data = oaicompat_completion_params_parse(json::parse(req.body));
     std::vector<raw_buffer> files; // dummy
-    handle_completions_impl(
-        SERVER_TASK_TYPE_COMPLETION,
-        data,
-        files,
-        req.is_connection_closed,
-        res,
-        OAICOMPAT_TYPE_COMPLETION);
+    handle_completions_impl(SERVER_TASK_TYPE_COMPLETION, data, files, req.is_connection_closed, res, OAICOMPAT_TYPE_COMPLETION);
 }
 
 void LLModelService::handle_completions_impl(server_task_type type, json& data, const std::vector<raw_buffer>& files,
@@ -185,154 +222,146 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
     auto completion_id = gen_chatcmplid();
     std::unordered_set<int> task_ids;
     try {
-      std::vector<server_task> tasks;
+        std::vector<server_task> tasks;
 
-      const auto& prompt = data.at("prompt");
-      // TODO: this log can become very long, put it behind a flag or think about a more compact format
-      // SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
+        const auto& prompt = data.at("prompt");
+        // TODO: this log can become very long, put it behind a flag or think about a more compact format
+        // SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
 
-      // process files
-      mtmd::bitmaps bitmaps;
-      const bool has_mtmd = llama_server_->mctx != nullptr;
-      {
-        if (!has_mtmd && !files.empty()) {
-          throw std::runtime_error("This server does not support multimodal");
-        }
-        for (auto& file : files) {
-          mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(llama_server_->mctx, file.data(), file.size()));
-          if (!bmp.ptr) {
-            throw std::runtime_error("Failed to load image or audio file");
-          }
-          // calculate bitmap hash (for KV caching)
-          std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
-          bmp.set_id(hash.c_str());
-          bitmaps.entries.push_back(std::move(bmp));
-        }
-      }
-
-      // process prompt
-      std::vector<server_tokens> inputs;
-      if (oaicompat && !prompt.is_string()) {
-        throw std::runtime_error("prompt must be a string");
-      }
-
-      if (oaicompat && has_mtmd) {
-        // multimodal
-        std::string prompt_str = prompt.get<std::string>();
-        mtmd_input_text inp_txt = {
-            prompt_str.c_str(),
-            /* add_special */ true,
-            /* parse_special */ true,
-        };
-        mtmd::input_chunks chunks(mtmd_input_chunks_init());
-        auto bitmaps_c_ptr = bitmaps.c_ptr();
-        int32_t tokenized = mtmd_tokenize(llama_server_->mctx, chunks.ptr.get(), &inp_txt, bitmaps_c_ptr.data(), bitmaps_c_ptr.size());
-        if (tokenized != 0) {
-          throw std::runtime_error("Failed to tokenize prompt");
+        // process files
+        mtmd::bitmaps bitmaps;
+        const bool has_mtmd = llama_server_->mctx != nullptr;
+        {
+            if (!has_mtmd && !files.empty()) {
+                throw std::runtime_error("This server does not support multimodal");
+            }
+            for (auto& file : files) {
+                mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(llama_server_->mctx, file.data(), file.size()));
+                if (!bmp.ptr) {
+                    throw std::runtime_error("Failed to load image or audio file");
+                }
+                // calculate bitmap hash (for KV caching)
+                std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
+                bmp.set_id(hash.c_str());
+                bitmaps.entries.push_back(std::move(bmp));
+            }
         }
 
-        server_tokens tmp(chunks, true);
-        inputs.push_back(std::move(tmp));
-      }
-      else {
-        // non-multimodal version
-        auto tokenized_prompts = tokenize_input_prompts(llama_server_->vocab, prompt, true, true);
-        for (auto& p : tokenized_prompts) {
-          auto tmp = server_tokens(p, llama_server_->mctx != nullptr);
-          inputs.push_back(std::move(tmp));
+        // process prompt
+        std::vector<server_tokens> inputs;
+        if (oaicompat && !prompt.is_string()) {
+            throw std::runtime_error("prompt must be a string");
         }
-      }
 
-      tasks.reserve(inputs.size());
-      for (size_t i = 0; i < inputs.size(); i++) {
-        server_task task = server_task(type);
+        if (oaicompat && has_mtmd) {
+            // multimodal
+            std::string prompt_str = prompt.get<std::string>();
+            mtmd_input_text inp_txt = {
+                prompt_str.c_str(),
+                /* add_special */ true,
+                /* parse_special */ true,
+            };
+            mtmd::input_chunks chunks(mtmd_input_chunks_init());
+            auto bitmaps_c_ptr = bitmaps.c_ptr();
+            int32_t tokenized = mtmd_tokenize(llama_server_->mctx, chunks.ptr.get(), &inp_txt, bitmaps_c_ptr.data(), bitmaps_c_ptr.size());
+            if (tokenized != 0) {
+                throw std::runtime_error("Failed to tokenize prompt");
+            }
 
-        task.id = llama_server_->queue_tasks.get_new_id();
-        task.index = i;
+            server_tokens tmp(chunks, true);
+            inputs.push_back(std::move(tmp));
+        } else {
+            // non-multimodal version
+            auto tokenized_prompts = tokenize_input_prompts(llama_server_->vocab, prompt, true, true);
+            for (auto& p : tokenized_prompts) {
+                auto tmp = server_tokens(p, llama_server_->mctx != nullptr);
+                inputs.push_back(std::move(tmp));
+            }
+        }
 
-        task.prompt_tokens = std::move(inputs[i]);
-        task.params = server_task::params_from_json_cmpl(llama_server_->ctx, llama_server_->params_base, data);
-        task.id_selected_slot = json_value(data, "id_slot", -1);
+        tasks.reserve(inputs.size());
+        for (size_t i = 0; i < inputs.size(); i++) {
+            server_task task = server_task(type);
 
-        // OAI-compat
-        task.params.oaicompat = oaicompat;
-        task.params.oaicompat_cmpl_id = completion_id;
-        // oaicompat_model is already populated by params_from_json_cmpl
+            task.id = llama_server_->queue_tasks.get_new_id();
+            task.index = i;
 
-        tasks.push_back(std::move(task));
-      }
+            task.prompt_tokens = std::move(inputs[i]);
+            task.params = server_task::params_from_json_cmpl(llama_server_->ctx, llama_server_->params_base, data);
+            task.id_selected_slot = json_value(data, "id_slot", -1);
 
-      task_ids = server_task::get_list_id(tasks);
-      llama_server_->queue_results.add_waiting_tasks(tasks);
-      llama_server_->queue_tasks.post(std::move(tasks));
+            // OAI-compat
+            task.params.oaicompat = oaicompat;
+            task.params.oaicompat_cmpl_id = completion_id;
+            // oaicompat_model is already populated by params_from_json_cmpl
+
+            tasks.push_back(std::move(task));
+        }
+
+        task_ids = server_task::get_list_id(tasks);
+        llama_server_->queue_results.add_waiting_tasks(tasks);
+        llama_server_->queue_tasks.post(std::move(tasks));
     } catch (const std::exception& e) {
-      res_error(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
-      return;
+        res_error(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+        return;
     }
 
     bool stream = json_value(data, "stream", false);
 
     if (!stream) {
-      llama_server_->receive_multi_results(
-          task_ids,
-          [&](std::vector<server_task_result_ptr>& results)
-          {
-            if (results.size() == 1) {
-              // single result
-              res_ok(res, results[0]->to_json());
-            }
-            else {
-              // multiple results (multitask)
-              json arr = json::array();
-              for (auto& res : results) {
-                arr.push_back(res->to_json());
-              }
-              res_ok(res, arr);
-            }
-          },
-          [&](const json& error_data) { res_error(res, error_data); }, is_connection_closed);
-
-      llama_server_->queue_results.remove_waiting_task_ids(task_ids);
-    } else {
-      const auto chunked_content_provider = [task_ids, oaicompat, this](size_t, httplib::DataSink& sink)
-      {
-        llama_server_->receive_cmpl_results_stream(
+        llama_server_->receive_multi_results(
             task_ids,
-            [&](server_task_result_ptr& result) -> bool
-            {
-              json res_json = result->to_json();
-              if (res_json.is_array()) {
-                for (const auto& res : res_json) {
-                  if (!server_sent_event(sink, "data", res)) {
-                    // sending failed (HTTP connection closed), cancel the generation
-                    return false;
-                  }
+            [&](std::vector<server_task_result_ptr>& results) {
+                if (results.size() == 1) {
+                    // single result
+                    res_ok(res, results[0]->to_json());
+                } else {
+                    // multiple results (multitask)
+                    json arr = json::array();
+                    for (auto& res : results) {
+                        arr.push_back(res->to_json());
+                    }
+                    res_ok(res, arr);
                 }
-                return true;
-              }
-              else {
-                return server_sent_event(sink, "data", res_json);
-              }
             },
-            [&](const json& error_data) { server_sent_event(sink, "error", error_data); },
-            [&sink]()
-            {
-              // note: do not use req.is_connection_closed here because req is already destroyed
-              return !sink.is_writable();
-            });
-        if (oaicompat != OAICOMPAT_TYPE_NONE) {
-          static const std::string ev_done = "data: [DONE]\n\n";
-          sink.write(ev_done.data(), ev_done.size());
-        }
-        sink.done();
-        return false;
-      };
+            [&](const json& error_data) { res_error(res, error_data); }, is_connection_closed);
 
-      auto on_complete = [task_ids, this](bool) { llama_server_->queue_results.remove_waiting_task_ids(task_ids); };
+        llama_server_->queue_results.remove_waiting_task_ids(task_ids);
+    } else {
+        const auto chunked_content_provider = [task_ids, oaicompat, this](size_t, httplib::DataSink& sink) {
+            llama_server_->receive_cmpl_results_stream(
+                task_ids,
+                [&](server_task_result_ptr& result) -> bool {
+                    json res_json = result->to_json();
+                    if (res_json.is_array()) {
+                        for (const auto& res : res_json) {
+                            if (!server_sent_event(sink, "data", res)) {
+                                // sending failed (HTTP connection closed), cancel the generation
+                                return false;
+                            }
+                        }
+                        return true;
+                    } else {
+                        return server_sent_event(sink, "data", res_json);
+                    }
+                },
+                [&](const json& error_data) { server_sent_event(sink, "error", error_data); },
+                [&sink]() {
+                    // note: do not use req.is_connection_closed here because req is already destroyed
+                    return !sink.is_writable();
+                });
+            if (oaicompat != OAICOMPAT_TYPE_NONE) {
+                static const std::string ev_done = "data: [DONE]\n\n";
+                sink.write(ev_done.data(), ev_done.size());
+            }
+            sink.done();
+            return false;
+        };
 
-      res.set_chunked_content_provider("text/event-stream", chunked_content_provider, on_complete);
+        auto on_complete = [task_ids, this](bool) { llama_server_->queue_results.remove_waiting_task_ids(task_ids); };
+
+        res.set_chunked_content_provider("text/event-stream", chunked_content_provider, on_complete);
     }
-
 }
 
 int LLModelService::get_state() {

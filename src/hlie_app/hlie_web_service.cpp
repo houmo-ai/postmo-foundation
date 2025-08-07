@@ -4,7 +4,9 @@
 
 #include "hlie_app/hlie_workflow.h"
 #include "hlie_base/hlie_common_define.h"
+#include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_logger.h"
+#include "hlie_base/hlie_singleton.h"
 #include "json.hpp"
 #include "utils.hpp"
 
@@ -51,8 +53,7 @@ HLIEWebService::HLIEWebService(const std::shared_ptr<HLIEWorkflow>& workflow) {
 
 void HLIEWebService::init(int n_threads_http) {
     web_server_ = std::make_shared<httplib::Server>();
-    web_server_->set_default_headers({{"Server", "HoumoHI"}});
-
+    web_server_->set_default_headers({{"Server", "HLIECpp"}});
 
     web_server_->Get("/hi", [](const httplib::Request&, httplib::Response& res) {
         LOG_INFO("Got a request /hi");
@@ -74,7 +75,23 @@ void HLIEWebService::init(int n_threads_http) {
     LOG_INFO("Web Service init done, n_threads_http: {}", n_threads_http);
 }
 
-int HLIEWebService::run(std::string host_name, int port) {
+int HLIEWebService::run(const std::string& host_name, int port) {
+    const auto& config_services = Singleton<HLIEConfigService>::instance();
+    if (const auto cfg_port = config_services->get_int("server", "port", -1); cfg_port < 0) {
+        if (const auto& args = config_services->get_args(); args.find("--port") != args.end()) {
+            try {
+                port = std::stoi(args.at("--port"));
+                LOG_DEBUG("Using arg port: {}", port);
+            } catch (...) {
+                LOG_ERROR("Cannot found port config, default port will be used");
+            }
+        } else {
+            LOG_DEBUG("Cannot found port config, default port will be used");
+        }
+    } else {
+        port = cfg_port;
+    }
+
     if (const bool was_bound = web_server_->bind_to_port(host_name, port); !was_bound) {
         LOG_ERROR("couldn't bind HTTP server socket, hostname: {}, port: %d\n", host_name, port);
         stop();

@@ -23,7 +23,7 @@ std::shared_ptr<spdlog::logger> HLIELogger::init_default_logger(const std::strin
 std::shared_ptr<spdlog::logger> HLIELogger::create_logger(const std::string& log_file_name, const std::string& module_name,
                                                           const spdlog::level::level_enum level) {
     std::cout << "Creating logger: " << module_name << ", log_file: " << log_file_name << std::endl;
-    auto logger = spdlog::daily_logger_mt(module_name, log_file_name, 0, 0);
+    auto logger = spdlog::daily_logger_mt(module_name, log_file_name, 0, 0, false, 7);
     logger->set_level(level);
     return std::move(logger);
 }

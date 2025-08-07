@@ -14,20 +14,20 @@ HLIE_NAMESPACE_BEGIN
 
 class LLModelService;
 class SDModelService;
-class HLIEInferService;
+class HLIEConfigService;
 
 class HLIEWorkflow {
 public:
-    HLIEWorkflow() = default;
+     HLIEWorkflow() = default;
+
     ~HLIEWorkflow() = default;
 
-    int initialize(const std::string& model_path);
+    int initialize(const std::string& model_dir);
 
     void run() const;
 
     void stop() const;
 
-    [[nodiscard]] std::shared_ptr<HLIEInferService> get_infer_service() const;
     [[nodiscard]] std::shared_ptr<IHLIEModelService> get_model_service(const std::string& type) const;
 
     [[nodiscard]] int cacl_thread_num() const;
@@ -57,7 +57,6 @@ private:
     void handle_health(httplib::Response& res) const;
     void handle_models(httplib::Response& res) const;
 
-    std::shared_ptr<HLIEInferService> infer_service_;
     std::shared_ptr<LLModelService> llm_model_service_;
     std::shared_ptr<SDModelService> sd_model_service_;
 
