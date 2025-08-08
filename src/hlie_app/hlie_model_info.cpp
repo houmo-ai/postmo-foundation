@@ -39,7 +39,11 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
         params_ = config.value("Params", "");
         mm_proj_path_ = config.value("MMProj", "");
         model_version_ = config.value("Version", "");
+        clip_model_ = config.value("ClipModel", "");
+        clip_l_model_ = config.value("ClipLModel", "");
+        t5_model_ = config.value("T5Model", "");
         mmdit_model_ = config.value("MMDitModel", "");
+        vae_model_  = config.value("VaeModel", "");
     } catch (const nlohmann::json::exception& ex) {
         LOG_ERROR("JSON Error: {}", ex.what());
         return -2;

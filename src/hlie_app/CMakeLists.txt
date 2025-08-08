@@ -22,7 +22,9 @@ file(GLOB SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/*.cpp")
 
 add_library(${TARGET} ${SOURCES})
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-
+if(ENABLE_SD)
+    target_link_libraries(${TARGET} PRIVATE ${STABLE_DIFFUSION})
+endif()
 target_link_libraries(${TARGET} PRIVATE hlie-base ${INIH_LIBRARY_CPP} ${INIH_LIBRARY} ${LLAMA_CPP_LIBRARY_COMMON}
         ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_MTMD} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)

@@ -27,7 +27,11 @@ public:
     [[nodiscard]] int get_context_size() const { return context_size_; }
     [[nodiscard]] int get_cores() const { return cores_; }
     [[nodiscard]] bool get_is_multi_model() const { return is_multi_model_; }
+    [[nodiscard]] const std::string& get_clip_model() const { return clip_model_; }
+    [[nodiscard]] const std::string& get_clip_l_model() const { return clip_l_model_; }
+    [[nodiscard]] const std::string& get_t5_model() const { return t5_model_; }
     [[nodiscard]] const std::string& get_mmdit_model() const { return mmdit_model_; }
+    [[nodiscard]] const std::string& get_vae_model() const { return vae_model_; }
 
 private:
     std::string model_name_;
@@ -40,7 +44,11 @@ private:
     int cores_{0};
     int batch_num_{1};
     bool is_multi_model_{false};
+    std::string clip_model_;
+    std::string clip_l_model_;
+    std::string t5_model_;
     std::string mmdit_model_;
+    std::string vae_model_;
 };
 
 HLIE_NAMESPACE_END

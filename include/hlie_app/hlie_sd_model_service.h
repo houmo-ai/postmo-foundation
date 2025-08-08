@@ -18,9 +18,16 @@ HLIE_NAMESPACE_BEGIN
 /**
  * sd.cpp 内示例参数，需要根据后续需求进行优化整理
  */
+
+enum SDMode {
+    IMG_GEN,
+    VID_GEN,
+    CONVERT,
+    MODE_COUNT
+};
 struct SDParams {
     int n_threads = -1;
-    // SDMode mode   = IMG_GEN;
+    SDMode mode   = IMG_GEN;
     std::string model_path;
     std::string clip_l_path;
     std::string clip_g_path;
@@ -41,11 +48,16 @@ struct SDParams {
     std::string mask_path;
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
+    std::string houmo_mmdit_path;
+    std::string houmo_clip_path;
+    std::string houmo_clip_l_path;
+    std::string houmo_t5_path;
+    std::string houmo_vae_path;
 
     std::string prompt;
     std::string negative_prompt;
     float min_cfg       = 1.0f;
-    float cfg_scale     = 7.0f;
+    float cfg_scale     = 4.5f;
     float img_cfg_scale = INFINITY;
     float guidance      = 3.5f;
     float eta           = 0.f;
@@ -60,9 +72,9 @@ struct SDParams {
     int fps                  = 6;
     float augmentation_level = 0.f;
 
-    sample_method_t sample_method = EULER_A;
+    sample_method_t sample_method = EULER;
     schedule_t schedule           = DEFAULT;
-    int sample_steps              = 20;
+    int sample_steps              = 8;
     float strength                = 0.75f;
     float control_strength        = 0.9f;
     rng_type_t rng_type           = CUDA_RNG;
@@ -96,8 +108,9 @@ struct ImagesRequest {
     std::string prompt;
     int width = 512;
     int height = 512;
-    int steps = 20;
-
+    int steps = 8;
+    int seed = 42;
+    float guidance_scale = 4.5;
     // Todo: Extent Params
 };
 
@@ -105,6 +118,7 @@ struct ImagesResult {
     std::shared_ptr<sd_image_t> image;
     bool success = false;
     std::string error_message;
+    int64_t predicted_ms;
 };
 
 class SDModelService final : public IHLIEModelService {
@@ -145,8 +159,10 @@ private:
     std::shared_ptr<sd_image_t> generate_image(const ImagesRequest& request);
 
     std::shared_ptr<SDParams> params_;
+    std::shared_ptr<sd_guidance_params_t> guidance_params;
+    std::shared_ptr<sd_img_gen_params_t> img_gen_params;
     std::shared_ptr<sd_ctx_t> sd_ctx_t_;
-
+    
     struct QueueItem {
         ImagesRequest request;
         std::shared_ptr<std::promise<ImagesResult>> promise;
