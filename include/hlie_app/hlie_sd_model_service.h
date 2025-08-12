@@ -53,7 +53,7 @@ struct SDParams {
     std::string houmo_clip_l_path;
     std::string houmo_t5_path;
     std::string houmo_vae_path;
-
+    int hm_sd_device = 0;
     std::string prompt;
     std::string negative_prompt;
     float min_cfg       = 1.0f;

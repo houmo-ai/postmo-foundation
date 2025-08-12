@@ -35,9 +35,7 @@ public:
     void print_status() const;
 
 private:
-    std::unordered_map<int, std::string> devices_ = {
-        {0, ""},
-    };
+    std::unordered_map<int, std::string> devices_;
     mutable std::mutex mutex_;
 };
 

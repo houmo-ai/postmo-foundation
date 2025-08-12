@@ -57,7 +57,7 @@ namespace {
         LOG_INFO("Loaded {} model info files from directory: {}", model_infos.size(), directory_path);
         return model_infos;
     }
-}
+} // namespace
 
 int HLIEWorkflow::initialize(const std::string& model_dir) {
     if (model_dir.empty()) {
@@ -81,11 +81,13 @@ int HLIEWorkflow::initialize(const std::string& model_dir) {
 
         LOG_INFO("Processing model_type: {}", model_type);
 
-        if (model_type == HLIEModelType::SD3) {
+        // Todo: 目前只支持最多两个不同实例， 后续可以扩展
+        if (model_type == HLIEModelType::SD3 && !sd_model_service_) {
             LOG_INFO("Initializing SDModelService");
             sd_model_service_ = std::make_shared<SDModelService>();
             sd_model_service_->init(model_dir, model_info);
-        } else if (model_type == HLIEModelType::Qwen3 || model_type == HLIEModelType::Qwen25 || model_type == HLIEModelType::DeepSeek) {
+        } else if (!llm_model_service_ &&
+                   (model_type == HLIEModelType::Qwen3 || model_type == HLIEModelType::Qwen25 || model_type == HLIEModelType::DeepSeek)) {
             LOG_INFO("Initializing LLModelService");
             llm_model_service_ = std::make_shared<LLModelService>();
             llm_model_service_->init(model_dir, model_info);

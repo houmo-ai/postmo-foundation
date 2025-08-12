@@ -6,6 +6,7 @@
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_logger.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_exception.h"
 #include "hlie_base/hlie_util.h"
 #include "stb_image_write.h"
@@ -68,6 +69,14 @@ int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     }
     if (!params_->houmo_vae_path.empty() && params_->houmo_vae_path[0] == '.') {
         params_->houmo_vae_path = HlieUtil::join_paths(model_dir, params_->houmo_vae_path);
+    }
+
+    if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(SD); !val) {
+        LOG_ERROR("SD cannot acquire available device");
+        return -1;
+    } else {
+        params_->hm_sd_device = val.value();
+        LOG_INFO("SD using device: {}", val.value());
     }
 
     sd_set_log_callback(sd_log_cb, params_.get());
@@ -151,6 +160,7 @@ int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         params_->chroma_use_dit_mask,
         params_->chroma_use_t5_mask,
         params_->chroma_t5_mask_pad,
+        params_->hm_sd_device
     };
 
     sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);

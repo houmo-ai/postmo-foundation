@@ -92,7 +92,7 @@ int LLModelService::init(const std::string& model_path, const HLIEModelInfo& mod
     llama_backend_init();
     llama_numa_init(params.numa);
     if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(LLM); !val) {
-        LOG_ERROR("cannot acquire available device");
+        LOG_ERROR("LLM cannot acquire available device");
         return -1;
     } else {
         HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(val.value()));
