@@ -5,8 +5,10 @@
 #include "hlie_app/hlie_workflow.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
+#include "hlie_base/hlie_exception.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_singleton.h"
+#include "hlie_base/hlie_util.h"
 #include "json.hpp"
 #include "utils.hpp"
 
@@ -19,10 +21,15 @@ namespace {
             return;
         }
 
-        LOG_INFO("Request: {} {} {} {}", req.method.c_str(), req.path.c_str(), req.remote_addr.c_str(), res.status);
+        const std::string request_id = res.has_header("X-Request-ID") ? res.get_header_value("X-Request-ID") : "null";
+        if (const auto logger = HLIELogger::get_logger("HLIE-ACCESS")) {
+            logger->info("{} - - \"{} {}\" {} [RequestID={}]", req.remote_addr, req.method, req.path, res.status, request_id);
+        }
 
-        LOG_DEBUG("Request:  {}", req.body.c_str());
-        LOG_DEBUG("Response: {}", res.body.c_str());
+        LOG_INFO("Request: {} {} {} {}", req.method, req.path, req.remote_addr, res.status);
+
+        LOG_DEBUG("Request:  {}", req.body);
+        LOG_DEBUG("Response: {}", res.body);
     }
 
     void res_error(httplib::Response& res, const json& error_data) {
@@ -33,16 +40,23 @@ namespace {
 
     void exception_handler(const httplib::Request&, httplib::Response& res, const std::exception_ptr& ep) {
         std::string message;
+        int ret = -1;
         try {
             std::rethrow_exception(ep);
+        } catch (const WebServerException& e) {
+            message = e.get_err_msg();
+            ret = e.get_ret_code();
         } catch (const std::exception& e) {
             message = e.what();
         } catch (...) {
             message = "Unknown Exception";
         }
 
-        const nlohmann::json formatted_error = format_error_response(message, ERROR_TYPE_SERVER);
-        LOG_WARN("got exception: {}", formatted_error.dump().c_str());
+        const std::string request_id = res.has_header("X-Request-ID")
+                ? res.get_header_value("X-Request-ID")
+                : "null";
+        const nlohmann::json formatted_error = format_error_response(message, ERROR_TYPE_SERVER, ret);
+        LOG_ERROR("[Request-{}] got server exception: {}", request_id, formatted_error.dump().c_str());
         res_error(res, formatted_error);
     }
 } // namespace
@@ -56,7 +70,7 @@ void HLIEWebService::init(int n_threads_http) {
     web_server_->set_default_headers({{"Server", "HLIECpp"}});
 
     web_server_->Get("/hi", [](const httplib::Request&, httplib::Response& res) {
-        LOG_INFO("Got a request /hi");
+        LOG_INFO("Got a request /hi"); // For touch
         res.set_content("Hello World!", "text/plain");
     });
 
@@ -198,7 +212,12 @@ bool HLIEWebService::middleware_server_state(const httplib::Request& req, httpli
     HLIE_CHECK_NULL_RETURN(workflow_, 0);
     const int state = workflow_->get_model_service_state();
     if (req.path != "/health") {
-        LOG_INFO("Request come in, current state[0: LOADING_MODEL 1:READY]: {}", state);
+        const auto request_id = HlieUtil::uuid();
+        res.set_header("X-Request-ID", request_id);
+        LOG_INFO("Request[{}] come in, current state[0: LOADING_MODEL 1:READY]: {}", request_id, state);
+        if (const auto logger = HLIELogger::get_logger("HLIE-ACCESS")) {
+            logger->info("{} - - \"{} {}\" [RequestID={}]", req.remote_addr, req.method, req.path, request_id);
+        }
     }
 
     if (req.path == "/models" || req.path == "/v1/models" || req.path == "/api/tags") {

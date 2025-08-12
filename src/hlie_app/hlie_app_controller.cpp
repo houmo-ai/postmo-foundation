@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include "hlie_app/hlie_web_service.h"
 #include "hlie_app/hlie_workflow.h"
+#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
@@ -45,7 +46,7 @@ int HLIEWinAppController::initialize() {
     const auto program_name = std::string(exePath).substr(std::string(exePath).find_last_of('\\') + 1);
 
     const auto boot_log_file = program_dir + "\\boot_log\\service_boot.log";
-    const auto boot_logger = HLIELogger::create_logger(boot_log_file, "HLIE-BOOT", spdlog::level::debug);
+    const auto boot_logger = HLIELogger::create_logger(boot_log_file, "HLIE-BOOT", "debug");
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
 
     const auto config_path = program_dir + "..\\config\\sys.cfg";
@@ -62,8 +63,6 @@ int HLIEWinAppController::initialize() {
         return -1;
     }
 
-    const int log_level = config_services->get_int("log", "level", 0);
-
     try {
         if (std::filesystem::create_directories(log_location)) {
             boot_logger->info("Log Dir created successfully.");
@@ -78,9 +77,21 @@ int HLIEWinAppController::initialize() {
     const std::string log_file_name = "houmo-llm.log";
 
     const std::string log_file = HlieUtil::join_paths(log_location, log_file_name);
-    const auto logger = HLIELogger::init_default_logger(log_file, "HLIE", static_cast<spdlog::level::level_enum>(log_level));
+    const auto log_level = config_services->get_string("log", "level", "debug");
+    const auto max_files = config_services->get_int("log", "max_files", 7);
+    const auto logger = HLIELogger::init_default_logger(log_file, "HLIE", log_level, max_files);
     HLIE_CHECK_NULL_RETURN(logger, -1);
     spdlog::set_default_logger(logger);
+
+    const auto tcim_log_level =  config_services->get_int("log", "tcim_level", 2);
+    HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(tcim_log_level));
+
+    const auto access_log = HlieUtil::join_paths(log_location, "access.log");
+    const auto access_logger = HLIELogger::create_logger(access_log, "HLIE-ACCESS", "debug");
+    HLIE_CHECK_NULL_RETURN(access_logger, -6);
+
+    const auto devices = config_services->get_string("server", "devices", "0", true);
+    Singleton<HLIEDeviceHelper>::instance()->init(devices);
 
     const std::string cur_model = config_services->get_string("model", "cur_model");
     if (cur_model.empty()) {

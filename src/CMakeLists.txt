@@ -145,7 +145,7 @@ if (WIN32)
     install(TARGETS ${TARGET}-hi-cpp-win RUNTIME)
     target_include_directories(${TARGET}-hi-cpp-win PRIVATE ${CMAKE_SOURCE_DIR})
     if(ENABLE_SD)
-        target_link_libraries(${TARGET}-hi-cpp-linux PRIVATE ${STABLE_DIFFUSION})
+        target_link_libraries(${TARGET}-hi-cpp-win PRIVATE ${STABLE_DIFFUSION})
     endif()
     target_link_libraries(${TARGET}-hi-cpp-win PRIVATE hlie-app hlie-base ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})

@@ -129,7 +129,7 @@ public:
     /**
      * 初始化并传递参数给SDCtx
      */
-    int init(const std::string& model_path, const HLIEModelInfo& model_info) override;
+    int init(const std::string& model_dir, const HLIEModelInfo& model_info) override;
 
     /**
      * 执行模型推理进行生图
@@ -156,7 +156,7 @@ private:
     std::future<ImagesResult> generate_image_async(const ImagesRequest& request) const;
     ImagesResult generate_image_sync(const ImagesRequest& request) const;
 
-    std::shared_ptr<sd_image_t> generate_image(const ImagesRequest& request);
+    std::shared_ptr<sd_image_t> generate_image(const ImagesRequest& request) const;
 
     std::shared_ptr<SDParams> params_;
     std::shared_ptr<sd_guidance_params_t> guidance_params;

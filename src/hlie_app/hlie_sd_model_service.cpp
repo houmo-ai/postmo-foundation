@@ -1,68 +1,51 @@
 #include "hlie_app/hlie_sd_model_service.h"
 
+#include "base64.hpp"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_logger.h"
-#include "base64.hpp"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "hlie_base/hlie_exception.h"
+#include "hlie_base/hlie_util.h"
 #include "stb_image_write.h"
 
 HLIE_NAMESPACE_BEGIN
+
 namespace {
-    void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
-        SDParams* params = (SDParams*)data;
-        int tag_color;
-        const char* level_str;
-        FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
-    
-        if (!log || (!params->verbose && level <= SD_LOG_DEBUG)) {
+    void sd_log_cb(const sd_log_level_t level, const char* log, void* data) {
+        if (const auto* params = static_cast<SDParams*>(data); !log || (!params->verbose && level <= SD_LOG_DEBUG)) {
             return;
         }
-    
+
+        spdlog::level::level_enum log_level;
         switch (level) {
-            case SD_LOG_DEBUG:
-                tag_color = 37;
-                level_str = "DEBUG";
-                break;
-            case SD_LOG_INFO:
-                tag_color = 34;
-                level_str = "INFO";
-                break;
-            case SD_LOG_WARN:
-                tag_color = 35;
-                level_str = "WARN";
-                break;
-            case SD_LOG_ERROR:
-                tag_color = 31;
-                level_str = "ERROR";
-                break;
-            default: /* Potential future-proofing */
-                tag_color = 33;
-                level_str = "?????";
-                break;
+        case SD_LOG_INFO:
+            log_level = spdlog::level::level_enum::info;
+            break;
+        case SD_LOG_WARN:
+            log_level = spdlog::level::level_enum::warn;
+            break;
+        case SD_LOG_ERROR:
+            log_level = spdlog::level::level_enum::err;
+            break;
+        case SD_LOG_DEBUG:
+        default:
+            log_level = spdlog::level::level_enum::debug;
+            break;
         }
-    
-        if (params->color == true) {
-            fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
-        } else {
-            fprintf(out_stream, "[%-5s] ", level_str);
-        }
-        fputs(log, out_stream);
-        fflush(out_stream);
+
+        spdlog::log(log_level, log);
     }
-}
+} // namespace
 
 
-int SDModelService::init(const std::string& model_path, const HLIEModelInfo& model_info) {
-    // Todo: 获取相关的model_info 判断参数是否满足规范
+int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& model_info) {
     if (model_info.get_xh_version() < 2) {
         return -1;
     }
 
     blocking_queue_ = std::make_shared<HLIEBlockingQueue<QueueItem>>();
-
-    // Todo: 参数校验
 
     params_ = std::make_shared<SDParams>();
     params_->houmo_mmdit_path = model_info.get_mmdit_model();
@@ -71,35 +54,44 @@ int SDModelService::init(const std::string& model_path, const HLIEModelInfo& mod
     params_->houmo_t5_path = model_info.get_t5_model();
     params_->houmo_vae_path = model_info.get_vae_model();
 
-    sd_set_log_callback(sd_log_cb, (void*)params_.get());
+    if (!params_->houmo_mmdit_path.empty() && params_->houmo_mmdit_path[0] == '.') {
+        params_->houmo_mmdit_path = HlieUtil::join_paths(model_dir, params_->houmo_mmdit_path);
+    }
+    if (!params_->houmo_clip_path.empty() && params_->houmo_clip_path[0] == '.') {
+        params_->houmo_clip_path = HlieUtil::join_paths(model_dir, params_->houmo_clip_path);
+    }
+    if (!params_->houmo_clip_l_path.empty() && params_->houmo_clip_l_path[0] == '.') {
+        params_->houmo_clip_l_path = HlieUtil::join_paths(model_dir, params_->houmo_clip_l_path);
+    }
+    if (!params_->houmo_t5_path.empty() && params_->houmo_t5_path[0] == '.') {
+        params_->houmo_t5_path = HlieUtil::join_paths(model_dir, params_->houmo_t5_path);
+    }
+    if (!params_->houmo_vae_path.empty() && params_->houmo_vae_path[0] == '.') {
+        params_->houmo_vae_path = HlieUtil::join_paths(model_dir, params_->houmo_vae_path);
+    }
+
+    sd_set_log_callback(sd_log_cb, params_.get());
 
     // sd_guidance_params_t
     guidance_params = std::make_shared<sd_guidance_params_t>();
-    *guidance_params = {
-        params_->cfg_scale,
-        params_->img_cfg_scale,
-        params_->min_cfg,
-        params_->guidance,
-        {
-            params_->skip_layers.data(),
-            params_->skip_layers.size(),
-            params_->skip_layer_start,
-            params_->skip_layer_end,
-            params_->slg_scale,
-        }
-    };
+    *guidance_params = {params_->cfg_scale,
+                        params_->img_cfg_scale,
+                        params_->min_cfg,
+                        params_->guidance,
+                        {
+                            params_->skip_layers.data(),
+                            params_->skip_layers.size(),
+                            params_->skip_layer_start,
+                            params_->skip_layer_end,
+                            params_->slg_scale,
+                        }};
+
 
     // sd_img_gen_params_t
-    sd_image_t input_image = {(uint32_t)params_->width,
-        (uint32_t)params_->height,
-        3,
-        nullptr};
+    const sd_image_t input_image = {static_cast<uint32_t>(params_->width), static_cast<uint32_t>(params_->height), 3, nullptr};
 
-    sd_image_t mask_image = {(uint32_t)params_->width,
-        (uint32_t)params_->height,
-        1,
-        nullptr};
-        
+    const sd_image_t mask_image = {static_cast<uint32_t>(params_->width), static_cast<uint32_t>(params_->height), 1, nullptr};
+
     img_gen_params = std::make_shared<sd_img_gen_params_t>();
     *img_gen_params = {
         nullptr,
@@ -107,7 +99,7 @@ int SDModelService::init(const std::string& model_path, const HLIEModelInfo& mod
         params_->clip_skip,
         *guidance_params,
         input_image,
-        nullptr, 
+        nullptr,
         0,
         mask_image,
         params_->width,
@@ -124,11 +116,11 @@ int SDModelService::init(const std::string& model_path, const HLIEModelInfo& mod
         params_->normalize_input,
         params_->input_id_images_path.c_str(),
     };
-    // sd_ctx_t_
 
-    bool vae_decode_only = true;
-    bool free_params_immediately = true;
-    sd_ctx_params_t sd_ctx_params = {
+    // sd_ctx_t_
+    constexpr bool vae_decode_only = true;
+    constexpr bool free_params_immediately = true;
+    const sd_ctx_params_t sd_ctx_params = {
         params_->model_path.c_str(),
         params_->clip_l_path.c_str(),
         params_->clip_g_path.c_str(),
@@ -160,12 +152,14 @@ int SDModelService::init(const std::string& model_path, const HLIEModelInfo& mod
         params_->chroma_use_t5_mask,
         params_->chroma_t5_mask_pad,
     };
-    sd_ctx_t*  sd_ctx = new_sd_ctx(&sd_ctx_params);
+
+    sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
     if (!sd_ctx) {
-        throw std::runtime_error("Failed to init sd_ctx");
+        LOG_ERROR("Failed to init sd_ctx");
+        return -1;
     }
+
     sd_ctx_t_ = std::shared_ptr<sd_ctx_t>(sd_ctx, free_sd_ctx);
-    
     return 0;
 }
 
@@ -175,7 +169,6 @@ void SDModelService::run() {
         return;
     }
 
-
     state_.store(SERVER_STATE_READY);
     should_stop_ = false;
     worker_thread_ = std::make_unique<std::thread>(&SDModelService::process, this);
@@ -184,10 +177,10 @@ void SDModelService::run() {
 
 void SDModelService::process() {
     try {
-        while(!should_stop_) {
-            const auto [request, promise] = blocking_queue_->pop();  // 阻塞直到有数据或队列关闭
+        while (!should_stop_) {
+            const auto [request, promise] = blocking_queue_->pop(); // 阻塞直到有数据或队列关闭
             if (should_stop_) {
-                break;  // 防止 stop() 后仍有残留任务
+                break; // 防止 stop() 后仍有残留任务
             }
 
             try {
@@ -199,6 +192,8 @@ void SDModelService::process() {
                 result.image = image_result;
                 result.success = image_result != nullptr;
                 result.predicted_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                LOG_INFO("generate_image time: {} ms", result.predicted_ms);
+
                 // 通知调用者
                 promise->set_value(result);
             } catch (const std::exception& e) {
@@ -209,7 +204,7 @@ void SDModelService::process() {
                 promise->set_value(result);
             }
         }
-    } catch(const std::runtime_error& ex) {
+    } catch (const std::runtime_error& ex) {
         // 处理队列关闭的情况
         LOG_ERROR("run exception: {} ", ex.what());
         // Todo: 挽救措施，重新拉起
@@ -239,13 +234,11 @@ int SDModelService::get_state() {
 }
 
 int SDModelService::handle_health(nlohmann::ordered_json& resp) {
-    // Todo: 获取服务状态， 或者slots 信息
+    // Todo: 获取服务状态
     return 0;
 }
 
 void SDModelService::handle_models(nlohmann::ordered_json& resp) const {
-
-
 }
 
 std::future<ImagesResult> SDModelService::generate_image_async(const ImagesRequest& request) const {
@@ -269,18 +262,22 @@ ImagesResult SDModelService::generate_image_sync(const ImagesRequest& request) c
     return future.get();
 }
 
-std::shared_ptr<sd_image_t> SDModelService::generate_image(const ImagesRequest& request) {
-    // Todo: 请求校验
-    
-    sd_image_t* result_tmp;
+std::shared_ptr<sd_image_t> SDModelService::generate_image(const ImagesRequest& request) const {
     guidance_params->txt_cfg = request.guidance_scale;
     sd_img_gen_params_t local_img_gen_params = *img_gen_params;
     local_img_gen_params.prompt = request.prompt.c_str();
     local_img_gen_params.guidance = *guidance_params;
     local_img_gen_params.seed = request.seed;
     local_img_gen_params.sample_steps = request.steps;
-    // Todo: 生图
-    result_tmp = ::generate_image(sd_ctx_t_.get(), &local_img_gen_params);
+    LOG_INFO("Start to generate image");
+    sd_image_t* result_tmp = nullptr;
+    try {
+        result_tmp = ::generate_image(sd_ctx_t_.get(), &local_img_gen_params);
+    } catch (const std::exception& e) {
+        LOG_ERROR("generate_image exception: {}", e.what());
+        return nullptr;
+    }
+    LOG_INFO("generate image done");
     auto result = std::shared_ptr<sd_image_t>(result_tmp);
     return std::move(result);
 }
@@ -288,60 +285,53 @@ std::shared_ptr<sd_image_t> SDModelService::generate_image(const ImagesRequest& 
 void SDModelService::handle_image_generations(const httplib::Request& req, httplib::Response& res) const {
     try {
         const auto request_json = nlohmann::ordered_json::parse(req.body);
+        if (const std::string request_id = res.has_header("X-Request-ID") ? res.get_header_value("X-Request-ID") : "";
+            !request_id.empty()) {
+            LOG_DEBUG("[Request-{}] start to generate image", request_id);
+        }
 
-        // Todo: 参数校验
+
         ImagesRequest images_request;
         images_request.prompt = request_json.value("prompt", "");
-        if(images_request.prompt.empty()) {
-            throw std::runtime_error("Prompt cannot be empty.");
+        if (images_request.prompt.empty()) {
+            throw CommonException(5, "Prompt cannot be empty.");
         }
         images_request.steps = request_json.value("steps", 8);
         if (images_request.steps <= 0 || images_request.steps > 10) {
-            throw std::runtime_error("Sample steps must be greater than 0, and less than or equal to 10.");
+            throw CommonException(5, "Sample steps must be greater than 0, and less than or equal to 10.");
         }
         images_request.seed = request_json.value("seed", 42);
-        images_request.guidance_scale = request_json.value("guidance_scale", 4.5);
-        if(images_request.guidance_scale < 1.0) {
-            throw std::runtime_error("Guidance scale must be greater than 1.0 .");
+        images_request.guidance_scale = request_json.value("guidance_scale", 4.5f);
+        if (images_request.guidance_scale < 1.0) {
+            throw CommonException(5, "Guidance scale must be greater than 1.0 .");
         }
-        if (auto result = generate_image_sync(images_request); result.success) {
-            // 构造响应
+        if (auto [image, success, error_message, predicted_ms] = generate_image_sync(images_request); success) {
             nlohmann::ordered_json response;
 
-            // TODO: 将图像转换为 base64 或其他格式
             int png_len;
-            unsigned char* png_data = stbi_write_png_to_mem(result.image->data, 0, (int)result.image->width, (int)result.image->height, (int)result.image->channel, &png_len, NULL);
+            unsigned char* png_data = stbi_write_png_to_mem(image->data, 0, static_cast<int>(image->width), static_cast<int>(image->height),
+                                                            static_cast<int>(image->channel), &png_len, nullptr);
             if (!png_data) {
-                free(result.image->data);
+                free(image->data);
                 throw std::runtime_error("Failed to encode image to PNG.");
             }
 
             std::string b64_json = base64::encode(reinterpret_cast<const char*>(png_data), png_len);
-            
+
             free(png_data);
-            free(result.image->data);
-            response["created"] = std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count();
-            response["data"] = nlohmann::json::array({
-                {{"b64_json", b64_json}}
-            });
-            response["timings"] = nlohmann::json::object({
-                {"predicted_ms", result.predicted_ms}
-            });
+            free(image->data);
+            response["created"] =
+                std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            response["data"] = nlohmann::json::array({{{"b64_json", b64_json}}});
+            response["timings"] = nlohmann::json::object({{"predicted_ms", predicted_ms}});
             res.set_content(response.dump(), "application/json");
             res.status = 200;
         } else {
-            // 错误响应
-            nlohmann::ordered_json error_response;
-            error_response["error"] = result.error_message;
-            res.set_content(error_response.dump(), "application/json");
-            res.status = 500;
+            throw CommonException(1, "generate_image_sync failed");
         }
-    } catch (const std::exception& e) {
-        nlohmann::ordered_json error_response;
-        error_response["error"] = e.what();
-        res.set_content(error_response.dump(), "application/json");
-        res.status = 400;
+    } catch (const std::exception& ex) {
+        LOG_ERROR("handle_image_generations ex: {}", ex.what());
+        throw;
     }
 }
 

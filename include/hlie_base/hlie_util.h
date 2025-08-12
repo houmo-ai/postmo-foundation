@@ -1,7 +1,3 @@
-//
-// Created by tuo.wang on 2025/8/5.
-//
-
 #ifndef HLIE_UTIL_H
 #define HLIE_UTIL_H
 
@@ -25,6 +21,10 @@ public:
         return result.lexically_normal().string();
     }
 
+
+    static int set_env(const std::string& key, const std::string& value);
+
+    static std::string uuid();
 
 };
 

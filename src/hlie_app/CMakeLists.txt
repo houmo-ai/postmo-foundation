@@ -1,17 +1,5 @@
 set(TARGET hlie-app)
 
-set(INIH_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/inih")
-set(LLAMA_CPP_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo")
-
-find_library(INIH_LIBRARY_CPP NAMES INIReader PATHS ${INIH_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
-find_library(INIH_LIBRARY NAMES inih PATHS ${INIH_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
-
-find_library(LLAMA_CPP_LIBRARY_COMMON NAMES common PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
-find_library(LLAMA_CPP_LIBRARY_LLAMA NAMES llama PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
-find_library(LLAMA_CPP_LIBRARY_MTMD NAMES mtmd PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
-find_library(LLAMA_CPP_LIBRARY_GGML NAMES ggml PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
-find_library(LLAMA_CPP_LIBRARY_GGML_BASE NAMES ggml-base PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
-
 include_directories(${PROJECT_SOURCE_DIR}/third_party/inih/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/spdlog/include)
 
@@ -22,9 +10,11 @@ file(GLOB SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/*.cpp")
 
 add_library(${TARGET} ${SOURCES})
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
+
 if(ENABLE_SD)
-    target_link_libraries(${TARGET} PRIVATE ${STABLE_DIFFUSION})
+    target_link_libraries(${TARGET} PRIVATE ${STABLE_DIFFUSION} ${TCIM_LIBRARY} ${LLAMA_CPP_LIBRARY_GGML_CPU})
 endif()
-target_link_libraries(${TARGET} PRIVATE hlie-base ${INIH_LIBRARY_CPP} ${INIH_LIBRARY} ${LLAMA_CPP_LIBRARY_COMMON}
+
+target_link_libraries(${TARGET} PRIVATE hlie-base ${STABLE_DIFFUSION} ${INIH_LIBRARY_CPP} ${INIH_LIBRARY} ${LLAMA_CPP_LIBRARY_COMMON}
         ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_MTMD} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)

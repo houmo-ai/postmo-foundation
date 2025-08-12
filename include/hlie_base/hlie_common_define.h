@@ -88,7 +88,7 @@ inline void res_ok(httplib::Response &res, const json &data) {
     res.status = 200;
 }
 
-inline json format_error_response(const std::string& message, const enum error_type type) {
+inline json format_error_response(const std::string& message, const error_type type, const int ret = -1) {
     std::string type_str;
     int code = 500;
     switch (type) {
@@ -125,6 +125,7 @@ inline json format_error_response(const std::string& message, const enum error_t
         {"code", code},
         {"message", message},
         {"type", type_str},
+        {"ret", ret},
     };
 }
 

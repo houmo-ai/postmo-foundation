@@ -2,6 +2,7 @@
 
 #include <filesystem>
 
+#include "INIReader.h"
 #include "hlie_app/hlie_infer_service.h"
 #include "hlie_app/hlie_llm_model_service.h"
 #include "hlie_app/hlie_model_info.h"
@@ -9,9 +10,9 @@
 #include "hlie_app/hlie_sd_model_service.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
+#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_exception.h"
 #include "hlie_base/hlie_logger.h"
-#include "INIReader.h"
 
 HLIE_NAMESPACE_BEGIN
 
@@ -72,7 +73,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir) {
 
     // 处理每个模型信息
     for (const auto& model_info : model_infos) {
-        const auto model_type = model_info.get_model_type();
+        const auto& model_type = model_info.get_model_type();
         if (model_type.empty()) {
             LOG_WARN("Skipping model with empty type");
             continue;
@@ -93,6 +94,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir) {
 
     // 设计上可以在多卡上面同时运行不同类型的模型
 
+    Singleton<HLIEDeviceHelper>::instance()->print_status();
     return 0;
 }
 

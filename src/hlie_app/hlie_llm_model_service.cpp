@@ -1,13 +1,13 @@
 #include "hlie_app/hlie_llm_model_service.h"
 #include "hlie_app/llama_server.hpp"
 
-#include <mutex>
 #include <unordered_set>
 
 #include "INIReader.h"
 #include "common.h"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_base/hlie_config_service.h"
+#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_singleton.h"
 #include "hlie_base/hlie_util.h"
@@ -21,7 +21,7 @@ int LLModelService::init(const std::string& model_path, const HLIEModelInfo& mod
     llama_server_ = std::make_unique<LlamaServer>();
 
     std::unordered_map<std::string, std::string> llm_params;
-    // 程序内特定参数
+    // 程序内特定启动参数
     llm_params["--model"] = HlieUtil::join_paths(model_path, model_info.get_model_name());
     llm_params["--parallel"] = std::to_string(model_info.get_batch_num());
     llm_params["--ctx-size"] = std::to_string(model_info.get_context_size());
@@ -31,8 +31,8 @@ int LLModelService::init(const std::string& model_path, const HLIEModelInfo& mod
     // 第二优先级是程序入口参数
     const auto& config_service = Singleton<HLIEConfigService>::instance();
     auto args_from_main = config_service->get_args();
-    for (auto [key, value] : args_from_main) {
-        if (key == "--port") { // 改为由上册控制，非llama-server参数
+    for (const auto& [key, value] : args_from_main) {
+        if (key == "--port") { // 改为由框架控制，非llama-server参数
             continue;
         }
         llm_params[key] = value;
@@ -67,6 +67,12 @@ int LLModelService::init(const std::string& model_path, const HLIEModelInfo& mod
     char** argv = argv_vector.data();
     const int argc = static_cast<int>(argv_vector.size() - 1); // 不包括终止符nullptr
     common_params params;
+    params.sampling.top_k = 40;
+    params.sampling.top_p = 0.9;
+    params.sampling.temp = 1.1f;
+    params.sampling.penalty_repeat = 1.05;
+    params.sampling.penalty_last_n = 60;
+    // 解析llama-server参数，如果有外部相同配置会覆盖上面的Sampling参数
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         LOG_ERROR("Failed to merge llama-server params, try to abandon it.");
     } else {
@@ -77,20 +83,21 @@ int LLModelService::init(const std::string& model_path, const HLIEModelInfo& mod
         params.mmproj.path = HlieUtil::join_paths(model_path, model_info.get_mm_proj_path());
     }
 
-    // 服务化版本自定义初始后采样参数配置
-    params.sampling.top_k = 40;
-    params.sampling.top_p = 0.9;
-    params.sampling.temp = 1.1f;
-    params.sampling.penalty_repeat = 1.05;
-    params.sampling.penalty_last_n = 60;
-
-    params.model_alias = model_info.get_model_type(); // 用于models请求，返回Qwen2.5/Qwen3 ..
+    // 用于models请求，返回Qwen2.5-7B/Qwen3-8B ..
+    params.model_alias = model_info.get_model_type() + "-" + model_info.get_params();
 
     common_log_set_verbosity_thold(-888); // 负数用于同化llama.cpp日志
     common_init();
 
     llama_backend_init();
     llama_numa_init(params.numa);
+    if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(LLM); !val) {
+        LOG_ERROR("cannot acquire available device");
+        return -1;
+    } else {
+        HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(val.value()));
+        LOG_INFO("LLM using device: {}", val.value());
+    }
 
     if (!llama_server_->load_model(params)) {
         return -1;

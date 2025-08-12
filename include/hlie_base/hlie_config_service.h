@@ -29,7 +29,7 @@ public:
     [[nodiscard]] bool get_bool(const std::string & section, const std::string & key, bool default_value, bool env_first = false) const;
 
     void set_args(int argc, char** argv);
-    const std::unordered_map<std::string, std::string>& get_args() const;
+    [[nodiscard]] const std::unordered_map<std::string, std::string>& get_args() const;
 
 private:
 
