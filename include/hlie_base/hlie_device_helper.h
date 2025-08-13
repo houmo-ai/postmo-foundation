@@ -34,6 +34,8 @@ public:
 
     void print_status() const;
 
+    int get_device_count() const;
+
 private:
     std::unordered_map<int, std::string> devices_;
     mutable std::mutex mutex_;

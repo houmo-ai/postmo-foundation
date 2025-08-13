@@ -2,20 +2,111 @@
 
 #include <filesystem>
 #include <unordered_map>
+
+#include "hlie_app/hlie_process_manager.h"
 #include "hlie_app/hlie_web_service.h"
 #include "hlie_app/hlie_workflow.h"
-#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_config_service.h"
+#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
 
 HLIE_NAMESPACE_BEGIN
 
+constexpr auto HLIECpp = R"(
+    _/    _/  _/        _/_/_/  _/_/_/_/    _/_/_/
+   _/    _/  _/          _/    _/        _/        _/_/_/    _/_/_/
+  _/_/_/_/  _/          _/    _/_/_/    _/        _/    _/  _/    _/
+ _/    _/  _/          _/    _/        _/        _/    _/  _/    _/
+_/    _/  _/_/_/_/  _/_/_/  _/_/_/_/    _/_/_/  _/_/_/    _/_/_/
+                                               _/        _/
+                                              _/        _/
+)";
+
+namespace {
+    /**
+     * Init the multi-instances cases and some common logics
+     *
+     * @param program_path windows need the absolute path, linux need "./app_name"
+     * @return the error code
+     */
+    int initialize_ex(const std::string& program_path) {
+        const auto& config_services = Singleton<HLIEConfigService>::instance();
+        auto devices = config_services->get_string("server", "devices", "0", true);
+        const auto& device_helper = Singleton<HLIEDeviceHelper>::instance();
+        const auto& args = config_services->get_args();
+        if (args.find("--device_id") != args.end()) {
+            devices = args.at("--device_id");
+        }
+
+        device_helper->init(devices);
+
+        // 多实例场景
+        if (args.find("--instance_id") == args.end()) {
+            if (const auto copies = config_services->get_int("server", "copies", 1); copies > 1) {
+                const int device_count = device_helper->get_device_count();
+                if (copies > device_count) {
+                    LOG_ERROR("Copies[{}] is bigger than devices count[]", copies, device_count);
+                    return -1;
+                }
+
+                LOG_INFO("Main process start to pull new copies[{}]", copies - 1);
+
+                int acquires_count = device_count / copies; // 每个实例获取的NPU数量, 因为每个实例可以同时运行生文和生图
+                LOG_INFO("Each process may have {} available devices", acquires_count);
+                for (int i = 1; i < copies; ++i) {
+                    std::string devices_for_sub;
+                    for (int j = 0; j < acquires_count; ++j) {
+                        const std::optional<int> val =
+                            device_helper->acquire_device("instance-" + std::to_string(i) + "-" + std::to_string(j));
+                        if (!val) {
+                            LOG_ERROR("instance_id-[{}] cannot acquire available device", i);
+                            return -1;
+                        }
+
+                        if (!devices_for_sub.empty()) {
+                            devices_for_sub += ",";
+                        }
+
+                        devices_for_sub += std::to_string(*val);
+                    }
+
+                    LOG_INFO("acquired device {} for instance-{}", devices_for_sub, i);
+
+                    // 子进程实例参数
+                    std::vector args_for_sub_process = {"--instance_id " + std::to_string(i), "--device_id " + devices_for_sub};
+                    // Copy llama-params
+                    for (const auto& [key, val] : args) {
+                        std::string arg = key;
+                        arg += " ";
+                        arg += val;
+                        args_for_sub_process.push_back(std::move(arg));
+                    }
+
+                    if (auto pid = Singleton<HLIEProcessManager>::instance()->create_process(program_path, args_for_sub_process);
+                        pid == 0 || pid == -1) {
+                        LOG_ERROR("Failed to start process for instance_id[{}]", i);
+                    } else {
+                        LOG_INFO("Started process PID[{}] instance_id[{}]", pid, i);
+                    }
+                }
+            }
+        }
+
+
+        const auto tcim_log_level = config_services->get_int("log", "tcim_level", 2);
+        HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(tcim_log_level));
+
+        return 0;
+    }
+
+} // namespace
+
 int HLIEAppController::run() {
     HLIE_CHECK_NULL_RETURN(workflow_, -1);
     workflow_->run();
     web_service_->register_routers();
-    if (web_service_->run("0.0.0.0", 8808) < 0) {
+    if (web_service_->run() < 0) {
         LOG_ERROR("web service failed to run");
         return -1;
     }
@@ -31,6 +122,8 @@ void HLIEAppController::stop() {
     if (workflow_) {
         workflow_->stop();
     }
+
+    Singleton<HLIEProcessManager>::instance()->terminate_all();
     is_running_.store(false);
     cv_.notify_one();
 }
@@ -41,17 +134,25 @@ void HLIEAppController::stop() {
 int HLIEWinAppController::initialize() {
     char exePath[260];
     GetModuleFileName(nullptr, exePath, MAX_PATH); // 获取exe绝对路径
-    const auto programPath = std::string(exePath);
+    const auto program_path = std::string(exePath);
     const auto program_dir = std::string(exePath).substr(0, std::string(exePath).find_last_of('\\') + 1);
     const auto program_name = std::string(exePath).substr(std::string(exePath).find_last_of('\\') + 1);
 
-    const auto boot_log_file = program_dir + "\\boot_log\\service_boot.log";
+    const auto& config_services = Singleton<HLIEConfigService>::instance();
+
+    const auto& args = config_services->get_args();
+    std::string instance_id{"0"};
+    if (args.find("--instance_id") != args.end()) {
+        // 子进程ID
+        instance_id = args.at("--instance_id");
+    }
+
+    const auto boot_log_file = program_dir + "\\boot_log\\service_boot-" + instance_id + ".log";
     const auto boot_logger = HLIELogger::create_logger(boot_log_file, "HLIE-BOOT", "debug");
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
 
     const auto config_path = program_dir + "..\\config\\sys.cfg";
 
-    const auto& config_services = Singleton<HLIEConfigService>::instance();
     if (config_services->parse(config_path) < 0) {
         boot_logger->error("sys_config parsed failed");
         return -5;
@@ -74,7 +175,7 @@ int HLIEWinAppController::initialize() {
         return -1;
     }
 
-    const std::string log_file_name = "houmo-llm.log";
+    const std::string log_file_name = "houmo-llm-" + instance_id + ".log";
 
     const std::string log_file = HlieUtil::join_paths(log_location, log_file_name);
     const auto log_level = config_services->get_string("log", "level", "debug");
@@ -83,15 +184,16 @@ int HLIEWinAppController::initialize() {
     HLIE_CHECK_NULL_RETURN(logger, -1);
     spdlog::set_default_logger(logger);
 
-    const auto tcim_log_level =  config_services->get_int("log", "tcim_level", 2);
-    HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(tcim_log_level));
+    LOG_INFO(HLIECpp);
 
-    const auto access_log = HlieUtil::join_paths(log_location, "access.log");
+    if (initialize_ex(program_path) < 0) {
+        return -3;
+    }
+
+    const auto access_log = HlieUtil::join_paths(log_location, "access-" + instance_id + ".log");
     const auto access_logger = HLIELogger::create_logger(access_log, "HLIE-ACCESS", "debug");
     HLIE_CHECK_NULL_RETURN(access_logger, -6);
 
-    const auto devices = config_services->get_string("server", "devices", "0", true);
-    Singleton<HLIEDeviceHelper>::instance()->init(devices);
 
     const std::string cur_model = config_services->get_string("model", "cur_model");
     if (cur_model.empty()) {
@@ -117,16 +219,38 @@ int HLIEWinAppController::initialize() {
 int HLIELinuxAppController::initialize() {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
     if (const std::string config_path = "/opt/hicpp/config/sys.cfg"; config_services->parse(config_path) < 0) {
-        LOG_ERROR("sys_config parsed failed");
-        return -5;
+        if (config_services->get_string("model", "cur_model").empty()) {
+            LOG_ERROR("sys_config parsed failed and no env[HLIE__model__cur_model]");
+            return -5;
+        }
+
+        LOG_WARN("sys_config parsed failed and will use env[HLIE__model__cur_model] to continue");
     }
 
-    const int log_level = config_services->get_int("log", "level", 0);
+    const auto& args = config_services->get_args();
+    std::string instance_id{"0"};
+    if (args.find("--instance_id") != args.end()) {
+        // 子进程ID
+        instance_id = args.at("--instance_id");
+    }
 
-    const auto log_location = "/opt/hicpp/logs/houmo-llm.log";
-    const auto logger = HLIELogger::init_default_logger(log_location, "HLIE", static_cast<spdlog::level::level_enum>(log_level));
+    const std::string log_location = config_services->get_string("log", "location", "/opt/hicpp/logs");
+    const std::string log_file_name = HlieUtil::join_paths(log_location, "houmo-llm-" + instance_id + ".log");
+    const auto log_level = config_services->get_string("log", "level", "debug");
+    const auto max_files = config_services->get_int("log", "max_files", 7);
+    const auto logger = HLIELogger::init_default_logger(log_file_name, "HLIE", log_level, max_files);
     HLIE_CHECK_NULL_RETURN(logger, -1);
-    set_default_logger(logger);
+    spdlog::set_default_logger(logger);
+
+    LOG_INFO(HLIECpp);
+
+    if (initialize_ex( "./HLIECpp") < 0) {
+        return -3;
+    }
+
+    const std::string access_log = HlieUtil::join_paths(log_location, "access-" + instance_id + ".log");
+    const auto access_logger = HLIELogger::create_logger(access_log, "HLIE-ACCESS", "debug");
+    HLIE_CHECK_NULL_RETURN(access_logger, -6);
 
     const std::string cur_model = config_services->get_string("model", "cur_model");
     if (cur_model.empty()) {

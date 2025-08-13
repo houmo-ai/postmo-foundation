@@ -2,7 +2,7 @@ set(TARGET houmo-llm)
 
 #cmake -DENABLE_HMLLAMACPP=OFF .. 加载公版llama.cpp
 option(ENABLE_HMLLAMACPP "Enable Houmo LLama.cpp" ON)  # 默认编译
-option(ENABLE_SD "Enable Stable Diffusion" OFF)
+option(ENABLE_SD "Enable Stable Diffusion" ON)
 if(ENABLE_HMLLAMACPP)
     add_definitions(-DENABLE_HOUMO_LLAMACPP=1)
 else()

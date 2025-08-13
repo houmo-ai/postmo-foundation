@@ -32,20 +32,20 @@ int LLModelService::init(const std::string& model_path, const HLIEModelInfo& mod
     const auto& config_service = Singleton<HLIEConfigService>::instance();
     auto args_from_main = config_service->get_args();
     for (const auto& [key, value] : args_from_main) {
-        if (key == "--port") { // 改为由框架控制，非llama-server参数
+        if (key == "--port" || key == "--device_id" || key == "--instance_id") { // 改为由框架控制，非llama-server参数
             continue;
         }
         llm_params[key] = value;
     }
 
     // 最高优先级是配置文件
-    const auto config_reader = config_service->get_reader();
-    HLIE_CHECK_NULL_RETURN(config_reader, -1);
-    // 获取llama-server同款运行参数
-    const std::vector<std::string> keys = config_reader->Keys("llm_params");
-    for (const auto& key : keys) {
-        const std::string value = config_reader->Get("llm_params", key, "");
-        llm_params[key] = value;
+    if (const auto config_reader = config_service->get_reader()) {
+        // 获取llama-server同款运行参数
+        const std::vector<std::string> keys = config_reader->Keys("llm_params");
+        for (const auto& key : keys) {
+            const std::string value = config_reader->Get("llm_params", key, "");
+            llm_params[key] = value;
+        }
     }
 
     LOG_INFO("Start to merge llama-server params");

@@ -91,8 +91,9 @@ void HLIEWebService::init(int n_threads_http) {
 
 int HLIEWebService::run(const std::string& host_name, int port) {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
+    const auto& args = config_services->get_args();
     if (const auto cfg_port = config_services->get_int("server", "port", -1); cfg_port < 0) {
-        if (const auto& args = config_services->get_args(); args.find("--port") != args.end()) {
+        if (args.find("--port") != args.end()) {
             try {
                 port = std::stoi(args.at("--port"));
                 LOG_DEBUG("Using arg port: {}", port);
@@ -104,6 +105,11 @@ int HLIEWebService::run(const std::string& host_name, int port) {
         }
     } else {
         port = cfg_port;
+    }
+
+    if (args.find("--instance_id") != args.end()) {
+        port += std::stoi(args.at("--instance_id"));
+        LOG_DEBUG("Instance[{}] port: {}", args.at("--instance_id"), port);
     }
 
     if (const bool was_bound = web_server_->bind_to_port(host_name, port); !was_bound) {

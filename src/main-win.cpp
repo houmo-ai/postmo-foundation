@@ -8,7 +8,7 @@
 #include <Windows.h>
 
 
-// 全局状态句柄
+// Windows SCM 全局状态句柄
 SERVICE_STATUS_HANDLE g_StatusHandle = nullptr;
 SERVICE_STATUS g_ServiceStatus = {0};
 
@@ -30,7 +30,6 @@ void WINAPI Handler(const DWORD controlCode) {
     {
     case SERVICE_CONTROL_STOP:
         ReportSvcStatus(SERVICE_STOP_PENDING, NO_ERROR, 0);
-        // stop_server();
         appController.stop();
         break;
     default:
@@ -38,22 +37,20 @@ void WINAPI Handler(const DWORD controlCode) {
     }
 }
 
-void run() {
+int run() {
     // 1、初始化配置服务，保存参数
     int ret = appController.initialize();
     if (ret < 0) {
         std::cout << "ServiceWorkerThread appController failed to initialize:" << ret << std::endl;
-        return;
+        return -1;
     }
 
     ret = appController.run();
     std::cout << "ServiceWorkerThread appController run, exit code:" << ret << std::endl;
+    return ret;
 }
 
 void ServiceWorkerThread() {
-    // run_server();
-
-    // New Way
     run();
     ReportSvcStatus(SERVICE_STOPPED, NO_ERROR, 0);
 }
@@ -80,7 +77,7 @@ void WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     // ServiceMain 返回，线程接管工作
 }
 
-int main(int argc, char** argv) {
+int main(const int argc, char** argv) {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
     _putenv("TCIM_LOG_TAGS=all");
@@ -92,30 +89,7 @@ int main(int argc, char** argv) {
 
 #ifdef HOUMO_M50
     _putenv("TCIM_BACKEND=Xh2HalBackend");
-#endif
 
-
-    const char* debug_mode = std::getenv("HICPP_WIN_D");
-    if (debug_mode) {
-#ifdef HOUMO_M50
-        _putenv("TCIM_RUNTIME_PATH=./hal");
-#endif
-        printf(" _   _ ___   ____ ____  ____    ____       _                    ____                      _   \n"
-               "| | | |_ _| / ___|  _ \\|  _ \\  |  _ \\  ___| |__  _   _  __ _   / ___|___  _ __  ___  ___ | | ___ \n"
-               "| |_| || | | |   | |_) | |_) | | | | |/ _ \\ '_ \\| | | |/ _` | | |   / _ \\| '_ \\/ __|/ _ \\| |/ _ \n"
-               "|  _  || | | |___|  __/|  __/  | |_| |  __/ |_) | |_| | (_| | | |__| (_) | | | \\__ \\ (_) | |  __/\n"
-               "|_| |_|___(_)____|_|   |_|     |____/ \\___|_.__/ \\__,_|\\__, |  \\____\\___/|_| |_|___/\\___/|_|\\___|\n"
-               "                                                       |___/                                     \n");
-        // run_server();
-        // New Way
-        run();
-        return 0;
-    }
-
-#ifdef WINSERVICE_MODE
-    // LOG(Info) << "WIN32 Service Mode";
-
-#ifdef HOUMO_M50
     char exePath[MAX_PATH];
     GetModuleFileName(nullptr, exePath, MAX_PATH); // 获取exe绝对路径
     const auto programPath = std::string(exePath);
@@ -124,52 +98,21 @@ int main(int argc, char** argv) {
 #endif
 
 
-    char serviceName[] = "HoumoHI";
+    if (std::getenv("HICPP_WIN_D") || config_service->get_args().find("--instance_id") != config_service->get_args().end()) {
+        printf("========HLIECpp Instance & COPY Mode======== \n");
+        return run();
+    }
+
+    char serviceName[] = "HLIECpp";
     SERVICE_TABLE_ENTRY ServiceTable[] = {{serviceName, ServiceMain}, {NULL, NULL}};
     if (!StartServiceCtrlDispatcher(ServiceTable))
     {
         // 此处处理错误（如记录日志）
         const DWORD err = GetLastError();
-        // LOG(Error) << "HoumoHI WIN32 Service StartServiceCtrlDispatcher failed, ErrCode: " << err;
-    }
+        std::cerr << "HoumoHI WIN32 Service StartServiceCtrlDispatcher failed, ErrCode: " << err;
 
-#else
-    const char* hi_modelpath = std::getenv("HICPP_MODEL_PATH");
-    std::string hPath;
-    if(hi_modelpath){
-      hPath=hi_modelpath;
-    } else {
-        printf("No Env HICPP_MODEL_PATH Found, read default path:./models/qwen3-8b-1batch/4core_8k");
-        hPath="./models/qwen3-8b-1batch/4core_8k";
+        return 8;
     }
-    std::cout << "hPath is: " << hPath << std::endl;
-    HANDLE instance = create_instance(hPath, nullptr);
-    if (instance == nullptr) {
-        printf("instance is null\n");
-    }
-    printf("instance 3 = %p\n", instance);
-
-    int input;
-    while(true){
-      std::cin >> input;
-      if(input==12315) {
-        printf("+++get exit code:%d\r\n",input);
-        break;
-      }
-      else{
-        printf("### Error get false exit code,input is:%d\r\n",input);
-        // 睡眠 2 秒（精确到毫秒级）
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        continue;
-      }
-    }
-
-    int ret = destroy_instance(instance);
-    printf("ret = %d\n", ret);
-    std::cin >> input;
-    printf("exit = %d!\n", input);
-
-#endif
 
     return 0;
 }

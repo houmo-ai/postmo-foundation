@@ -9,6 +9,7 @@ HLIE_NAMESPACE_BEGIN
 
 
 void HLIEDeviceHelper::init(const std::string& devices_str) {
+    LOG_INFO("Begin to init devices with devices_str[{}]", devices_str);
     devices_.clear();
     try {
         std::stringstream ss(devices_str);
@@ -61,6 +62,10 @@ void HLIEDeviceHelper::print_status() const {
     for (const auto& [id, user] : devices_) {
         LOG_INFO("Device {}:{}", id, user.empty() ? "[Available]" : "Used by " + user);
     }
+}
+
+int HLIEDeviceHelper::get_device_count() const {
+    return static_cast<int>(devices_.size());
 }
 
 HLIE_NAMESPACE_END
