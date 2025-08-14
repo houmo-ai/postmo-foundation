@@ -43,18 +43,18 @@ namespace {
 
         // 多实例场景
         if (args.find("--instance_id") == args.end()) {
-            if (const auto copies = config_services->get_int("server", "copies", 1); copies > 1) {
+            if (const auto replicas = config_services->get_int("server", "replicas", 1); replicas > 1) {
                 const int device_count = device_helper->get_device_count();
-                if (copies > device_count) {
-                    LOG_ERROR("Copies[{}] is bigger than devices count[]", copies, device_count);
+                if (replicas > device_count) {
+                    LOG_ERROR("Copies[{}] is bigger than devices count[]", replicas, device_count);
                     return -1;
                 }
 
-                LOG_INFO("Main process start to pull new copies[{}]", copies - 1);
+                LOG_INFO("Main process start to pull new replicas[{}]", replicas - 1);
 
-                int acquires_count = device_count / copies; // 每个实例获取的NPU数量, 因为每个实例可以同时运行生文和生图
+                int acquires_count = device_count / replicas; // 每个实例获取的NPU数量, 因为每个实例可以同时运行生文和生图
                 LOG_INFO("Each process may have {} available devices", acquires_count);
-                for (int i = 1; i < copies; ++i) {
+                for (int i = 1; i < replicas; ++i) {
                     std::string devices_for_sub;
                     for (int j = 0; j < acquires_count; ++j) {
                         const std::optional<int> val =
@@ -218,7 +218,7 @@ int HLIEWinAppController::initialize() {
 
 int HLIELinuxAppController::initialize() {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
-    if (const std::string config_path = "/opt/hicpp/config/sys.cfg"; config_services->parse(config_path) < 0) {
+    if (const std::string config_path = "./config/sys.cfg"; config_services->parse(config_path) < 0) {
         if (config_services->get_string("model", "cur_model").empty()) {
             LOG_ERROR("sys_config parsed failed and no env[HLIE__model__cur_model]");
             return -5;

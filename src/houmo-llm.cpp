@@ -9839,7 +9839,7 @@ int init_params(const std::string& model_dir, common_params* &p_params, uint8_t 
         return -1;
     }
 
-    const int log_level = config_service->get_int("log", "level", 0);
+    const auto log_level = config_service->get_string("log", "level", "debug");
 
     try {
         if (std::filesystem::create_directories(log_location)) {
@@ -9860,7 +9860,7 @@ int init_params(const std::string& model_dir, common_params* &p_params, uint8_t 
     log_redirector.start();
 
     const std::string log_file = log_location + log_file_name;
-    const auto logger = hm_HLIE::HLIELogger::init_default_logger(log_file, "HLIE", static_cast<spdlog::level::level_enum>(log_level));
+    const auto logger = hm_HLIE::HLIELogger::init_default_logger(log_file, "HLIE", log_level);
     HLIE_CHECK_NULL_RETURN(logger, -1);
     spdlog::set_default_logger(logger);
 
@@ -9887,7 +9887,6 @@ int init_params(const std::string& model_dir, common_params* &p_params, uint8_t 
     p_params->warmup = false;
     p_params->hostname = "0.0.0.0";
     p_params->port = server_port;
-    p_params->verbosity = log_level;
 
     if (model_info.get_is_multi_model()) {
         p_params->mmproj.path = model_dir + model_info.get_mm_proj_path();
@@ -9934,7 +9933,7 @@ int run_server() {
     }
 
     const auto boot_log_file =  program_dir + "\\boot_log\\service_boot-" + std::to_string(instance_no) + ".log";
-    boot_logger = hm_HLIE::HLIELogger::create_logger(boot_log_file, "HLIE-BOOT", spdlog::level::debug);
+    boot_logger = hm_HLIE::HLIELogger::create_logger(boot_log_file, "HLIE-BOOT", "debug");
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
 
     spdlog::flush_every(std::chrono::seconds(10));
