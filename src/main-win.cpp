@@ -98,7 +98,7 @@ int main(const int argc, char** argv) {
 #endif
 
 
-    if (std::getenv("HICPP_WIN_D") || config_service->get_args().find("--instance_id") != config_service->get_args().end()) {
+    if (std::getenv("HLIECPP_WIN_D") || config_service->get_args().find("--instance_id") != config_service->get_args().end()) {
         printf("========HLIECpp Instance & COPY Mode======== \n");
         return run();
     }

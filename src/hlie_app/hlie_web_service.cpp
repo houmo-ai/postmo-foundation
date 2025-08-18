@@ -22,14 +22,13 @@ namespace {
         }
 
         const std::string request_id = res.has_header("X-Request-ID") ? res.get_header_value("X-Request-ID") : "null";
-        if (const auto logger = HLIELogger::get_logger("HLIE-ACCESS")) {
-            logger->info("{} - - \"{} {}\" {} [RequestID={}]", req.remote_addr, req.method, req.path, res.status, request_id);
-        }
+        const auto access_logger = HLIELogger::get_logger(HLIE_ACCESS);
+        HLIE_CHECK_NULL(access_logger);
+        access_logger->info("{} - - \"{} {}\" {} [RequestID={}]", req.remote_addr, req.method, req.path, res.status, request_id);
+        access_logger->flush();
 
-        LOG_INFO("Request: {} {} {} {}", req.method, req.path, req.remote_addr, res.status);
-
-        LOG_DEBUG("Request:  {}", req.body);
-        LOG_DEBUG("Response: {}", res.body);
+        LOG_INFO("Request[{}]: {} {} {} {} \n{}", request_id, req.method, req.path, req.remote_addr, res.status, req.body);
+        LOG_INFO("Response[{}]: {}", request_id, res.body);
     }
 
     void res_error(httplib::Response& res, const json& error_data) {
@@ -191,7 +190,7 @@ void HLIEWebService::stop() {
 }
 
 httplib::Server::HandlerResponse HLIEWebService::pre_routing_handler(const httplib::Request& req, httplib::Response& res) const {
-    LOG_DEBUG("Pre-routing handler called for {} {}", req.method, req.path);
+    LOG_TRACE("Pre-routing handler called for {} {}", req.method, req.path);
     res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
     // If this is OPTIONS request, skip validation because browsers don't include Authorization header
     if (req.method == "OPTIONS") {
@@ -214,14 +213,14 @@ httplib::Server::HandlerResponse HLIEWebService::pre_routing_handler(const httpl
 }
 
 bool HLIEWebService::middleware_server_state(const httplib::Request& req, httplib::Response& res) const {
-    LOG_DEBUG("middleware_server_state called for path: {}", req.path);
+    LOG_TRACE("middleware_server_state called for path: {}", req.path);
     HLIE_CHECK_NULL_RETURN(workflow_, 0);
     const int state = workflow_->get_model_service_state();
     if (req.path != "/health") {
         const auto request_id = HlieUtil::uuid();
         res.set_header("X-Request-ID", request_id);
         LOG_INFO("Request[{}] come in, current state[0: LOADING_MODEL 1:READY]: {}", request_id, state);
-        if (const auto logger = HLIELogger::get_logger("HLIE-ACCESS")) {
+        if (const auto logger = HLIELogger::get_logger(HLIE_ACCESS)) {
             logger->info("{} - - \"{} {}\" [RequestID={}]", req.remote_addr, req.method, req.path, request_id);
         }
     }

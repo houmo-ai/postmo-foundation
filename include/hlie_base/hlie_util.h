@@ -26,6 +26,11 @@ public:
 
     static std::string uuid();
 
+    static bool is_valid_devices(const std::string& input);
+
+    static int parse_natural_num(const std::string& input, bool include_zero = true);
+
+    static bool is_relative_path(const std::string& path);
 };
 
 HLIE_NAMESPACE_END

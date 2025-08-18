@@ -12,6 +12,8 @@
 #define LOG_ERROR(...) SPDLOG_LOGGER_ERROR(spdlog::default_logger_raw(), __VA_ARGS__)
 #define LOG_CRITICAL(...) SPDLOG_LOGGER_CRITICAL(spdlog::default_logger_raw(), __VA_ARGS__)
 
+constexpr auto HLIE_BOOT = "HLIE-BOOT";
+constexpr auto HLIE_ACCESS = "HLIE-ACCESS";
 
 #define HLIE_CHECK_NULL(ptr)                                                                                                               \
     do {                                                                                                                                   \
@@ -79,7 +81,10 @@ public:
      * @param module_name the module-name which you created with
      * @return
      */
-    static std::shared_ptr<spdlog::logger> get_logger(const std::string& module_name);
+    static std::shared_ptr<spdlog::logger> get_logger(const std::string& module_name = "");
+
+private:
+    inline static std::shared_ptr<spdlog::logger> default_logger_  = nullptr;;
 };
 
 HLIE_NAMESPACE_END

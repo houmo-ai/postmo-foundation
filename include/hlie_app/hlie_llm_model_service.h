@@ -19,7 +19,7 @@ public:
     LLModelService() = default;
     ~LLModelService() override = default;
 
-    int init(const std::string& model_path, const HLIEModelInfo& model_info) override;
+    int init(const std::string& model_dir, const HLIEModelInfo& model_info) override;
 
     void run() override;
 

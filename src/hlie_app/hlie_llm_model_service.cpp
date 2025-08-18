@@ -17,12 +17,17 @@
 
 HLIE_NAMESPACE_BEGIN
 
-int LLModelService::init(const std::string& model_path, const HLIEModelInfo& model_info) {
+int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& model_info) {
+    if (model_info.get_model_path().empty()) {
+        LOG_ERROR("LLM model path cannot be empty");
+        return -1;
+    }
+
     llama_server_ = std::make_unique<LlamaServer>();
 
     std::unordered_map<std::string, std::string> llm_params;
     // 程序内特定启动参数
-    llm_params["--model"] = HlieUtil::join_paths(model_path, model_info.get_model_name());
+    llm_params["--model"] = model_info.get_model_path();
     llm_params["--parallel"] = std::to_string(model_info.get_batch_num());
     llm_params["--ctx-size"] = std::to_string(model_info.get_context_size());
     llm_params["--no-context-shift"] = "";
@@ -79,25 +84,48 @@ int LLModelService::init(const std::string& model_path, const HLIEModelInfo& mod
         LOG_INFO("Successfully merged llama-server params");
     }
 
+    // 兼容绝对路径与相对路径
+    if (HlieUtil::is_relative_path(params.model.path)) {
+        params.model.path = HlieUtil::join_paths(model_dir, params.model.path);
+    }
+
     if (model_info.get_is_multi_model() && !model_info.get_mm_proj_path().empty()) {
-        params.mmproj.path = HlieUtil::join_paths(model_path, model_info.get_mm_proj_path());
+        params.mmproj.path = model_info.get_mm_proj_path();
+        if (HlieUtil::is_relative_path(params.mmproj.path)) {
+            params.mmproj.path = HlieUtil::join_paths(model_dir, params.mmproj.path);
+        }
     }
 
     // 用于models请求，返回Qwen2.5-7B/Qwen3-8B ..
     params.model_alias = model_info.get_model_type() + "-" + model_info.get_params();
 
-    common_log_set_verbosity_thold(-888); // 负数用于同化llama.cpp日志
-    common_init();
+    if (const auto& devices = model_info.get_devices();
+        !devices.empty() && Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1) == 1) {
+        // 单实例模式可以定制Model Devices
+        if (!HlieUtil::is_valid_devices(devices)) {
+            LOG_ERROR("LLM cannot acquire model specific device \"{}\"", devices);
+            return -1;
+        }
 
-    llama_backend_init();
-    llama_numa_init(params.numa);
-    if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(LLM); !val) {
+        if (!Singleton<HLIEDeviceHelper>::instance()->acquire_devices(LLM, devices)) {
+            return -1;
+        }
+
+        HlieUtil::set_env("HOUMO_DEVICE_ID", devices);
+        LOG_INFO("LLM using model specific device: {}", devices);
+    } else if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(LLM); !val) {
         LOG_ERROR("LLM cannot acquire available device");
         return -1;
     } else {
         HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(val.value()));
         LOG_INFO("LLM using device: {}", val.value());
     }
+
+    common_log_set_verbosity_thold(-888); // 负数用于同化llama.cpp日志
+    common_init();
+
+    llama_backend_init();
+    llama_numa_init(params.numa);
 
     if (!llama_server_->load_model(params)) {
         return -1;
@@ -287,11 +315,16 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
         }
 
         tasks.reserve(inputs.size());
+
+        const std::string request_id = res.has_header("X-Request-ID") ? res.get_header_value("X-Request-ID") : "null";
+
         for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
             task.id = llama_server_->queue_tasks.get_new_id();
             task.index = i;
+
+            task.http_request_id = request_id;
 
             task.prompt_tokens = std::move(inputs[i]);
             task.params = server_task::params_from_json_cmpl(llama_server_->ctx, llama_server_->params_base, data);

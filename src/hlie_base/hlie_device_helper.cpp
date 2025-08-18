@@ -32,6 +32,7 @@ void HLIEDeviceHelper::init(const std::string& devices_str) {
 
 std::optional<int> HLIEDeviceHelper::acquire_device(const std::string& applicant) {
     if (applicant.empty()) {
+        LOG_ERROR("applicant cannot be empty");
         return std::nullopt;
     }
 
@@ -45,6 +46,68 @@ std::optional<int> HLIEDeviceHelper::acquire_device(const std::string& applicant
     }
 
     return std::nullopt;
+}
+
+std::optional<int> HLIEDeviceHelper::acquire_device(const std::string& applicant, const int device_id) {
+    if (applicant.empty()) {
+        LOG_ERROR("applicant cannot be empty");
+        return std::nullopt;
+    }
+
+    std::lock_guard lock(mutex_);
+
+    // 查找第一个空闲设备且等于device_id
+    if (const auto it = std::find_if(devices_.begin(), devices_.end(),
+                                     [device_id](const auto& pair) { return pair.first == device_id && pair.second.empty(); });
+        it != devices_.end()) {
+        it->second = applicant;
+        return it->first; // 返回分配的设备ID
+    }
+
+    return std::nullopt;
+}
+
+bool HLIEDeviceHelper::acquire_devices(const std::string& applicant, const std::string& devices) {
+    if (applicant.empty()) {
+        LOG_ERROR("applicant cannot be empty");
+        return false;
+    }
+
+    std::lock_guard lock(mutex_);
+
+    std::vector<int> acquiring_devices;
+    try {
+        std::stringstream ss(devices);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            // 去掉可能的空格
+            token.erase(0, token.find_first_not_of(' '));
+            token.erase(token.find_last_not_of(' ') + 1);
+
+            if (!token.empty()) {
+                acquiring_devices.push_back(std::stoi(token));
+            }
+        }
+    } catch (const std::exception& ex) {
+        LOG_ERROR("failed to parse acquiring devices \"{}\", ex: {}", devices, ex.what());
+        return false;
+    }
+
+    if (acquiring_devices.empty()) {
+        LOG_ERROR("no acquiring devices parsed with {}", devices);
+        return false;
+    }
+
+    if (std::all_of(acquiring_devices.begin(), acquiring_devices.end(),
+                    [&](const int device_id) { return devices_.find(device_id) != devices_.end(); })) {
+        for (auto device : acquiring_devices) {
+            devices_[device] = applicant;
+        }
+        return true;
+    }
+
+    LOG_ERROR("cannot found devices in global devices pool with {}, see the sys.cfg to check it", devices);
+    return false;
 }
 
 bool HLIEDeviceHelper::release_device(const int device_id) {

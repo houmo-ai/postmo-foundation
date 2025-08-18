@@ -37,6 +37,10 @@ namespace {
         const auto& args = config_services->get_args();
         if (args.find("--device_id") != args.end()) {
             devices = args.at("--device_id");
+            if (args.find("--instance_id") == args.end()) {
+                LOG_ERROR("Instance Replica must specify all the --instance_id and --device_id params");
+                return -1;
+            }
         }
 
         device_helper->init(devices);
@@ -91,8 +95,24 @@ namespace {
                     }
                 }
             }
-        }
+        } else {
+            if (args.find("--device_id") == args.end()) {
+                LOG_ERROR("Instance Replica must specify all the --instance_id and --device_id params");
+                return -1;
+            }
 
+            const auto instance_id_str = args.at("--instance_id");
+            const auto instance_id = HlieUtil::parse_natural_num(instance_id_str, false);
+            if (instance_id <= 0) {
+                LOG_ERROR("Cannot parse the instance_id, must be a positive integer");
+                return -1;
+            }
+
+            if (config_services->get_bool("server", "memory_saving", false)) {
+                LOG_INFO("multi instance mode and memory_saving is true, start to wait the others for {}s.", instance_id * 30);
+                std::this_thread::sleep_for(std::chrono::seconds( instance_id * 30));
+            }
+        }
 
         const auto tcim_log_level = config_services->get_int("log", "tcim_level", 2);
         HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(tcim_log_level));
@@ -148,12 +168,10 @@ int HLIEWinAppController::initialize() {
     }
 
     const auto boot_log_file = program_dir + "\\boot_log\\service_boot-" + instance_id + ".log";
-    const auto boot_logger = HLIELogger::create_logger(boot_log_file, "HLIE-BOOT", "debug");
+    const auto boot_logger = HLIELogger::create_logger(boot_log_file, HLIE_BOOT, "debug");
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
 
-    const auto config_path = program_dir + "..\\config\\sys.cfg";
-
-    if (config_services->parse(config_path) < 0) {
+    if (const auto config_path = program_dir + "..\\config\\sys.cfg"; config_services->parse(config_path) < 0) {
         boot_logger->error("sys_config parsed failed");
         return -5;
     }
@@ -186,16 +204,18 @@ int HLIEWinAppController::initialize() {
 
     LOG_INFO(HLIECpp);
 
+    const auto access_log = HlieUtil::join_paths(log_location, "access-" + instance_id + ".log");
+    const auto access_logger = HLIELogger::create_logger(access_log, HLIE_ACCESS, "debug");
+    HLIE_CHECK_NULL_RETURN(access_logger, -6);
+
+    spdlog::flush_every(std::chrono::seconds(10));
+
     if (initialize_ex(program_path) < 0) {
         return -3;
     }
 
-    const auto access_log = HlieUtil::join_paths(log_location, "access-" + instance_id + ".log");
-    const auto access_logger = HLIELogger::create_logger(access_log, "HLIE-ACCESS", "debug");
-    HLIE_CHECK_NULL_RETURN(access_logger, -6);
-
-
-    const std::string cur_model = config_services->get_string("model", "cur_model");
+    // 为啥方便手动扩展，支持配置环境变量HLIE__MODEL__CUR_MODEL用于指定独立的模型目录, 这种场景必须指定--device_id
+    const std::string cur_model = config_services->get_string("model", "cur_model", "", instance_id != "0");
     if (cur_model.empty()) {
         boot_logger->error("WINSERVICE cannot found model, cur_model is empty");
         return -2;
@@ -218,20 +238,24 @@ int HLIEWinAppController::initialize() {
 
 int HLIELinuxAppController::initialize() {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
-    if (const std::string config_path = "./config/sys.cfg"; config_services->parse(config_path) < 0) {
-        if (config_services->get_string("model", "cur_model").empty()) {
-            LOG_ERROR("sys_config parsed failed and no env[HLIE__model__cur_model]");
-            return -5;
-        }
-
-        LOG_WARN("sys_config parsed failed and will use env[HLIE__model__cur_model] to continue");
-    }
-
     const auto& args = config_services->get_args();
     std::string instance_id{"0"};
     if (args.find("--instance_id") != args.end()) {
         // 子进程ID
         instance_id = args.at("--instance_id");
+    }
+
+    const auto boot_log_file = "./logs/service_boot-" + instance_id + ".log";
+    const auto boot_logger = HLIELogger::create_logger(boot_log_file, HLIE_BOOT, "debug");
+    HLIE_CHECK_NULL_RETURN(boot_logger, -6);
+
+    if (const std::string config_path = "./config/sys.cfg"; config_services->parse(config_path) < 0) {
+        if (config_services->get_string("model", "cur_model").empty()) {
+            LOG_ERROR("sys_config parsed failed and no env[HLIE__MODEL__CUR_MODEL]");
+            return -5;
+        }
+
+        LOG_WARN("sys_config parsed failed and will use env[HLIE__MODEL__CUR_MODEL] to continue");
     }
 
     const std::string log_location = config_services->get_string("log", "location", "/opt/hicpp/logs");
@@ -244,15 +268,17 @@ int HLIELinuxAppController::initialize() {
 
     LOG_INFO(HLIECpp);
 
+    const std::string access_log = HlieUtil::join_paths(log_location, "access-" + instance_id + ".log");
+    const auto access_logger = HLIELogger::create_logger(access_log, HLIE_ACCESS, "debug");
+    HLIE_CHECK_NULL_RETURN(access_logger, -6);
+
+    spdlog::flush_every(std::chrono::seconds(10));
+
     if (initialize_ex( "./HLIECpp") < 0) {
         return -3;
     }
 
-    const std::string access_log = HlieUtil::join_paths(log_location, "access-" + instance_id + ".log");
-    const auto access_logger = HLIELogger::create_logger(access_log, "HLIE-ACCESS", "debug");
-    HLIE_CHECK_NULL_RETURN(access_logger, -6);
-
-    const std::string cur_model = config_services->get_string("model", "cur_model");
+    const std::string cur_model = config_services->get_string("model", "cur_model", "", instance_id != "0");
     if (cur_model.empty()) {
         LOG_ERROR("cannot found model, cur_model is empty");
         return -2;

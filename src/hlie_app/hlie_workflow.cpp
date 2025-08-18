@@ -85,12 +85,18 @@ int HLIEWorkflow::initialize(const std::string& model_dir) {
         if (model_type == HLIEModelType::SD3 && !sd_model_service_) {
             LOG_INFO("Initializing SDModelService");
             sd_model_service_ = std::make_shared<SDModelService>();
-            sd_model_service_->init(model_dir, model_info);
+            if (sd_model_service_->init(model_dir, model_info) < 0) {
+                LOG_ERROR("failed to init the SD model service");
+                return -1;
+            }
         } else if (!llm_model_service_ &&
                    (model_type == HLIEModelType::Qwen3 || model_type == HLIEModelType::Qwen25 || model_type == HLIEModelType::DeepSeek)) {
             LOG_INFO("Initializing LLModelService");
             llm_model_service_ = std::make_shared<LLModelService>();
-            llm_model_service_->init(model_dir, model_info);
+            if (llm_model_service_->init(model_dir, model_info) < 0) {
+                LOG_ERROR("failed to init the LLM model service");
+                return -1;
+            }
         }
     }
 
@@ -139,7 +145,7 @@ int HLIEWorkflow::cacl_thread_num() const {
     }
 
     if (sd_model_service_) {
-        return 1;
+        return static_cast<int32_t>(std::thread::hardware_concurrency()) - 1;
     }
 
     LOG_ERROR("model service not initialized");

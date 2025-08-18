@@ -9869,7 +9869,7 @@ int init_params(const std::string& model_dir, common_params* &p_params, uint8_t 
         return -1;
     }
 
-    std::string model_path = model_dir + model_info.get_model_name();
+    std::string model_path = model_dir + model_info.get_model_path();
     if (!fileExists(model_path)) {
         LOG_ERROR("Error:CreateInstance HiModel file: {} not exists, Please check sys.cfg", model_path);
         exit(-1);

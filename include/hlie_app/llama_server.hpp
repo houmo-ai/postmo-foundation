@@ -241,6 +241,7 @@ struct slot_params {
 struct server_slot {
     int id;
     int id_task = -1;
+    std::string http_request_id;
 
     // only used for completion/embedding/infill/rerank
     server_task_type task_type = SERVER_TASK_TYPE_COMPLETION;
@@ -577,6 +578,7 @@ struct server_metrics {
 struct server_task {
     int id = -1; // to be filled by server_queue
     int index = -1; // used when there are multiple prompts (batch request)
+    std::string http_request_id;
 
     server_task_type type;
 
@@ -1992,6 +1994,7 @@ struct LlamaServer {
     bool launch_slot_with_task(server_slot& slot, server_task&& task) {
         slot.reset();
         slot.id_task = task.id;
+        slot.http_request_id = task.http_request_id;
         slot.index = task.index;
         slot.task_type = task.type;
         slot.params = std::move(task.params);
@@ -2575,6 +2578,10 @@ struct LlamaServer {
 
         SLT_DBG(slot, "n_decoded = %d, n_remaining = %d, next token: %5d '%s'\n", slot.n_decoded, slot.n_remaining, result.tok,
                 token_str.c_str());
+
+        if (!slot.has_next_token) {
+            LOG_INFO("Request[{}] generated text: {}", slot.http_request_id, slot.generated_text);
+        }
 
         return slot.has_next_token; // continue
     }

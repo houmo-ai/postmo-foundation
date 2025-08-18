@@ -17,7 +17,7 @@ class HLIE_API HLIEModelInfo {
 public:
     int parse_from_file(const std::string& file_path = "info.json");
 
-    [[nodiscard]] const std::string& get_model_name() const { return model_name_; }
+    [[nodiscard]] const std::string& get_model_path() const { return model_path_; }
     [[nodiscard]] const std::string& get_model_type() const { return model_type_; }
     [[nodiscard]] int get_batch_num() const { return batch_num_; }
     [[nodiscard]] const std::string& get_model_version() const { return model_version_; }
@@ -32,9 +32,10 @@ public:
     [[nodiscard]] const std::string& get_t5_model() const { return t5_model_; }
     [[nodiscard]] const std::string& get_mmdit_model() const { return mmdit_model_; }
     [[nodiscard]] const std::string& get_vae_model() const { return vae_model_; }
+    [[nodiscard]] const std::string& get_devices() const { return devices_; }
 
 private:
-    std::string model_name_;
+    std::string model_path_;
     std::string model_type_;
     std::string model_version_;
     std::string mm_proj_path_;
@@ -49,6 +50,7 @@ private:
     std::string t5_model_;
     std::string mmdit_model_;
     std::string vae_model_;
+    std::string devices_;
 };
 
 HLIE_NAMESPACE_END

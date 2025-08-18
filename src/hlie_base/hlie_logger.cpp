@@ -36,10 +36,10 @@ std::shared_ptr<spdlog::logger> HLIELogger::init_default_logger(const std::strin
     const auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     const auto file_sink = std::make_shared<spdlog::sinks::daily_file_sink_mt>(log_file_name, 0, 0, false, max_files);
     std::vector<spdlog::sink_ptr> sinks{file_sink, console_sink};
-    auto logger = std::make_shared<spdlog::logger>(module_name, sinks.begin(), sinks.end());
-    logger->set_level(from_string(level));
-    spdlog::flush_every(std::chrono::seconds(10));
-    return std::move(logger);
+    default_logger_ = std::make_shared<spdlog::logger>(module_name, sinks.begin(), sinks.end());
+    default_logger_->set_level(from_string(level));
+    spdlog::set_default_logger(default_logger_);
+    return default_logger_;
 }
 
 std::shared_ptr<spdlog::logger> HLIELogger::create_logger(const std::string& log_file_name, const std::string& module_name,
@@ -51,6 +51,19 @@ std::shared_ptr<spdlog::logger> HLIELogger::create_logger(const std::string& log
 }
 
 std::shared_ptr<spdlog::logger> HLIELogger::get_logger(const std::string& module_name) {
+    if (module_name.empty()) {
+        if (default_logger_) {
+            return default_logger_;
+        }
+
+        if (spdlog::get(HLIE_BOOT)) {
+            std::cout << "No default logger found, using boot logger" << std::endl;
+            return spdlog::get(HLIE_BOOT);
+        }
+
+        throw std::runtime_error("No default or boot logger found");
+    }
+
     return spdlog::get(module_name);
 }
 

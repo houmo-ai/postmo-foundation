@@ -28,7 +28,7 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
         nlohmann::json config;
         file >> config;
 
-        model_name_ = config.value("ModelName", "");
+        model_path_ = config.value("ModelPath", "");
         model_type_ = config.value("ModelType", "");
         model_type_ = to_lower(model_type_);
         context_size_ = config.value("ContextSize", 0);
@@ -42,6 +42,7 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
         clip_model_ = config.value("ClipModel", "");
         clip_l_model_ = config.value("ClipLModel", "");
         t5_model_ = config.value("T5Model", "");
+        devices_ = config.value("Devices", "");
         mmdit_model_ = config.value("MMDitModel", "");
         vae_model_  = config.value("VaeModel", "");
     } catch (const nlohmann::json::exception& ex) {

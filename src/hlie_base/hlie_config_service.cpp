@@ -2,8 +2,6 @@
 
 #include "hlie_base/hlie_config_service.h"
 
-#include <fstream>
-
 #include "INIReader.h"
 #include "hlie_base/hlie_logger.h"
 #include "json.hpp"
@@ -43,13 +41,13 @@ namespace {
 int HLIEConfigService::parse(const std::string& config_path) {
     file_path_ = config_path;
     if (file_path_.empty()) {
-        LOG_ERROR("file path is empty");
+        HLIELogger::get_logger()->info("file path is empty");
         return -1;
     }
 
     config_reader_ = std::make_shared<INIReader>(file_path_);
     if (config_reader_->ParseError() < 0) {
-        LOG_ERROR("parse config file failed from {}", file_path_);
+        HLIELogger::get_logger()->error("parse config file failed from {}", file_path_);
         config_reader_.reset();
         return -1;
     }
@@ -64,19 +62,19 @@ std::shared_ptr<INIReader> HLIEConfigService::get_reader() const {
 int HLIEConfigService::get_int(const std::string& section, const std::string& key, const int default_value, const bool env_first) const {
     if (env_first || !config_reader_) {
         const std::string env_var = env_var_name(section, key);
-        LOG_INFO("Try to get {} from env", env_var);
+        HLIELogger::get_logger()->info("Try to get {} from env", env_var);
         if (const char* env_value = std::getenv(env_var.c_str()); env_value != nullptr) {
-            LOG_INFO("Got config {} : {} from env", env_var, env_value);
+            HLIELogger::get_logger()->info("Got config {} : {} from env", env_var, env_value);
             try {
                 return std::stoi(env_value);
             } catch (const std::exception& ex) {
-                LOG_ERROR("Cannot parse env {}, ex: {}", env_var, ex.what());
+                HLIELogger::get_logger()->error("Cannot parse env {}, ex: {}", env_var, ex.what());
             }
         }
     }
 
     if (!config_reader_) {
-        LOG_WARN("config reader is null, just return the [{}][{}] with default_value[{}]", section, key, default_value);
+        HLIELogger::get_logger()->warn("config reader is null, just return the [{}][{}] with default_value[{}]", section, key, default_value);
         return default_value;
     }
 
@@ -88,15 +86,23 @@ std::string HLIEConfigService::get_string(const std::string& section, const std:
                                           const bool env_first) const {
     if (env_first || !config_reader_) {
         const std::string env_var = env_var_name(section, key);
-        LOG_INFO("Try to get {} from env", env_var);
+        if (HLIELogger::get_logger()) {
+            HLIELogger::get_logger()->info("Try to get {} from env", env_var);
+        }
         if (const char* env_value = std::getenv(env_var.c_str()); env_value != nullptr) {
-            LOG_INFO("Got config {} : {} from env", env_var, env_value);
+            if (HLIELogger::get_logger()) {
+                HLIELogger::get_logger()->info("Got config {} : {} from env", env_var, env_value);
+            }
+
             return {env_value};
         }
     }
 
     if (!config_reader_) {
-        LOG_WARN("config reader is null, just return the [{}][{}] with default_value[{}]", section, key, default_value);
+        if (HLIELogger::get_logger()) {
+            HLIELogger::get_logger()->warn("config reader is null, just return the [{}][{}] with default_value[{}]", section, key, default_value);
+        }
+
         return default_value;
     }
 
@@ -107,12 +113,12 @@ std::string HLIEConfigService::get_string(const std::string& section, const std:
 bool HLIEConfigService::get_bool(const std::string& section, const std::string& key, const bool default_value, const bool env_first) const {
     if (env_first || !config_reader_) {
         const std::string env_var = env_var_name(section, key);
-        LOG_INFO("Try to get {} from env", env_var);
+        HLIELogger::get_logger()->info("Try to get {} from env", env_var);
         if (const char* env_value = std::getenv(env_var.c_str()); env_value != nullptr) {
             try {
                 std::string val(env_value);
                 std::transform(val.begin(), val.end(), val.begin(), tolower);
-                LOG_INFO("Got config {} : {} from env", env_var, env_value);
+                HLIELogger::get_logger()->info("Got config {} : {} from env", env_var, env_value);
 
                 if (val == "true" || val == "1" || val == "yes" || val == "on") {
                     return true;
@@ -122,13 +128,13 @@ bool HLIEConfigService::get_bool(const std::string& section, const std::string& 
                     return false;
                 }
             } catch (const std::exception& ex) {
-                LOG_ERROR("Cannot parse env {}, ex: {}", env_var, ex.what());
+                HLIELogger::get_logger()->error("Cannot parse env {}, ex: {}", env_var, ex.what());
             }
         }
     }
 
     if (!config_reader_) {
-        LOG_WARN("config reader is null, just return the [{}][{}] with default_value[{}]", section, key, default_value);
+        HLIELogger::get_logger()->warn("config reader is null, just return the [{}][{}] with default_value[{}]", section, key, default_value);
         return default_value;
     }
 
@@ -146,7 +152,7 @@ void HLIEConfigService::set_args(const int argc, char** argv) {
             } else {
                 args_[opt] = "";
             }
-            LOG_INFO("program arg: {} {}", opt, args_[opt]);
+            std::cout << "program arg:" << opt << " " << args_[opt] << std::endl;
         }
     }
 }

@@ -1,5 +1,5 @@
 ###
-POST http://10.64.35.42:8808/v1/chat/completions
+POST http://127.0.0.1:7901/v1/chat/completions
 Content-Type: application/json
 
 {
@@ -22,7 +22,7 @@ Content-Type: application/json
 
 ###
 
-GET http://127.0.0.1:8808/health
+GET http://127.0.0.1:7901/health
 Content-Type: application/json
 
 ###

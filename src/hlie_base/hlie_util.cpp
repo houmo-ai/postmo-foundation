@@ -1,4 +1,7 @@
 #include "hlie_base/hlie_util.h"
+
+#include <regex>
+
 #include "hlie_base/hlie_logger.h"
 
 
@@ -73,6 +76,44 @@ std::string HlieUtil::uuid() {
        << std::setw(8) << data[3];
     return ss.str();
 #endif
+}
+
+bool HlieUtil::is_valid_devices(const std::string& input) {
+    const std::regex pattern("^\\d+(,\\d+)*$");
+    return std::regex_match(input, pattern);
+}
+
+int HlieUtil::parse_natural_num(const std::string& input, const bool include_zero) {
+    if (input.empty()) {
+        return -1; // 空字符串无效
+    }
+
+    try {
+        size_t pos;
+        const long num = std::stol(input, &pos); // 用 stol 避免 stoi 的溢出问题
+
+        // 检查是否所有字符都被转换，且数值在 int 范围内
+        if (pos != input.size() || num < 0 || num > INT_MAX) {
+            return -1;
+        }
+
+        // 检查前导零（不允许 "01"，但允许 "0"）
+        if (input.size() > 1 && input[0] == '0') {
+            return -1;
+        }
+
+        if (!include_zero && num == 0) {
+            return -1;
+        }
+
+        return static_cast<int>(num);
+    } catch (...) {
+        return -1; // 捕获所有异常（无效字符串、超出范围等）
+    }
+}
+
+bool HlieUtil::is_relative_path(const std::string& path) {
+    return path[0] == '.' || path[0] == 'H';
 }
 
 HLIE_NAMESPACE_END

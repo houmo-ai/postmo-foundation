@@ -55,23 +55,39 @@ int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     params_->houmo_t5_path = model_info.get_t5_model();
     params_->houmo_vae_path = model_info.get_vae_model();
 
-    if (!params_->houmo_mmdit_path.empty() && params_->houmo_mmdit_path[0] == '.') {
+    if (!params_->houmo_mmdit_path.empty() && HlieUtil::is_relative_path(params_->houmo_mmdit_path)) {
         params_->houmo_mmdit_path = HlieUtil::join_paths(model_dir, params_->houmo_mmdit_path);
     }
-    if (!params_->houmo_clip_path.empty() && params_->houmo_clip_path[0] == '.') {
+    if (!params_->houmo_clip_path.empty() && HlieUtil::is_relative_path(params_->houmo_clip_path)) {
         params_->houmo_clip_path = HlieUtil::join_paths(model_dir, params_->houmo_clip_path);
     }
-    if (!params_->houmo_clip_l_path.empty() && params_->houmo_clip_l_path[0] == '.') {
+    if (!params_->houmo_clip_l_path.empty() && HlieUtil::is_relative_path(params_->houmo_clip_l_path)) {
         params_->houmo_clip_l_path = HlieUtil::join_paths(model_dir, params_->houmo_clip_l_path);
     }
-    if (!params_->houmo_t5_path.empty() && params_->houmo_t5_path[0] == '.') {
+    if (!params_->houmo_t5_path.empty() && HlieUtil::is_relative_path(params_->houmo_t5_path)) {
         params_->houmo_t5_path = HlieUtil::join_paths(model_dir, params_->houmo_t5_path);
     }
-    if (!params_->houmo_vae_path.empty() && params_->houmo_vae_path[0] == '.') {
+    if (!params_->houmo_vae_path.empty() && HlieUtil::is_relative_path(params_->houmo_vae_path)) {
         params_->houmo_vae_path = HlieUtil::join_paths(model_dir, params_->houmo_vae_path);
     }
 
-    if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(SD); !val) {
+    if (const auto& devices = model_info.get_devices();
+        !devices.empty() && Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1) == 1) {
+        // 单实例模式可以定制Model Devices
+        const auto device_id = HlieUtil::parse_natural_num(devices);
+        if (device_id < 0) {
+            LOG_ERROR("SD cannot acquire model specific device \"{}\"", devices);
+            return -1;
+        }
+
+        const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(SD, device_id);
+        if (!val) {
+            return -1;
+        }
+
+        params_->hm_sd_device = val.value();
+        LOG_INFO("LLM using model specific device: {}", device_id);
+    } else if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(SD); !val) {
         LOG_ERROR("SD cannot acquire available device");
         return -1;
     } else {
