@@ -72,16 +72,16 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     char** argv = argv_vector.data();
     const int argc = static_cast<int>(argv_vector.size() - 1); // 不包括终止符nullptr
     common_params params;
-    params.sampling.top_k = 40;
-    params.sampling.top_p = 0.9;
-    params.sampling.temp = 1.1f;
-    params.sampling.penalty_repeat = 1.05;
-    params.sampling.penalty_last_n = 60;
     // 解析llama-server参数，如果有外部相同配置会覆盖上面的Sampling参数
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         LOG_ERROR("Failed to merge llama-server params, try to abandon it.");
     } else {
         LOG_INFO("Successfully merged llama-server params");
+    }
+
+    if (params.model.path.empty()) {
+        LOG_ERROR("LLM model path cannot be empty from args");
+        return -1;
     }
 
     // 兼容绝对路径与相对路径
@@ -346,22 +346,31 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
         return;
     }
 
-    bool stream = json_value(data, "stream", false);
-
-    if (!stream) {
+    if (bool stream = json_value(data, "stream", false); !stream) {
         llama_server_->receive_multi_results(
             task_ids,
-            [&](std::vector<server_task_result_ptr>& results) {
-                if (results.size() == 1) {
-                    // single result
-                    res_ok(res, results[0]->to_json());
-                } else {
-                    // multiple results (multitask)
-                    json arr = json::array();
-                    for (auto& res : results) {
-                        arr.push_back(res->to_json());
+            [&](const std::vector<server_task_result_ptr>& results) {
+                try {
+                    if (results.size() == 1) {
+                        // single result
+                        res_ok(res, results[0]->to_json());
+                    } else {
+                        // multiple results (multitask)
+                        json arr = json::array();
+                        for (auto& res_data : results) {
+                            arr.push_back(res_data->to_json());
+                        }
+                        res_ok(res, arr);
                     }
-                    res_ok(res, arr);
+                } catch (const nlohmann::json::type_error& ex) {
+                    HLIELogger::get_logger()->error("Non-Stream Mode JSON Exception: {}", ex.what());
+                    res_error(res, format_error_response(ex.what(), ERROR_TYPE_SERVER));
+                } catch (const std::exception& ex) {
+                    HLIELogger::get_logger()->error("Non-Stream Mode Exception: {}", ex.what());
+                    res_error(res, format_error_response(ex.what(), ERROR_TYPE_SERVER));
+                } catch (...) {
+                    HLIELogger::get_logger()->error("Non-Stream Mode Unexpected Exception");
+                    res_error(res, format_error_response("Stream Model Exception", ERROR_TYPE_SERVER));
                 }
             },
             [&](const json& error_data) { res_error(res, error_data); }, is_connection_closed);
@@ -371,18 +380,32 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
         const auto chunked_content_provider = [task_ids, oaicompat, this](size_t, httplib::DataSink& sink) {
             llama_server_->receive_cmpl_results_stream(
                 task_ids,
-                [&](server_task_result_ptr& result) -> bool {
-                    json res_json = result->to_json();
-                    if (res_json.is_array()) {
-                        for (const auto& res : res_json) {
-                            if (!server_sent_event(sink, "data", res)) {
-                                // sending failed (HTTP connection closed), cancel the generation
-                                return false;
+                [&](const server_task_result_ptr& result) -> bool {
+                    try {
+                        json res_json = result->to_json();
+                        if (res_json.is_array()) {
+                            for (const auto& res_data : res_json) {
+                                if (!server_sent_event(sink, "data", res_data)) {
+                                    // sending failed (HTTP connection closed), cancel the generation
+                                    return false;
+                                }
                             }
+                            return true;
                         }
-                        return true;
-                    } else {
+
                         return server_sent_event(sink, "data", res_json);
+                    } catch (const nlohmann::json::type_error& ex) {
+                        HLIELogger::get_logger()->error("Stream Mode JSON Exception: {}", ex.what());
+                        const auto error_data = format_error_response(ex.what(), ERROR_TYPE_SERVER);
+                        return server_sent_event(sink, "error", error_data);
+                    } catch (const std::exception& ex) {
+                        HLIELogger::get_logger()->error("Stream Mode Exception: {}", ex.what());
+                        const auto error_data = format_error_response(ex.what(), ERROR_TYPE_SERVER);
+                        return server_sent_event(sink, "error", error_data);
+                    } catch (...) {
+                        HLIELogger::get_logger()->error("Stream Mode Unexpected Exception");
+                        const auto error_data = format_error_response("Unknown error", ERROR_TYPE_SERVER);
+                        return server_sent_event(sink, "error", error_data);
                     }
                 },
                 [&](const json& error_data) { server_sent_event(sink, "error", error_data); },

@@ -113,7 +113,24 @@ int HlieUtil::parse_natural_num(const std::string& input, const bool include_zer
 }
 
 bool HlieUtil::is_relative_path(const std::string& path) {
-    return path[0] == '.' || path[0] == 'H';
+#ifdef _WIN32
+    // UNC 路径 \\server\...
+    if (path.size() >= 2 && path[0] == '\\' && path[1] == '\\') {
+        return false;
+    }
+    // 驱动器开头 C:\ 或者 C:/
+    if (path.size() >= 3 && std::isalpha(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
+        return false;
+    }
+#else
+    // Unix/Linux 绝对路径以 / 开头
+    if (path[0] == '/') {
+        return false;
+    }
+#endif
+
+    // 其他情况都是相对路径
+    return true;
 }
 
 HLIE_NAMESPACE_END
