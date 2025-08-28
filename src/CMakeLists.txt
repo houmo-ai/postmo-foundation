@@ -114,8 +114,7 @@ target_include_directories(utf8_console PUBLIC "utf8/include")
 
 set(HOUMO_LLM_SRCS
     hi.h
-    houmo-llm.h
-    houmo-llm.cpp
+    houmo-llm-sdk.cpp
 )
 
 add_definitions(-DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)

@@ -1,8 +1,7 @@
 
-#include <stdio.h>
-#include <signal.h>
-#include <stdlib.h>
-//#include <http_server_c_interface_3.h>
+#include <cstdio>
+#include <csignal>
+#include <cstdlib>
 #include <iostream>
 #include <regex>
 #include <algorithm>
@@ -10,6 +9,7 @@
 #include <vector>
 #include <fstream>
 #include <filesystem>
+
 #include "hi.h"
 
 #ifdef WIN32
@@ -24,7 +24,6 @@
 #include <functional>
 #include <chrono>
 #include <future>
-#include <cstdio>
 #include <limits>
 #include <ios>
 

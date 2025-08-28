@@ -4,9 +4,7 @@
 #ifndef HM_INFER_INTERFACE_H
 #define HM_INFER_INTERFACE_H
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <math.h>
+#include <cstdint>
 
 typedef int32_t int32;
 typedef float_t float32;

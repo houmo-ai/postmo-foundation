@@ -99,8 +99,6 @@ public:
                         return;
                     }
                 } while(ret != E_BUFFER_NOT_ENOUGH);
-                //char * result_c = new char [result_len + 1];
-                //result_c[result_len] = '\0';
                 char * result_c = new char [result_len];
                 printf("result_c: %p\n", result_c);
                 printf("&result_c: %p\n", &result_c);
@@ -111,7 +109,6 @@ public:
                     return;
                 }
                 if (ret == 2) {
-
                     printf("timer data not ready: %d\n", ret);
                 } else if (ret == -1) {
                     printf("Error: %d\n", ret);
@@ -254,8 +251,6 @@ int main(int argc, char ** argv) {
 
     size_t params_bytes = 0;
 
-    //const char* token_fullpath = "./models/hmm_qwen2_256_4096_4cores_20250317/qwen2-1_5b-instruct-q4_0.gguf";
-
     const char* model_names[1] = {"qwen2-7b"};
     size_t model_name_count = 1;
     hardware_info hwinfo;
@@ -267,8 +262,8 @@ int main(int argc, char ** argv) {
 
     int status = api_status(instance);
     printf("api_status: %d\n", status);
-    bool state=false;
-    char* model_path=(char*)path.c_str();
+    bool state = false;
+    auto model_path = const_cast<char*>(path.c_str());
     if (found) {
         std::cout << "成功解析到模型路径-测试从文件加载推理模型：" << path << std::endl;
         api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
@@ -303,9 +298,6 @@ int main(int argc, char ** argv) {
     status = api_status(instance);
     printf("-api_status: %d\n", status);
 
-    //state = api_loadtoken(instance, token_fullpath);
-    //printf("api_loadtoken = %d\n", state);
-
     int ret = api_token_num(instance, "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n以下信息来自你的知识库，可能对回答某些问题有帮助：\n\n请记住以上知识库的信息。<|im_end|>\n<|im_start|>assistant\n好的，我已经记住了这些知识库的信息，请问有什么我可以帮助你解答的问题吗？<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n<think>\nAlright, the user greeted me with \"hello.\" I need to respond politely. Since the knowledgebase is empty, I can't provide specific information. I should acknowledge their greeting and let them know I'm here to help. Keeping it friendly and open-ended makes sense.\n</think>\n\nHello! How can I assist you today?<|im_end|>\n<|im_start|>user\n问题:你好\n请根据相关资料中有用的信息作为依据回答问题。\n回答一定要忠于原文，不要创造答案; 回答简洁而口语化，语义流畅而连贯。<|im_end|>\n<|im_start|>assistant\n");
     printf("api_token_num = %d\n", ret);
     status = api_status(instance);
@@ -320,24 +312,16 @@ int main(int argc, char ** argv) {
 
     ret = api_Generate_stream(instance, prompt2, &params, params_bytes);
     printf("api_Generate_stream = %d\n", ret);
-//
+
     status = api_Generate_status(instance);
     printf("api_Generate_status: %d\n", status);
     status = api_status(instance);
     printf("api_status: %d\n", status);
-    int count = 0;
 
-    #if 1
     if (ret) {
         char * * result2 = nullptr;
         size_t result_size2 = 0;
         while (true) {
-
-
-             count = count + 1;
-            //if (count > 10) {
-            //    break;
-            //}
             ret = api_Get_Generate_token(instance, result2, &result_size2);
             //printf("result_size2: %d\n", result_size2);
 
@@ -376,62 +360,36 @@ int main(int argc, char ** argv) {
             }
         }
     }
-    #endif
-//
+
     status = api_Generate_status(instance);
     printf("api_Generate_status 1: %d\n", status);
-//
+
     status = api_Generate_status(instance);
     printf("api_Generate_status 2: %d\n", status);
-//
-//
+
     status = api_status(instance);
     printf("api_status 1: %d\n", status);
-//
+
     status = api_status(instance);
     printf("api_status 2: %d\n", status);
-//
+
     status = api_status(instance);
     printf("api_status 3: %d\n", status);
-//
+
     status = api_status(instance);
     printf("api_status 4: %d\n", status);
-//
+
     ret = api_token_num(instance, "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n${history}<|im_start|>user\nThe following information is from your //owledgebase, it might be helpful to answer the question:\n---\n\n---\nPlease remember the above knowledgebase info.<|im_end|>\n<|im_start|>assistant\nYes, I have //membered these knowledgebase information, is there anything I can do for you?<|im_end|>\n${history}<|im_start|>user\nQuestion: hello\nYou MUST answer the question ONLY //ing the relevant information in Knowledgebase. Avoid generating hallucinations.<|im_end|>\n<|im_start|>assistant\n");
     printf("api_token_num = %d\n", ret);
     status = api_status(instance);
     printf("api_status: %d\n", status);
-//
+
     ret = api_token_num(instance, "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n以下信息来自你的知识库，可能对回答某些问题有帮助：\n\n请记住以上知识库的信息。<|im_end|>\n<|im_start|>assistant\n好的，我已经记住了这些知识库的信息，请问有什么我可以帮助你解答的问题吗？<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n<think>\nAlright, the user greeted me with \"hello.\" I need to respond politely. Since the knowledgebase is empty, I can't provide specific information. I should acknowledge their greeting and let them know I'm here to help. Keeping it friendly and open-ended makes sense.\n</think>\n\nHello! How can I assist you today?<|im_end|>\n<|im_start|>user\n问题:你好\n请根据相关资料中有用的信息作为依据回答问题。\n回答一定要忠于原文，不要创造答案; 回答简洁而口语化，语义流畅而连贯。<|im_end|>\n<|im_start|>assistant\n");
     printf("api_token_num = %d\n", ret);
     status = api_status(instance);
     printf("api_status: %d\n", status);
 
     int input;
-    #if 0
-    std::cin >> input;
-    api_unloadmodel(instance);
-    status = api_status(instance);
-    printf("api_unloadmodel api_status: %d\n", status);
-
-
-    destroy_api_instance(instance);
-    input;
-    std::cin >> input;
-    instance = create_api_instance(&params, params_bytes);
-
-    if (instance == nullptr) {
-        printf("instance is null\n");
-    }
-
-    status = api_status(instance);
-    printf("api_status: %d\n", status);
-
-
-    state = api_loadmodel_by_path(instance, model_path, model_names, model_name_count, hwinfo);
-    printf("api_loadmodel_by_path = %d\n", state);
-    #endif
-
     status = api_status(instance);
     printf("api_status: %d\n", status);
 
@@ -443,37 +401,33 @@ int main(int argc, char ** argv) {
     //char* prompt3 ="<｜begin▁of▁sentence｜>Please reason step by step, and put your final answer within ``.<｜User｜>给我讲讲三国演义<｜Assistant｜>";
 
     //回答的还可以，不太多
-    //char* prompt3 ="<｜begin▁of▁sentence｜>You are a helpful assistant.<｜User｜>以下信息来自你的知识库，可能对回答某些问题有帮助：\n\n请记住以上知识库的信息。<｜Assistant｜>好的，我已经记住了这些知识库的信息，请问有什么我可以帮助你解答的问题吗？<｜User｜>给我讲讲三国演义\n请根据相关资料中有用的信息作为依据回答问题。\n回答一定要忠于原文，不要创造答案; 回答简洁而口语化，语义流畅而连贯。<｜Assistant｜><｜end▁of▁sentence｜><｜Assistant｜>";
+    // char* prompt3 ="<｜begin▁of▁sentence｜>You are a helpful
+    // assistant.<｜User｜>以下信息来自你的知识库，可能对回答某些问题有帮助：\n\n请记住以上知识库的信息。<｜Assistant｜>好的，我已经记住了这些知识库的信息，请问有什么我可以帮助你解答的问题吗？<｜User｜>给我讲讲三国演义\n请根据相关资料中有用的信息作为依据回答问题。\n回答一定要忠于原文，不要创造答案;
+    //  回答简洁而口语化，语义流畅而连贯。<｜Assistant｜><｜end▁of▁sentence｜><｜Assistant｜>";
 
-    char* prompt3 ="<｜begin▁of▁sentence｜>You are a helpful assistant.<｜User｜>以下信息来自你的知识库，可能对回答某些问题有帮助：\n\n请记住以上知识库的信息。<｜Assistant｜><｜end▁of▁sentence｜><｜Assistant｜>好的，我已经记住了这些知识库的信息，请问有什么我可以帮助你解答的问题吗？<｜begin▁of▁sentence｜><｜User｜>给我讲讲三国演义\n请根据相关资料中有用的信息作为依据回答问题。\n回答一定要忠于原文，不要创造答案; 回答简洁而口语化，语义流畅而连贯。<｜Assistant｜><｜end▁of▁sentence｜><｜Assistant｜>";
+    auto prompt3 =
+        "<｜begin▁of▁sentence｜>You are a helpful "
+        "assistant.<｜User｜>以下信息来自你的知识库，可能对回答某些问题有帮助：\n\n请记住以上知识库的信息。<｜Assistant｜><"
+        "｜end▁of▁sentence｜><｜Assistant｜>好的，我已经记住了这些知识库的信息，请问有什么我可以帮助你解答的问题吗？<｜begin▁of▁sentence｜>"
+        "<｜User｜>给我讲讲三国演义\n请根据相关资料中有用的信息作为依据回答问题。\n回答一定要忠于原文，不要创造答案; "
+        "回答简洁而口语化，语义流畅而连贯。<｜Assistant｜><｜end▁of▁sentence｜><｜Assistant｜>";
 
 
     params.n_predict = 3000;
-    char* result3 = nullptr;
-    size_t result_size3 = 0;
     ret = api_Generate_stream(instance, prompt3, &params, params_bytes);
     printf("api_Generate_stream = %d\n", ret);
-//
     status = api_Generate_status(instance);
     printf("api_Generate_status: %d\n", status);
     status = api_status(instance);
     printf("api_status: %d\n", status);
-    count = 0;
 
     if (ret) {
-        //bad:
-        //CallBackTimer t = new CallBackTimer(instance);
-        //t.start(100, api_Get_Generate_token);
-//
-        //CallBackTimer * t = new CallBackTimer(instance);
-        //t->start(100, api_Get_Generate_token);
-//
         CallBackTimer t(instance);
         t.start(100, api_Get_Generate_token);
         printf("CallBackTimer started: %d\n", 1);
 
         std::this_thread::sleep_for(std::chrono::seconds(4));
-        while(1) {
+        while(true) {
            status = api_status(instance);
            printf("before stop api_status: %d\n", status);
 
@@ -487,46 +441,11 @@ int main(int argc, char ** argv) {
            printf("after stop2 api_status: %d\n", status);
 
            break;
-
         }
+
         int input;
         std::cin >> input;
         printf("CallBackTimer input: %d\n", input);
-        //while (true) {
-        //    sleep_milliseconds(1);
-        //    count = count + 1;
-        //    //if (count > 10) {
-        //    //    break;
-        //    //}
-        //    ret = api_Get_Generate_token(instance, &result3, &result_size3);
-        //    //printf("result_size3: %d\n", result_size3);
-        //
-        //    status = api_Generate_status(instance);
-        //    printf("api_Generate_status: %d\n", status);
-        //    if (status == 0) {
-        //        //printf("stop found str: %s\n", result3);
-        //        break;
-        //    } else if (ret == 2) {
-        //
-        //        printf("data not ready: %d\n", ret);
-        //        continue;
-        //    } else if (ret == -1) {
-        //        //printf("Error: %d\n", ret);
-        //        break;
-        //    } else if (ret == 1) {
-        //        printf("not enough: %d\n", result_size3);
-        //        if (result3) {
-        //            delete result3;
-        //        }
-        //
-        //        result3 = new char [result_size3];
-        //        continue;
-        //    } else {
-        //        printf("content str: %s\n", result3);
-        //    }
-        //
-        //
-        //}
     }
     std::cin >> input;
 
@@ -560,7 +479,6 @@ int main(int argc, char ** argv) {
     printf("api_status: %d\n", status);
     std::cin >> input;
 
-//
     SetStdinEcho(true);
     while (true) {
        std::cin.clear();
@@ -569,18 +487,11 @@ int main(int argc, char ** argv) {
        std::string prompt;
        std::cout << std::endl;
        std::cout << "输入问题(CTRL + C退出): ";
-       //std::cin >> prompt;
        getline(std::cin,prompt);
        printf("\n你的问题: %s\n", prompt.c_str());
-       char* result2 = new char [4096];
+       auto result2 = new char [4096];
        size_t result_size2 = 4096;
        ret = api_Generate_stream(instance, prompt.c_str(), &params, params_bytes);
-       //printf("\napi_Generate_stream = %d\n", ret);
-
-       //status = api_Generate_status(instance);
-       //printf("api_Generate_status: %d\n", status);
-       //status = api_status(instance);
-       //printf("api_status: %d\n", status);
        std::cout << "回答: " << std::endl;
        if (ret) {
            while (true) {
