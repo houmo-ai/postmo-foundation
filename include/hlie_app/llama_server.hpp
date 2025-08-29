@@ -3614,6 +3614,18 @@ struct LlamaServer {
                 {"size",        llama_model_size       (model)},
             };
     }
+
+    int completion_generate(json& data, std::vector<server_task_result_ptr>& results);
+
+    int completion_generate_str(json &data, std::string &result_str);
+
+    int completion_stream_generate(json &data);
+
+    int completion_token_count(json &data) const;
+
+    int completion_stream_generate_next_token_str(std::string& result_str, bool confirm = true);
+
+    int completion_stream_generate_stop();
 };
 
 HLIE_NAMESPACE_END

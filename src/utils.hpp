@@ -5,10 +5,9 @@
 #include "llama.h"
 #include "arg.h" // common_remote_get_content
 #include "base64.hpp"
-#if ENABLE_HOUMO_LLAMACPP
 #include "mtmd.h"
 #include "mtmd-helper.h"
-#endif
+
 
 
 // increase max payload length to allow use of larger context size
@@ -263,7 +262,7 @@ static size_t validate_utf8(const std::string& text) {
 // template utils
 //
 
-#if ENABLE_HOUMO_LLAMACPP
+
 // format rerank task: [BOS]query[EOS][SEP]doc[EOS]
 static llama_tokens format_rerank(const struct llama_vocab * vocab, const llama_tokens & query, const llama_tokens & doc) {
     llama_tokens result;
@@ -292,22 +291,6 @@ static llama_tokens format_rerank(const struct llama_vocab * vocab, const llama_
 
     return result;
 }
-#else
-// format rerank task: [BOS]query[EOS][SEP]doc[EOS]
-static llama_tokens format_rerank(const struct llama_vocab * vocab, const llama_tokens & query, const llama_tokens & doc) {
-    llama_tokens result;
-
-    result.reserve(doc.size() + query.size() + 4);
-    result.push_back(llama_vocab_bos(vocab));
-    result.insert(result.end(), query.begin(), query.end());
-    result.push_back(llama_vocab_eos(vocab));
-    result.push_back(llama_vocab_sep(vocab));
-    result.insert(result.end(), doc.begin(), doc.end());
-    result.push_back(llama_vocab_eos(vocab));
-
-    return result;
-}
-#endif
 
 // format infill task
 static llama_tokens format_infill(
@@ -675,10 +658,6 @@ static json oaicompat_completion_params_parse(
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
     inputs.use_jinja             = use_jinja;
     inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
-    #if ENABLE_HOUMO_LLAMACPP
-    #else
-    inputs.extract_reasoning     = reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    #endif
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && body.contains("grammar")) {
         throw std::runtime_error("Cannot use custom grammar constraints with tools.");
@@ -695,12 +674,8 @@ static json oaicompat_completion_params_parse(
     llama_params["grammar_lazy"]     = chat_params.grammar_lazy;
     auto grammar_triggers = json::array();
     for (const auto & trigger : chat_params.grammar_triggers) {
-        #if ENABLE_HOUMO_LLAMACPP
         server_grammar_trigger ct(trigger);
         grammar_triggers.push_back(ct.to_json());
-        #else
-        grammar_triggers.push_back(trigger.to_json<json>());
-        #endif
     }
     llama_params["grammar_triggers"] = grammar_triggers;
     llama_params["preserved_tokens"] = chat_params.preserved_tokens;
@@ -746,7 +721,6 @@ struct oaicompat_parser_options {
     bool enable_thinking = true;
 };
 
-#if ENABLE_HOUMO_LLAMACPP
 // used by /chat/completions endpoint
 static json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
@@ -1009,7 +983,6 @@ static json oaicompat_chat_params_parse(
 
     return llama_params;
 }
-#endif
 
 static json format_embeddings_response_oaicompat(const json & request, const json & embeddings, bool use_base64 = false) {
     json data = json::array();
@@ -1236,7 +1209,6 @@ static std::vector<common_adapter_lora_info> parse_lora_request(
     return lora;
 }
 
-#if ENABLE_HOUMO_LLAMACPP
 //
 // utils for interacting with libmtmd
 // (may need to refactor in near future)
@@ -1517,4 +1489,3 @@ static std::string fnv_hash(const uint8_t * data, size_t len) {
     }
     return std::to_string(hash);
 }
-#endif

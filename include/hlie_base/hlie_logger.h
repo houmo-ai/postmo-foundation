@@ -84,7 +84,7 @@ public:
     static std::shared_ptr<spdlog::logger> get_logger(const std::string& module_name = "");
 
 private:
-    inline static std::shared_ptr<spdlog::logger> default_logger_  = nullptr;;
+    inline static std::shared_ptr<spdlog::logger> default_logger_  = nullptr;
 };
 
 HLIE_NAMESPACE_END
