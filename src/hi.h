@@ -5,6 +5,7 @@
 #define HM_INFER_INTERFACE_H
 
 #include <cstdint>
+#include <cmath>
 
 typedef int32_t int32;
 typedef float_t float32;

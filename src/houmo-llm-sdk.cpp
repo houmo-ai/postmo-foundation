@@ -758,7 +758,6 @@ int completion_load_model(HANDLE h, std::string model_path) {
 
     LOG_DBG("load tok_model_path:%s\n", tok_model_path.c_str());
 
-    std::time_t t = std::time(nullptr);
 #ifdef _WIN32
     const char* userProfile = getenv("APPDATA");
     if (userProfile != nullptr) {
@@ -768,10 +767,9 @@ int completion_load_model(HANDLE h, std::string model_path) {
         std::cout << "get userdata dir failed,write do D:\\,please makesure D exists" << std::endl;
     }
     std::string log_folder(userProfile);
-    std::string file_name = string_format("\\houmo-llm-%d.log", t);
-    std::string log_file = log_folder + file_name;
+    std::string log_file = log_folder + "\\houmo-llm.log";
 #else
-    std::string log_file = string_format("houmo-llm-%d.log", t);
+    std::string log_file = "houmo-llm.log";
 #endif
     std::cout << "final logfile path:" << log_file << std::endl;
 
