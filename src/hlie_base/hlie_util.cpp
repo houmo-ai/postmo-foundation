@@ -8,8 +8,6 @@
 #if defined(_WIN32) || defined(_WIN64)  // Windows 平台
     #include <objbase.h>
     #pragma comment(lib, "Rpcrt4.lib")
-#elif defined(__unix__) // Linux
-    #include <uuid/uuid.h>
 #else
     #include <random>
     #include <sstream>
@@ -45,13 +43,6 @@ std::string HlieUtil::uuid() {
     std::string result(reinterpret_cast<char*>(str));
     RpcStringFreeA(&str);
     return result;
-
-#elif defined(__unix__)
-    uuid_t uuid;
-    uuid_generate_random(uuid);
-    char str[37];
-    uuid_unparse_lower(uuid, str);
-    return std::string(str);
 
 #else
     // 纯 C++17 随机数版本
