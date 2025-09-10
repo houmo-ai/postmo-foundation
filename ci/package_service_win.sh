@@ -14,9 +14,10 @@ xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2
 xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/08/14/0200/windows11/houmo_drv_xh1_v2.4.2_windows11_x86_64.zip"
 xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/08/18/1047/windows11/houmo_drv_xh2_v0.3.0_windows11_x86_64.zip"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/02/1725/linux/houmo-application-software-llama.cpp-xh1_1.1.0_windows11_x86_64.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/02/1725/linux/houmo-application-software-llama.cpp-xh2_1.1.0_windows11_x86_64.tar.gz"
+xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/10/1025/windows11/houmo-application-software-llama.cpp-xh1_1.2.0_windows11_x86_64.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/10/1025/windows11/houmo-application-software-llama.cpp-xh1_1.2.0_windows11_x86_64.tar.gz"
 
+xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/10/1025/windows11/houmo-application-software-HLIESDCpp-xh2_1.0.0_windows11_x86_64.tar.gz"
 
 # libtorch 下载地址
 libtorch_url="http://10.10.1.53:8082/artifactory/thirdparty_local/libtorch/torch.zip"
@@ -55,10 +56,20 @@ deploy_llama_sdk() {
     rm -rf third_party/llama.cpp_houmo/*
 
 
-    # 下载并解压 Dadao SDK
     download_file "$llama_sdk_url" "llama_sdk.tar.gz"
     tar -xzf llama_sdk.tar.gz -C third_party/llama.cpp_houmo --strip-components=1
     rm llama_sdk.tar.gz
+}
+
+deploy_sd_cpp_sdk() {
+    local sd_cpp_sdk_url=$1
+    mkdir -p third_party/sd.cpp
+    rm -rf third_party/sd.cpp/*
+
+
+    download_file "$sd_cpp_sdk_url" "sd.cpp.tar.gz"
+    tar -xzf sd.cpp.tar.gz -C third_party/sd.cpp --strip-components=1
+    rm sd.cpp.tar.gz
 }
 
 # 部署 Dadao SDK
@@ -112,35 +123,15 @@ deploy_dadao_sdk() {
     rm -rf third_party/sw_sdk.zip third_party/houmo_drv*
 }
 
-deploy_other_deps() {
-    rm -rf third_party/inih
-    mkdir -p third_party/inih/lib
-    cp -r /opt/inih/include third_party/inih/
-    if [ "$ARCH" == "aarch64" ]; then
-        cp /opt/inih/aarch64/* third_party/inih/lib/
-    else
-        cp /opt/inih/x86_64/* third_party/inih/lib/
-    fi
-
-    rm -rf third_party/sd.cpp
-    mkdir -p third_party/sd.cpp/lib
-    cp -r /opt/sd.cpp/include third_party/sd.cpp/
-    if [ "$ARCH" == "aarch64" ]; then
-        cp /opt/sd.cpp/aarch64/* third_party/sd.cpp/lib/
-    else
-        cp /opt/sd.cpp/x86_64/* third_party/sd.cpp/lib/
-    fi
-}
-
 build_service() {
     echo "Building for ARCH: $ARCH"
 
     # 创建或清理构建目录
     rm -rf build/*
     if [ $PLATFORM == "xh2" ]; then
-        cmake -B build  -DLLAMA_CURL=OFF -DENABLE_HOUMO_XH2=ON
+        TCIM_RUNTIME_PATH=$(pwd)/third_party/houmo cmake -B build -DHOUMO_M50=True -DCMAKE_PREFIX_PATH=$(pwd)/third_party/libtorch -DWINSERVICE_MODE=True
     else
-        cmake -B build -DLLAMA_CURL=OFF
+        TCIM_RUNTIME_PATH=$(pwd)/third_party/houmo cmake -B build -DCMAKE_PREFIX_PATH=$(pwd)/third_party/libtorch -DWINSERVICE_MODE=True
     fi
     cmake  --build build --config Release -j 8
     echo "Build completed."
@@ -177,6 +168,7 @@ main() {
 
     echo "Deployed Dadao SDK and System SDK for $PLATFORM/$ARCH."
     deploy_torch
+    deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
 
     # 编译和打包
     build_service

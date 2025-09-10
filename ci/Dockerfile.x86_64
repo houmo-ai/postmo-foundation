@@ -13,7 +13,7 @@ RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && 
 RUN apt-get update && \
     apt-get install -y \
     software-properties-common \
-    g++ git wget curl build-essential cmake python3 python3-pip uuid-dev \
+    g++ git wget curl build-essential cmake python3 python3-pip \
     crossbuild-essential-arm64 \
     gcc-aarch64-linux-gnu \
     g++-aarch64-linux-gnu \
@@ -22,12 +22,10 @@ RUN apt-get update && \
     libssl-dev \
     libcurl4-openssl-dev \
     zlib1g-dev && \
-    rm -rf /var/lib/apt/lists/* && \
-    cp -r /usr/include/uuid /usr/aarch64-linux-gnu/include/uuid
+    rm -rf /var/lib/apt/lists/*
 
 COPY libtorch /opt/libtorch
 COPY inih /opt/inih
-COPY sd.cpp /opt/sd.cpp
 
 # 工作目录
 WORKDIR /houmo

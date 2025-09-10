@@ -41,8 +41,10 @@ xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0
 #FIXME:
 xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/08/18/1047/ubuntu2004/houmo_drv_xh2_v0.3.0_ubuntu2004_${ARCH}.run"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/02/1725/linux/houmo-application-software-llama.cpp-xh1_1.1.0_linux_${ARCH}.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/02/1725/linux/houmo-application-software-llama.cpp-xh2_1.1.0_linux_${ARCH}.tar.gz"
+xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/10/1025/linux/houmo-application-software-llama.cpp-xh1_1.2.0_linux_${ARCH}.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/10/1025/linux/houmo-application-software-llama.cpp-xh2_1.2.0_linux_${ARCH}.tar.gz"
+
+xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/10/1025/linux/houmo-application-software-HLIESDCpp-xh2_1.0.0_linux_${ARCH}.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {
@@ -59,10 +61,20 @@ deploy_llama_sdk() {
     rm -rf third_party/llama.cpp_houmo/*
 
 
-    # 下载并解压 Dadao SDK
     download_file "$llama_sdk_url" "llama_sdk.tar.gz"
     tar -xzf llama_sdk.tar.gz -C third_party/llama.cpp_houmo --strip-components=1
     rm llama_sdk.tar.gz
+}
+
+deploy_sd_cpp_sdk() {
+    local sd_cpp_sdk_url=$1
+    mkdir -p third_party/sd.cpp
+    rm -rf third_party/sd.cpp/*
+
+
+    download_file "$sd_cpp_sdk_url" "sd.cpp.tar.gz"
+    tar -xzf sd.cpp.tar.gz -C third_party/sd.cpp --strip-components=1
+    rm sd.cpp.tar.gz
 }
 
 # 部署 Dadao SDK
@@ -121,15 +133,6 @@ deploy_other_deps() {
         cp /opt/inih/aarch64/* third_party/inih/lib/
     else
         cp /opt/inih/x86_64/* third_party/inih/lib/
-    fi
-
-    rm -rf third_party/sd.cpp
-    mkdir -p third_party/sd.cpp/lib
-    cp -r /opt/sd.cpp/include third_party/sd.cpp/
-    if [ "$ARCH" == "aarch64" ]; then
-        cp /opt/sd.cpp/aarch64/* third_party/sd.cpp/lib/
-    else
-        cp /opt/sd.cpp/x86_64/* third_party/sd.cpp/lib/
     fi
 }
 
@@ -208,6 +211,8 @@ main() {
     esac
 
     echo "Deployed Dadao SDK and System SDK for $PLATFORM/$ARCH."
+
+    deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
 
     # 编译和打包
     build_service
