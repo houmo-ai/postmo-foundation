@@ -10,8 +10,8 @@ WorkingDirectory=/opt/HLIECpp
 Restart=always
 RestartSec=5
 Environment=LD_LIBRARY_PATH=/opt/HLIECpp/lib:$LD_LIBRARY_PATH
-Environment="HDPL_PLATFORM=ASIC"
-Environment="TCIM_BACKEND=Xh1HdiBackend"
+Environment=HDPL_PLATFORM=ASIC
+Environment=TCIM_LOG_TAGS=all
 User=root
 
 [Install]

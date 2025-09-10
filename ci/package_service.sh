@@ -146,10 +146,10 @@ build_service() {
 
     cd build
     if [ "$ARCH" == "aarch64" ]; then
-        TCIM_RUNTIME_PATH=/houmo/hi.cpp/third_party/houmo cmake .. -DCMAKE_TOOLCHAIN_FILE=../ci/toolchain-aarch64.cmake \
+        TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DCMAKE_TOOLCHAIN_FILE=../ci/toolchain-aarch64.cmake \
         -DCMAKE_PREFIX_PATH=/opt/libtorch/aarch64/libtorch
     else
-        TCIM_RUNTIME_PATH=/houmo/hi.cpp/third_party/houmo cmake .. -DCMAKE_PREFIX_PATH=/opt/libtorch/x86_64/libtorch
+        TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DCMAKE_PREFIX_PATH=/opt/libtorch/x86_64/libtorch
     fi
     make -j$(nproc)
     cd ..
@@ -168,10 +168,13 @@ package_service() {
     # 复制库文件
     cp build/bin/libhlie*.so "$release_dir/lib/" || true
     cp build/bin/libhlie*.so "$release_dir/lib/" || true
-    cp third_party/sd.cpp/lib/libstable-diffusion.so "$release_dir/lib/" || true
     cp third_party/llama.cpp_houmo/lib/*.so* "$release_dir/lib/" || true
     cp build/bin/houmo-llm-hi-cpp-linux "$release_dir/bin/HLIECpp" || true
     cp config/linux/sys.cfg "$release_dir/config/sys.cfg" || true
+
+    if [ $PLATFORM == "xh2" ]; then
+        cp third_party/sd.cpp/lib/libstable-diffusion.so "$release_dir/lib/" || true
+    fi
 
     # 复制系统库(如果存在)
     if [[ -f /lib/x86_64-linux-gnu/libstdc++.so.6 && "$ARCH" == "x86_64" ]]; then
@@ -187,7 +190,7 @@ package_service() {
     cp ci/HLIECpp.service "$release_dir"
 
     cd "$release_dir"
-    bash ./create_run_package.sh
+    bash ./create_run_package.sh "$ARCH"
     cd -
 
     echo "Release files have been organized under: $release_dir"
@@ -207,12 +210,11 @@ main() {
         xh2)
             deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url"
             deploy_llama_sdk "$xh2_llama_sdk_url"
+            deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
             ;;
     esac
 
     echo "Deployed Dadao SDK and System SDK for $PLATFORM/$ARCH."
-
-    deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
 
     # 编译和打包
     build_service

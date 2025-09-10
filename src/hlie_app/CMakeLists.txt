@@ -8,6 +8,8 @@ add_definitions(-DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
 
 file(GLOB SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/*.cpp")
 
+list(REMOVE_ITEM SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_sd_model_service.cpp")
+
 add_library(${TARGET} ${SOURCES})
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 

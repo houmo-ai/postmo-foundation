@@ -6,8 +6,10 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+ARCH=$1
+
 # 定义变量
-PACKAGE_NAME="HLIECpp-1.4.0-$(date +%Y%m%d%H%M%S)_ubuntu2004_x86_64.run"
+PACKAGE_NAME="HLIECpp-1.4.0-$(date +%Y%m%d%H%M%S)_ubuntu2004_${ARCH}.run"
 BUILD_DIR="$(pwd)/build"
 SOURCE_DIR="$(pwd)"
 
@@ -21,11 +23,6 @@ cp "$SOURCE_DIR"/lib/* "$BUILD_DIR"/lib/ 2>/dev/null || true
 cp "$SOURCE_DIR"/etc/* "$BUILD_DIR"/etc/ 2>/dev/null || true
 cp "$SOURCE_DIR"/HLIECpp.service "$BUILD_DIR"/
 cp "$SOURCE_DIR"/scripts/* "$BUILD_DIR"/
-#cp "$SOURCE_DIR"/../src/demo-hi.cpp "$SOURCE_DIR"/demo/
-#cp "$SOURCE_DIR"/../src/hi.h "$SOURCE_DIR"/demo/
-
-#20250806临时删掉这行
-#cp "$SOURCE_DIR"/demo/* "$BUILD_DIR"/demo/
 cp "$SOURCE_DIR"/config/* "$BUILD_DIR"/config/
 
 # 创建改进的安装脚本

@@ -129,7 +129,7 @@ build_service() {
     # 创建或清理构建目录
     rm -rf build/*
     if [ $PLATFORM == "xh2" ]; then
-        TCIM_RUNTIME_PATH=$(pwd)/third_party/houmo cmake -B build -DHOUMO_M50=True -DCMAKE_PREFIX_PATH=$(pwd)/third_party/libtorch -DWINSERVICE_MODE=True
+        TCIM_RUNTIME_PATH=$(pwd)/third_party/houmo cmake -B build -DHOUMO_XH2=True -DCMAKE_PREFIX_PATH=$(pwd)/third_party/libtorch -DWINSERVICE_MODE=True
     else
         TCIM_RUNTIME_PATH=$(pwd)/third_party/houmo cmake -B build -DCMAKE_PREFIX_PATH=$(pwd)/third_party/libtorch -DWINSERVICE_MODE=True
     fi
@@ -146,11 +146,11 @@ package_service() {
     mkdir -p "$release_dir/bin/hal/bin" "$release_dir/config"
     cp build/bin/Release/houmo-llm-hi-cpp-win.exe "$release_dir/bin/HLIECpp.exe"
     cp build/bin/Release/hlie-*.dll "$release_dir/bin/"
-    cp third_party/sd.cpp/bin/stable-diffusion.dll "$release_dir/bin/"
     cp third_party/llama.cpp_houmo/bin/*.dll "$release_dir/bin/"
     cp config/win/sys.cfg "$release_dir/config/"
     if [ $PLATFORM == "xh2" ]; then
         cp third_party/llama.cpp_houmo/bin/libhal_xh2a.dll "$release_dir/bin/hal/bin/"
+        cp third_party/sd.cpp/bin/stable-diffusion.dll "$release_dir/bin/"
     fi
 
 
@@ -171,12 +171,12 @@ main() {
         xh2)
             deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url"
             deploy_llama_sdk "$xh2_llama_sdk_url"
+            deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
             ;;
     esac
 
     echo "Deployed Dadao SDK and System SDK for $PLATFORM/$ARCH."
     deploy_torch
-    deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
 
     # 编译和打包
     build_service

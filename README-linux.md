@@ -122,18 +122,14 @@ sudo systemctl restart hicpp.service
 ````
 
 
-## Demo运行
-hi.cpp-**.run包,在20250606及之后的版本，安装完成后，会创建/opt/hicpp/demo/文件夹，里面会有对应的示例源码、头文件、CMakeLists.txt等，可编译成可执行文件，其中hi.h是hicpp对通用外部客户提供的api接口。
+## Docker
 
-编译说明：
 ````bash
-cd /opt/hicpp/demo/
-mkdir build && cd build 
-cmake ..
-make -j6  #生成demo可执行文件houmo-llm-demo-hi
+docker run --privileged -d --name HLIECppService -p 7901:7901 -v /opt/houmo/models:/opt/houmo/models -v /opt/houmo/logs/HLIECpp:/opt/HLIECpp/logs -it harbor.houmo.ai/application_software/hlie.cpp-xh1-20250910:v2.4.2-x86_64
 
-LD_LIBRARY_PATH=/opt/hicpp/lib/:$LD_LIBRARY_PATH   ldd -r houmo-llm-demo-hi
 ````
+
+
 
 
 

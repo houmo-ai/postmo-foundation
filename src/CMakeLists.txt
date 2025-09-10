@@ -1,8 +1,5 @@
 set(TARGET houmo-llm)
 
-
-option(ENABLE_SD "Enable Stable Diffusion" ON)
-
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 set(TCIM_RUNTIME_PATH $ENV{TCIM_RUNTIME_PATH})
@@ -17,11 +14,16 @@ find_library(LLAMA_CPP_LIBRARY_GGML_BASE NAMES ggml-base PATHS ${LLAMA_CPP_LIBRA
 find_library(LLAMA_CPP_LIBRARY_GGML_CPU NAMES ggml-cpu PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
 find_library(LLAMA_CPP_LIBRARY_COMMON NAMES common PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
 
-if(ENABLE_SD)
+
+option(HOUMO_XH2 "Enable HOUMO_XH2 feature" OFF)  # 默认关闭
+if(HOUMO_XH2)
+    add_compile_definitions(HOUMO_XH2)
+    message(STATUS "HOUMO_XH2 enabled")
     set(STABLE_DIFFUSION_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/sd.cpp")
     find_library(STABLE_DIFFUSION NAMES stable-diffusion PATHS ${STABLE_DIFFUSION_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
-    include_directories(${PROJECT_SOURCE_DIR}/third_party/sd.cpp/include)
+    message("STABLE_DIFFUSION_LIBRARY=${STABLE_DIFFUSION}")
 endif()
+
 
 find_library(LLAMA_CPP_LIBRARY_MTMD NAMES mtmd PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
 find_library(INIH_LIBRARY NAMES inih PATHS ${INIH_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
@@ -33,6 +35,7 @@ include_directories(${TCIM_RUNTIME_PATH}/examples/common/hpp)
 
 include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include/nlohmann)
+include_directories(${PROJECT_SOURCE_DIR}/third_party/sd.cpp/include)
 
 include_directories(${PROJECT_SOURCE_DIR}/third_party/inih/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/spdlog/include)
@@ -45,14 +48,6 @@ message("CMAKE_CURRENT_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}")
 message("PROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}")
 message("CMAKE_COMMAND=${CMAKE_COMMAND}")
 message("LLAMA_CPP_LIBRARY_COMMON=${LLAMA_CPP_LIBRARY_COMMON}")
-message("STABLE_DIFFUSION_LIBRARY=${STABLE_DIFFUSION}")
-
-option(HOUMO_M50 "Enable HOUMO_M50 feature" OFF)  # 默认关闭
-
-if(HOUMO_M50)
-    add_compile_definitions(HOUMO_M50)  # 定义宏 -HOUMO_M50
-    message(STATUS "HOUMO_M50 enabled")
-endif()
 
 
 if(WINSERVICE_MODE)
@@ -114,7 +109,7 @@ if (WIN32)
     add_executable(${TARGET}-hi-cpp-win main-win.cpp)
     install(TARGETS ${TARGET}-hi-cpp-win RUNTIME)
     target_include_directories(${TARGET}-hi-cpp-win PRIVATE ${CMAKE_SOURCE_DIR})
-    if(ENABLE_SD)
+    if(HOUMO_XH2)
         target_link_libraries(${TARGET}-hi-cpp-win PRIVATE ${STABLE_DIFFUSION})
     endif()
     target_link_libraries(${TARGET}-hi-cpp-win PRIVATE hlie-app hlie-base ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
@@ -126,7 +121,7 @@ elseif(UNIX)
     add_executable(${TARGET}-hi-cpp-linux main-linux.cpp)
     install(TARGETS ${TARGET}-hi-cpp-linux RUNTIME)
     target_include_directories(${TARGET}-hi-cpp-linux PRIVATE ${CMAKE_SOURCE_DIR})
-    if(ENABLE_SD)
+    if(HOUMO_XH2)
         target_link_libraries(${TARGET}-hi-cpp-linux PRIVATE ${STABLE_DIFFUSION})
     endif()
     target_link_libraries(${TARGET}-hi-cpp-linux PRIVATE hlie-app hlie-base ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}

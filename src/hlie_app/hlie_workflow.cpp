@@ -7,12 +7,15 @@
 #include "hlie_app/hlie_llm_model_service.h"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_app/hlie_model_service.h"
-#include "hlie_app/hlie_sd_model_service.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_exception.h"
 #include "hlie_base/hlie_logger.h"
+
+#ifdef HOUMO_XH2
+#include "hlie_app/hlie_sd_model_service.h"
+#endif
 
 HLIE_NAMESPACE_BEGIN
 
@@ -83,12 +86,17 @@ int HLIEWorkflow::initialize(const std::string& model_dir) {
 
         // Todo: 目前只支持最多两个不同实例， 后续可以扩展
         if (model_type == HLIEModelType::SD3 && !sd_model_service_) {
+#ifdef HOUMO_XH2
             LOG_INFO("Initializing SDModelService");
             sd_model_service_ = std::make_shared<SDModelService>();
             if (sd_model_service_->init(model_dir, model_info) < 0) {
                 LOG_ERROR("failed to init the SD model service");
                 return -1;
             }
+#else
+            LOG_ERROR("failed to init the SD model service, ONLY for XH2");
+            return -1;
+#endif
         } else if (!llm_model_service_ &&
                    (model_type == HLIEModelType::Qwen3 || model_type == HLIEModelType::Qwen25 || model_type == HLIEModelType::DeepSeek)) {
             LOG_INFO("Initializing LLModelService");
@@ -107,19 +115,23 @@ int HLIEWorkflow::initialize(const std::string& model_dir) {
 }
 
 void HLIEWorkflow::run() const {
-    if (sd_model_service_) {
-        sd_model_service_->run();
-    }
-
     if (llm_model_service_) {
         llm_model_service_->run();
     }
+
+#ifdef HOUMO_XH2
+    if (sd_model_service_) {
+        sd_model_service_->run();
+    }
+#endif
 }
 
 void HLIEWorkflow::stop() const {
+#ifdef HOUMO_XH2
     if (sd_model_service_) {
         sd_model_service_->stop();
     }
+#endif
 
     if (llm_model_service_) {
         llm_model_service_->stop();
@@ -131,9 +143,11 @@ std::shared_ptr<IHLIEModelService> HLIEWorkflow::get_model_service(const std::st
         return llm_model_service_;
     }
 
+#ifdef HOUMO_XH2
     if (HLIEModelType::SD == type) {
         return sd_model_service_;
     }
+#endif
 
     return nullptr;
 }
@@ -157,9 +171,11 @@ int HLIEWorkflow::get_model_service_state() const {
         return llm_model_service_->get_state();
     }
 
+#ifdef HOUMO_XH2
     if (sd_model_service_) {
         return sd_model_service_->get_state();
     }
+#endif
 
     LOG_ERROR("model service not initialized");
     return -1;
@@ -179,11 +195,14 @@ void HLIEWorkflow::handle_health(httplib::Response& res) const {
             throw CommonException(4, "llm model service health check failed");
         }
     }
+
+#ifdef HOUMO_XH2
     if (sd_model_service_) {
         if (sd_model_service_->handle_health(resp) < 0) {
             throw CommonException(4, "sd model service health check failed");
         }
     }
+#endif
 
     res_ok(res, resp);
 }
@@ -193,9 +212,12 @@ void HLIEWorkflow::handle_models(httplib::Response& res) const {
     if (llm_model_service_) {
         llm_model_service_->handle_models(resp);
     }
+
+#ifdef HOUMO_XH2
     if (sd_model_service_) {
         sd_model_service_->handle_models(resp);
     }
+#endif
 
     res_ok(res, resp);
 }
@@ -220,6 +242,7 @@ const std::vector<HLIEWorkflow::RouteConfig>& HLIEWorkflow::get_route_configs() 
             true, // 需要模型Running
             LLM // LLM模型类型
         },
+#ifdef HOUMO_XH2
         {
             {"/v1/images/generations", "/images/generations"},
             POST,
@@ -227,6 +250,7 @@ const std::vector<HLIEWorkflow::RouteConfig>& HLIEWorkflow::get_route_configs() 
             true,
             SD
         },
+#endif
         {
             {"/v1/completions"},
             POST,
