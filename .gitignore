@@ -9,5 +9,6 @@ third_party/houmo
 third_party/*torch*
 third_party/boost
 src/houmo-tcim-runtime
+release
 src/libtorch
 *.patch

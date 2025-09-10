@@ -15,7 +15,7 @@ xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0
 xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/08/18/1047/windows11/houmo_drv_xh2_v0.3.0_windows11_x86_64.zip"
 
 xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/10/1025/windows11/houmo-application-software-llama.cpp-xh1_1.2.0_windows11_x86_64.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/10/1025/windows11/houmo-application-software-llama.cpp-xh1_1.2.0_windows11_x86_64.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/10/1025/windows11/houmo-application-software-llama.cpp-xh2_1.2.0_windows11_x86_64.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/09/10/1025/windows11/houmo-application-software-HLIESDCpp-xh2_1.0.0_windows11_x86_64.tar.gz"
 
@@ -143,7 +143,15 @@ package_service() {
 
     # 清理并创建目录结构
     rm -rf "$release_dir"/*
-    mkdir -p "$release_dir/bin" "$release_dir/config"
+    mkdir -p "$release_dir/bin/hal/bin" "$release_dir/config"
+    cp build/bin/Release/houmo-llm-hi-cpp-win.exe "$release_dir/bin/HLIECpp.exe"
+    cp build/bin/Release/hlie-*.dll "$release_dir/bin/"
+    cp third_party/sd.cpp/bin/stable-diffusion.dll "$release_dir/bin/"
+    cp third_party/llama.cpp_houmo/bin/*.dll "$release_dir/bin/"
+    cp config/win/sys.cfg "$release_dir/config/"
+    if [ $PLATFORM == "xh2" ]; then
+        cp third_party/llama.cpp_houmo/bin/libhal_xh2a.dll "$release_dir/bin/hal/bin/"
+    fi
 
 
     echo "Release files have been organized under: $release_dir"
