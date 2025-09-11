@@ -15,6 +15,27 @@
 HLIE_NAMESPACE_BEGIN
 
 namespace {
+    std::string process_response_body(const std::string& body) {
+        try {
+            auto body_json = nlohmann::json::parse(body);
+            if(body_json.contains("data") && body_json["data"].is_array()) {
+                for(auto& item: body_json["data"]) {
+                    if(item.contains("b64_json")) {
+                        std::string b64_json_data = item["b64_json"];
+                        LOG_TRACE("Response b64_json: {}", b64_json_data);
+                        if(b64_json_data.length() > 100) {
+                            item["b64_json"] = b64_json_data.substr(0, 100) + "..., length=" + std::to_string(b64_json_data.length());
+                        }
+                    }
+                }
+            }
+            return body_json.dump();
+        } catch (const json::exception& e) {
+            LOG_WARN("Failed to parse response body as JSON: {}", e.what());
+            return body; 
+        }
+    }
+    
     void log_server_request(const httplib::Request& req, const httplib::Response& res) {
         // skip GH copilot requests when using default port
         if (req.path == "/health" || req.path == "/v1/completions") {
@@ -28,7 +49,7 @@ namespace {
         access_logger->flush();
 
         LOG_INFO("Request[{}]: {} {} {} {} \n{}", request_id, req.method, req.path, req.remote_addr, res.status, req.body);
-        LOG_INFO("Response[{}]: {}", request_id, res.body);
+        LOG_INFO("Response[{}]: {}", request_id, process_response_body(res.body));
     }
 
     void res_error(httplib::Response& res, const json& error_data) {
