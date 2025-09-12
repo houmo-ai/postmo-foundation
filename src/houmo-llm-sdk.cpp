@@ -1342,26 +1342,53 @@ int32 HTTP_SERVER_API api_status(HANDLE handle) {
 int32 HTTP_SERVER_API api_Generate(HANDLE handle, const char* prompt, const void* gen_params, size_t gen_params_size, char** result,
                                    size_t* result_size) {
     SRV_DBG("prompt: %s\n", prompt);
-    auto p = (params*)gen_params;
+
+    std::string pp(prompt);
+    std::string input = pp;
+    input = std::regex_replace(input, std::regex(R"(\n)"), "\\n");
+    input = std::regex_replace(input, std::regex(R"(\r)"), "\\r");
+    input = std::regex_replace(input, std::regex(R"(\")"), "\\\"");
+    rtrim(input);
+    SRV_INF("++input: %s\n", input.c_str());
+
+    auto p = (params *)gen_params;
     if (handle == nullptr) {
         LOG_ERR("HANDLE is: %p\n", handle);
         return -1;
     }
+    //printf("++1\r\n");
+    //server_context *ctx_server = (server_context *)handle;
 
-    std::string req_body = "{\"messages\":[{\"content\":\"%s”\",\"role\":\"user\"}],\"stream\":"
-                           "false,\"model\": \"%s\", \"max_tokens\": %d}";
-    req_body = string_format(req_body.c_str(), prompt, "fixed_hm_llama_qwen3_8b_szj", p->n_predict);
+    // std::string req_body =
+    //     "{\"messages\":[{\"content\":\"%s”\",\"role\":\"user\"}],\"stream\":"
+    //     "false,\"model\": \"%s\", \"max_tokens\": %d}";
+    std::string req_body =
+        "{\"messages\":[{\"content\":\"%s\",\"role\":\"user\"}],\"stream\":"
+        "false,\"model\": \"%s\", \"max_tokens\": %d}";
+    #if ENABLE_HOUMO_LLAMACPP
+    req_body = string_format(req_body.c_str(), input.c_str(),
+                            "fixed_hm_llama_qwen3_8b_szj", p->n_predict);
+    #else
+    //printf("++2 ctx_server=%p ctx_server->hmctx=%p ctx_server->hmctx->model_name.c_str()=%s\r\n",ctx_server,ctx_server->hmctx,ctx_server->hmctx->model_name.c_str());
+    req_body = string_format(req_body.c_str(), input.c_str(),
+                            "fixed_hm_llama_qwen3_8b_szj", p->n_predict);
+    #endif
+    //printf("--2.1 req_body.c_str()=%s\r\n",req_body.c_str());
+    ///SRV_DBG("req_body",req_body)
     json req = json::parse(req_body);
     std::string decode_result;
+    //printf("++3\r\n");
     int ret = completion_generate(handle, req, decode_result);
-    const auto result_ptr = new char[decode_result.size() + 1]; // +1 for terminating NUL
+    //printf("++szj decode_result.size() is:%d\r\n",decode_result.size());
+    char *result_ptr =
+        new char[decode_result.size() + 1];  // +1 for terminating NUL
 
     strncpy(result_ptr, decode_result.c_str(), decode_result.size() + 1);
-
+    //printf("++4\r\n");
     *result = result_ptr;
     *result_size = decode_result.size();
     SRV_DBG("decode_result: %s\n", decode_result.c_str());
-    SRV_DBG("result: %s\n", *result);
+    SRV_DBG("--result: %s\n", *result);
 
     return 0;
 }
