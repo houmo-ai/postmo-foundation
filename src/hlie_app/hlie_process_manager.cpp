@@ -96,15 +96,21 @@ ProcessID HLIEProcessManager::create_process(const std::string& exe_path,
         return 0;
     } else if (pid == 0) {
         // 子进程
+        LOG_INFO("Child process, ready to run with path: {}", exe_path);
         std::vector<char*> argv;
         argv.push_back(const_cast<char*>(exe_path.c_str()));
         for (auto& arg : args) {
+            LOG_INFO("arg: {}", arg);
             argv.push_back(const_cast<char*>(arg.c_str()));
         }
-        argv.push_back(nullptr);
 
-        execvp(exe_path.c_str(), argv.data());
-        _exit(1); // exec失败退出
+        argv.push_back(nullptr);
+        const int error_code = execvp(exe_path.c_str(), argv.data());
+        perror("execvp failed");
+        if (error_code != 0) {
+            LOG_ERROR("Child process, failed to run with path: {}", exe_path);
+        }
+        _exit(error_code);
     } else {
         // 父进程
         ProcessInfo info;

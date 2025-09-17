@@ -698,28 +698,25 @@ std::vector<int16_t> TensorConverter::ToVector(const tcim::Tensor& tcim_tensor) 
 }
 
 HANDLE completion_create_instance(void* param) {
-    static LlamaServer* ctx_server = nullptr;
-    if (!ctx_server) {
-        ctx_server = new LlamaServer();
+    auto* ctx_server = new LlamaServer();
 
-        SRV_DBG("ctx_server: %p\n", ctx_server);
-        SRV_DBG("ctx_server->model: %p\n", ctx_server->model);
-        SRV_DBG("ctx_server->ctx: %p\n", ctx_server->ctx);
-        SRV_DBG("ctx_server->params: %p\n", ctx_server->params);
+    SRV_DBG("ctx_server: %p\n", ctx_server);
+    SRV_DBG("ctx_server->model: %p\n", ctx_server->model);
+    SRV_DBG("ctx_server->ctx: %p\n", ctx_server->ctx);
+    SRV_DBG("ctx_server->params: %p\n", ctx_server->params);
 
-        ctx_server->model_path = getenv_or_default("HM_MODEL_PATH", "./models/hmm_deepseek_256_4096_4cores_20250317/");
-        const auto p = static_cast<::params*>(param);
-        if (!ctx_server->params) {
-            ctx_server->params = new common_params();
-            LOG_DBG("++%s \r\n", "new common_params");
-        }
-
-        ctx_server->params->sampling.top_k = p->top_k;
-        ctx_server->params->sampling.top_p = p->top_p;
-        ctx_server->params->sampling.temp = p->temperature;
-        ctx_server->params->sampling.penalty_repeat = p->repeat_penalty;
-        ctx_server->params->sampling.penalty_last_n = p->repeat_last_n;
+    ctx_server->model_path = getenv_or_default("HM_MODEL_PATH", "./models/hmm_deepseek_256_4096_4cores_20250317/");
+    const auto p = static_cast<::params*>(param);
+    if (!ctx_server->params) {
+        ctx_server->params = new common_params();
+        LOG_DBG("++%s \r\n", "new common_params");
     }
+
+    ctx_server->params->sampling.top_k = p->top_k;
+    ctx_server->params->sampling.top_p = p->top_p;
+    ctx_server->params->sampling.temp = p->temperature;
+    ctx_server->params->sampling.penalty_repeat = p->repeat_penalty;
+    ctx_server->params->sampling.penalty_last_n = p->repeat_last_n;
 
     return ctx_server;
 }
@@ -1214,25 +1211,7 @@ int completion_destroy_instance(HANDLE h) {
     SRV_INF("join ctx_t finished: %s\n", "");
     delete ctx_server;
     ctx_server = nullptr;
-
     SRV_INF("ctx_server: %p\n", ctx_server);
-    return 0;
-}
-
-int completion_unload_model(HANDLE h) {
-    if (h == nullptr) {
-        LOG_ERR("HANDLE is: %p\n", h);
-        return -1;
-    }
-
-    auto* ctx_server = static_cast<LlamaServer*>(h);
-    ctx_server->queue_tasks.terminate();
-    if (ctx_server->ctx_t.joinable()) {
-        ctx_server->ctx_t.join();
-    }
-
-    SRV_INF("join ctx_t finished: %s\n", "");
-    ctx_server->model_status = 0;
     return 0;
 }
 
@@ -1299,16 +1278,8 @@ bool HTTP_SERVER_API api_loadtoken(HANDLE handle, const char *token_fullpath) {
 
 // unload model
 bool HTTP_SERVER_API api_unloadmodel(HANDLE handle) {
-    // TODO only for Lenovo demo
-    auto* ctx_server = static_cast<LlamaServer*>(handle);
-    std::unique_lock<std::mutex> lock(ctx_server->mutex_context);
-    ctx_server->model_status = 2;
-    model_real_load_flag = true;
-    return true;
-
-
-    int ret = completion_unload_model(handle);
-    LOG_DBG("completion_unload_model: %s\n", ret);
+    const int ret = completion_destroy_instance(handle);
+    LOG_DBG("api_unloadmodel: %d\n", ret);
     model_real_load_flag = false;
     if (ret == 0) {
         return true;

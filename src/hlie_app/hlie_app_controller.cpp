@@ -78,13 +78,11 @@ namespace {
                     LOG_INFO("acquired device {} for instance-{}", devices_for_sub, i);
 
                     // 子进程实例参数
-                    std::vector args_for_sub_process = {"--instance_id " + std::to_string(i), "--device_id " + devices_for_sub};
+                    std::vector args_for_sub_process = {std::string("--instance_id"), std::to_string(i), std::string("--device_id"), devices_for_sub};
                     // Copy llama-params
                     for (const auto& [key, val] : args) {
-                        std::string arg = key;
-                        arg += " ";
-                        arg += val;
-                        args_for_sub_process.push_back(std::move(arg));
+                        args_for_sub_process.push_back(key);
+                        args_for_sub_process.push_back(val);
                     }
 
                     if (auto pid = Singleton<HLIEProcessManager>::instance()->create_process(program_path, args_for_sub_process);
@@ -274,7 +272,7 @@ int HLIELinuxAppController::initialize() {
 
     spdlog::flush_every(std::chrono::seconds(10));
 
-    if (initialize_ex( "./HLIECpp") < 0) {
+    if (initialize_ex( "./bin/HLIECpp") < 0) {
         return -3;
     }
 

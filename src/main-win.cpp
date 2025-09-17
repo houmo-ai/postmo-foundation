@@ -87,7 +87,7 @@ int main(const int argc, char** argv) {
     const auto& config_service = hm_HLIE::Singleton<hm_HLIE::HLIEConfigService>::instance();
     config_service->set_args(argc, argv);
 
-#ifdef HOUMO_M50
+#ifdef HOUMO_XH2
     _putenv("TCIM_BACKEND=Xh2HalBackend");
 
     char exePath[MAX_PATH];

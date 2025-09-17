@@ -447,8 +447,6 @@ int main(int argc, char ** argv) {
         std::cin >> input;
         printf("CallBackTimer input: %d\n", input);
     }
-    std::cin >> input;
-
     status = api_Generate_status(instance);
     printf("api_Generate_status 1: %d\n", status);
 
@@ -477,72 +475,136 @@ int main(int argc, char ** argv) {
     printf("api_token_num = %d\n", ret);
     status = api_status(instance);
     printf("api_status: %d\n", status);
-    std::cin >> input;
 
     SetStdinEcho(true);
+    bool unloaded = false;
     while (true) {
-       std::cin.clear();
-       std::cin.sync();
-       //std::cin.ignore(std::numeric_limits<std::streamsize>::max(),'\n');
-       std::string prompt;
-       std::cout << std::endl;
-       std::cout << "输入问题(CTRL + C退出): ";
-       getline(std::cin,prompt);
-       printf("\n你的问题: %s\n", prompt.c_str());
-       auto result2 = new char [4096];
-       size_t result_size2 = 4096;
-       ret = api_Generate_stream(instance, prompt.c_str(), &params, params_bytes);
-       std::cout << "回答: " << std::endl;
-       if (ret) {
-           while (true) {
-               ret = api_Get_Generate_token(instance, &result2, &result_size2);
-               status = api_Generate_status(instance);
-               //printf("api_Generate_status: %d\n", status);
-               if (status == 0) {
-                   //printf("stop found str: %s\n", result2);
-                   break;
-               } else if (ret == 2) {
-                   sleep_seconds(100);
-                   //printf("data not ready: %d\n", ret);
-                   continue;
-               } else if (ret == -1) {
-                   //printf("Error: %d\n", ret);
-                   break;
-               } else if (ret == 1) {
-                   //printf("not enough: %d\n", result_size2);
-                   if (result2) {
-                       delete result2;
-                   }
-                   result2 = new char [result_size2];
-                   continue;
-               } else {
-                   //printf("content str: %s\n", result2);
-                   std::smatch results;
-                   std::string result = result2;
-                   if (std::regex_search(result, results, std::regex(".*\"content\":\"(.*?)\".*"))) {
-                       std::string content = results[1].str();
-                       content = std::regex_replace(content, std::regex(R"(\\n)"), "\n");
-                       //std::string::size_type index = 0;
-                       //while ((index = content.find("\\n", index)) != std::string::npos) {
-                       //    content.replace(index, 2, "\n");
-                       //    ++index;
-                       //}
-                       std::cout << content << std::flush;
-                   }
-               }
-           }
-           std::cout << std::endl;
-       }
-       status = api_status(instance);
-       printf("api_status: %d\n", status);
+        std::cin.clear();
+        std::string prompt;
+        std::cout << std::endl;
+        std::cout << "输入问题('UM'用于测试 UnloadModel，'Q'退出): ";
+
+        // 读取输入
+        if (!getline(std::cin, prompt)) {
+            // 处理输入错误
+            break;
+        }
+
+        // 移除可能存在的回车符（Windows 下的行结束符包含 \r）
+        prompt.erase(std::remove(prompt.begin(), prompt.end(), '\r'), prompt.end());
+
+        if (prompt == "UM") {
+            api_unloadmodel(instance);
+            instance = nullptr;
+            std::cout << "你输入了测试UnloadModel指令，执行了型卸载...可以观察 hm_smi -a" << std::endl;
+            unloaded = true;
+            continue;
+        }
+
+        if (prompt == "Q") {
+            std::cout << "主动退出" << std::endl;
+            break;
+        }
+
+        if (!unloaded && api_status(instance) < 0) {
+            std::cout << "状态不对，正在退出, api_status: " << instance <<std::endl;
+            break;
+        }
+
+        if (unloaded) {
+            unloaded = false;
+            instance = create_api_instance(&params, params_bytes);
+            // 重新加载模型
+            if (found) {
+                std::cout << "成功解析到模型路径-测试从文件加载推理模型：" << path << std::endl;
+                api_loadmodel_by_path(instance, model_path, model_names, model_name_count,hwinfo);
+                printf("api_loadmodel_by_path = %d\n", state);
+            } else {
+                std::cout << "未找到-m选项,默认测试从内存buffer加载推理模型" << std::endl;
+                uint8_t *buffers[1]={nullptr};
+                constexpr size_t buffers_count=1;
+                uint64_t model_filesizes[buffers_count]={0};
+                std::string prefill_model_path="./models/HiModel-Qwen2.5-7B-4batch-F16-2k-4core-xh1-v0.0.1.gguf";
+
+                std::vector<char> p_model=read_whole_file(prefill_model_path,model_filesizes[0]);
+                buffers[0]=(uint8_t *)p_model.data();
+                printf("buffers is:%p\r\n",buffers);
+                printf("model_filesizes is:%p\r\n",model_filesizes);
+                printf("++buffers[0] is %p\r\n",buffers[0]);
+
+                char magic_string[5]={0};
+                memcpy(magic_string,buffers[0],4);
+                printf("in demohi magic string is:%s\r\n",magic_string);
+
+                //如果需要保存模型文件对比原始文件可以用下面的方法
+                //save_raw_data_1(buffers[0],model_filesizes[0],"prefill_from_vectordata.hmm");
+                for(int i=0;i<buffers_count;i++) {
+                    printf("++model index:%d model_filesizes is %llu\r\n",i,model_filesizes[i]);
+                }
+                //return 0;
+                state = api_loadmodel_by_buffer(instance, buffers, model_filesizes, buffers_count,hwinfo);
+                printf("api_loadmodel_by_buffer = %d\n", state);
+            }
+        }
+
+        printf("\n你的问题: %s\n", prompt.c_str());
+        auto result2 = new char[4096];
+        size_t result_size2 = 4096;
+        ret = api_Generate_stream(instance, prompt.c_str(), &params, params_bytes);
+        std::cout << "回答: " << std::endl;
+        if (ret) {
+            while (true) {
+                ret = api_Get_Generate_token(instance, &result2, &result_size2);
+                status = api_Generate_status(instance);
+                // printf("api_Generate_status: %d\n", status);
+                if (status == 0) {
+                    // printf("stop found str: %s\n", result2);
+                    break;
+                } else if (ret == 2) {
+                    sleep_seconds(100);
+                    // printf("data not ready: %d\n", ret);
+                    continue;
+                } else if (ret == -1) {
+                    // printf("Error: %d\n", ret);
+                    break;
+                } else if (ret == 1) {
+                    // printf("not enough: %d\n", result_size2);
+                    if (result2) {
+                        delete result2;
+                    }
+                    result2 = new char[result_size2];
+                    continue;
+                } else {
+                    // printf("content str: %s\n", result2);
+                    std::smatch results;
+                    std::string result = result2;
+                    if (std::regex_search(result, results, std::regex(".*\"content\":\"(.*?)\".*"))) {
+                        std::string content = results[1].str();
+                        content = std::regex_replace(content, std::regex(R"(\\n)"), "\n");
+                        // std::string::size_type index = 0;
+                        // while ((index = content.find("\\n", index)) != std::string::npos) {
+                        //     content.replace(index, 2, "\n");
+                        //     ++index;
+                        // }
+                        std::cout << content << std::flush;
+                    }
+                }
+            }
+            std::cout << std::endl;
+        }
+        status = api_status(instance);
+        printf("api_status: %d\n", status);
     }
 
-    api_unloadmodel(instance);
-    status = api_status(instance);
-    printf("api_status: %d\n", status);
+    if (!unloaded) {
+        std::cout << "destroy instance..."  << std::endl;
+        status = api_status(instance);
+        printf("api_status: %d\n", status);
+        destroy_api_instance(instance);
+        instance = nullptr;
+    }
 
-
-    destroy_api_instance(instance);
+    printf("instance: %p\n", instance);
 
     printf("exit!\n");
 
