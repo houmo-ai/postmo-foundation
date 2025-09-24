@@ -15,10 +15,31 @@
 HLIE_NAMESPACE_BEGIN
 
 namespace {
-    std::string process_response_body(const std::string& body) {
+    std::string process_body(const std::string& body) {
         try {
+            if(body.empty()) {
+                return body;
+            }
             auto body_json = nlohmann::json::parse(body);
-            if(body_json.contains("data") && body_json["data"].is_array()) {
+            // request
+            if(body_json.contains("messages") && body_json["messages"].is_array() && !body_json["messages"].empty()) {
+                for(auto& message: body_json["messages"]) {
+                    if(message.contains("content") && message["content"].is_array() && !message["content"].empty()) {
+                        for (auto& content_item : message["content"]) {
+                            if (content_item.contains("type") && content_item["type"] == "image_url" &&
+                            content_item.contains("image_url") && content_item["image_url"].contains("url")){
+                                std::string b64_json_data = content_item["image_url"]["url"];
+                                LOG_TRACE("Request b64_json: {}", b64_json_data);
+                                if(b64_json_data.length() > 100) {
+                                    content_item["image_url"]["url"] = b64_json_data.substr(0, 100) + "..., length=" + std::to_string(b64_json_data.length());
+                                }   
+                            }
+                        }
+                    }
+                }
+            }
+            // response
+            if(body_json.contains("data") && body_json["data"].is_array() && !body_json["data"].empty()) {
                 for(auto& item: body_json["data"]) {
                     if(item.contains("b64_json")) {
                         std::string b64_json_data = item["b64_json"];
@@ -31,7 +52,7 @@ namespace {
             }
             return body_json.dump();
         } catch (const json::exception& e) {
-            LOG_WARN("Failed to parse response body as JSON: {}", e.what());
+            LOG_WARN("Failed to parse body as JSON: {}", e.what());
             return body; 
         }
     }
@@ -48,8 +69,8 @@ namespace {
         access_logger->info("{} - - \"{} {}\" {} [RequestID={}]", req.remote_addr, req.method, req.path, res.status, request_id);
         access_logger->flush();
 
-        LOG_INFO("Request[{}]: {} {} {} {} \n{}", request_id, req.method, req.path, req.remote_addr, res.status, req.body);
-        LOG_INFO("Response[{}]: {}", request_id, process_response_body(res.body));
+        LOG_INFO("Request[{}]: {} {} {} {} \n{}", request_id, req.method, req.path, req.remote_addr, res.status, process_body(req.body));
+        LOG_INFO("Response[{}]: {}", request_id, process_body(res.body));
     }
 
     void res_error(httplib::Response& res, const json& error_data) {
