@@ -198,6 +198,7 @@ void LLModelService::handle_models(json& resp) const {
         model_meta = llama_server_->model_meta();
     }
 
+    bool has_mtmd = llama_server_->mctx != nullptr;
     const auto params = llama_server_->params_base;
 
     resp["models"] = {{{"name", params.model_alias.empty() ? params.model.path : params.model_alias},
@@ -208,7 +209,7 @@ void LLModelService::handle_models(json& resp) const {
                        {"type", "model"},
                        {"description", ""},
                        {"tags", {""}},
-                       {"capabilities", {"completion"}},
+                       {"capabilities", has_mtmd ? json({"completion", "multimodal"}) : json({"completion"})},
                        {"parameters", ""},
                        {"details",
                         {{"parent_model", ""},
@@ -263,56 +264,17 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
         // TODO: this log can become very long, put it behind a flag or think about a more compact format
         // SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
 
-        // process files
-        mtmd::bitmaps bitmaps;
-        const bool has_mtmd = llama_server_->mctx != nullptr;
-        {
-            if (!has_mtmd && !files.empty()) {
-                throw std::runtime_error("This server does not support multimodal");
-            }
-            for (auto& file : files) {
-                mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(llama_server_->mctx, file.data(), file.size()));
-                if (!bmp.ptr) {
-                    throw std::runtime_error("Failed to load image or audio file");
-                }
-                // calculate bitmap hash (for KV caching)
-                std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
-                bmp.set_id(hash.c_str());
-                bitmaps.entries.push_back(std::move(bmp));
-            }
-        }
-
         // process prompt
         std::vector<server_tokens> inputs;
-        if (oaicompat && !prompt.is_string()) {
-            throw std::runtime_error("prompt must be a string");
-        }
 
-        if (oaicompat && has_mtmd) {
-            // multimodal
-            std::string prompt_str = prompt.get<std::string>();
-            mtmd_input_text inp_txt = {
-                prompt_str.c_str(),
-                /* add_special */ true,
-                /* parse_special */ true,
-            };
-            mtmd::input_chunks chunks(mtmd_input_chunks_init());
-            auto bitmaps_c_ptr = bitmaps.c_ptr();
-            int32_t tokenized = mtmd_tokenize(llama_server_->mctx, chunks.ptr.get(), &inp_txt, bitmaps_c_ptr.data(), bitmaps_c_ptr.size());
-            if (tokenized != 0) {
-                throw std::runtime_error("Failed to tokenize prompt");
-            }
-
-            server_tokens tmp(chunks, true);
-            inputs.push_back(std::move(tmp));
+        if (oaicompat && llama_server_->mctx != nullptr) {
+            // This is the case used by OAI compatible chat path with MTMD. TODO It can be moved to the path below.
+            inputs.push_back(process_mtmd_prompt(llama_server_->mctx, prompt.get<std::string>(), files));
         } else {
-            // non-multimodal version
-            auto tokenized_prompts = tokenize_input_prompts(llama_server_->vocab, prompt, true, true);
-            for (auto& p : tokenized_prompts) {
-                auto tmp = server_tokens(p, llama_server_->mctx != nullptr);
-                inputs.push_back(std::move(tmp));
-            }
+            // Everything else, including multimodal completions.
+            inputs = tokenize_input_prompts(llama_server_->vocab, llama_server_->mctx, prompt, true, true);
         }
+
 
         tasks.reserve(inputs.size());
 
@@ -385,7 +347,7 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
                         json res_json = result->to_json();
                         if (res_json.is_array()) {
                             for (const auto& res_data : res_json) {
-                                if (!server_sent_event(sink, "data", res_data)) {
+                                if (!server_sent_event(sink, res_data)) {
                                     // sending failed (HTTP connection closed), cancel the generation
                                     return false;
                                 }
@@ -393,22 +355,24 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
                             return true;
                         }
 
-                        return server_sent_event(sink, "data", res_json);
+                        return server_sent_event(sink, res_json);
                     } catch (const nlohmann::json::type_error& ex) {
                         HLIELogger::get_logger()->error("Stream Mode JSON Exception: {}", ex.what());
                         const auto error_data = format_error_response(ex.what(), ERROR_TYPE_SERVER);
-                        return server_sent_event(sink, "error", error_data);
+                        return server_sent_event(sink, error_data);
                     } catch (const std::exception& ex) {
                         HLIELogger::get_logger()->error("Stream Mode Exception: {}", ex.what());
                         const auto error_data = format_error_response(ex.what(), ERROR_TYPE_SERVER);
-                        return server_sent_event(sink, "error", error_data);
+                        return server_sent_event(sink, error_data);
                     } catch (...) {
                         HLIELogger::get_logger()->error("Stream Mode Unexpected Exception");
                         const auto error_data = format_error_response("Unknown error", ERROR_TYPE_SERVER);
-                        return server_sent_event(sink, "error", error_data);
+                        return server_sent_event(sink, error_data);
                     }
                 },
-                [&](const json& error_data) { server_sent_event(sink, "error", error_data); },
+                [&](const json& error_data) {
+                    server_sent_event(sink, json{{"error", error_data}});
+                },
                 [&sink]() {
                     // note: do not use req.is_connection_closed here because req is already destroyed
                     return !sink.is_writable();

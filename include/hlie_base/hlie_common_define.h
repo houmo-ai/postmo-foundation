@@ -16,6 +16,7 @@ enum error_type {
     ERROR_TYPE_PERMISSION,
     ERROR_TYPE_UNAVAILABLE, // custom error
     ERROR_TYPE_NOT_SUPPORTED, // custom error
+    ERROR_TYPE_EXCEED_CONTEXT_SIZE, // custom error
 };
 
 enum model_scale_type {
@@ -119,6 +120,10 @@ inline json format_error_response(const std::string& message, const error_type t
     case ERROR_TYPE_UNAVAILABLE:
         type_str = "unavailable_error";
         code = 503;
+        break;
+    case ERROR_TYPE_EXCEED_CONTEXT_SIZE:
+        type_str = "exceed_context_size_error";
+        code = 400;
         break;
     }
     return json{

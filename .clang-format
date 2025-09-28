@@ -29,7 +29,7 @@ BreakBeforeBraces: Custom
 AllowShortBlocksOnASingleLine: Never
 AllowShortEnumsOnASingleLine: false
 AllowShortIfStatementsOnASingleLine: false
-AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortFunctionsOnASingleLine: None
 BreakConstructorInitializers: AfterColon
 BreakConstructorInitializersBeforeComma: false
 ColumnLimit: 140

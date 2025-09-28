@@ -257,15 +257,10 @@ int LlamaServer::completion_generate(json& data, std::vector<server_task_result_
     oaicompat_type oaicompat = OAICOMPAT_TYPE_NONE;
 
     try {
-        std::vector<server_tokens> inputs;
         const auto& prompt = data.at("prompt");
-        auto tokenized_prompts = tokenize_input_prompts(vocab, prompt, true, true);
-        for (auto& p : tokenized_prompts) {
-            auto tmp = server_tokens(p, false);
-            inputs.push_back(std::move(tmp));
-        }
+        std::vector<server_tokens> inputs = tokenize_input_prompts(vocab, mctx, prompt, true, true);
         tasks.reserve(inputs.size());
-        for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+        for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
             task.id = queue_tasks.get_new_id();
@@ -337,16 +332,11 @@ int LlamaServer::completion_generate_str(json& data, std::string& result_str) {
     std::vector<server_task> tasks;
     oaicompat_type oaicompat = OAICOMPAT_TYPE_NONE;
     try {
-        std::vector<server_tokens> inputs;
         const auto& prompt = data.at("prompt");
-        auto tokenized_prompts = tokenize_input_prompts(vocab, prompt, true, true);
-        for (auto& p : tokenized_prompts) {
-            auto tmp = server_tokens(p, false);
-            inputs.push_back(std::move(tmp));
-        }
+        std::vector<server_tokens> inputs = tokenize_input_prompts(vocab, mctx, prompt, true, true);
         tasks.reserve(inputs.size());
-        SRV_DBG("++tokenized_prompts.size() is:%d\r\n", tokenized_prompts.size());
-        for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+        SRV_DBG("++tokenized_prompts.size() is:%d\r\n", inputs.size());
+        for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
             task.id = queue_tasks.get_new_id();
@@ -425,15 +415,10 @@ int LlamaServer::completion_stream_generate(json& data) {
     oaicompat_type oaicompat = OAICOMPAT_TYPE_NONE;
 
     try {
-        std::vector<server_tokens> inputs;
         const auto& prompt = data.at("prompt");
-        auto tokenized_prompts = tokenize_input_prompts(vocab, prompt, true, true);
-        for (auto& p : tokenized_prompts) {
-            auto tmp = server_tokens(p, false);
-            inputs.push_back(std::move(tmp));
-        }
+        std::vector<server_tokens> inputs = tokenize_input_prompts(vocab, mctx, prompt, true, true);
         tasks.reserve(inputs.size());
-        for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+        for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
             task.id = queue_tasks.get_new_id();
@@ -473,7 +458,8 @@ int LlamaServer::completion_stream_generate(json& data) {
 
 int LlamaServer::completion_token_count(json& data) const {
     try {
-        std::vector<llama_tokens> tokenized_prompts = tokenize_input_prompts(vocab, data.at("prompt"), true, true);
+        const auto& prompt = data.at("prompt");
+        auto tokenized_prompts = tokenize_input_prompts(vocab, mctx, prompt, true, true);
         if (tokenized_prompts.size() == 1) {
             return tokenized_prompts[0].size();
         }

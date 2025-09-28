@@ -32,7 +32,7 @@ namespace {
                                 LOG_TRACE("Request b64_json: {}", b64_json_data);
                                 if(b64_json_data.length() > 100) {
                                     content_item["image_url"]["url"] = b64_json_data.substr(0, 100) + "..., length=" + std::to_string(b64_json_data.length());
-                                }   
+                                }
                             }
                         }
                     }
