@@ -86,12 +86,14 @@ int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         }
 
         params_->hm_sd_device = val.value();
+        devices_.push_back(*val);
         LOG_INFO("LLM using model specific device: {}", device_id);
     } else if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(SD); !val) {
         LOG_ERROR("SD cannot acquire available device");
         return -1;
     } else {
         params_->hm_sd_device = val.value();
+        devices_.push_back(*val);
         LOG_INFO("SD using device: {}", val.value());
     }
 
@@ -230,12 +232,8 @@ void SDModelService::process() {
                 promise->set_value(result);
             }
         }
-    } catch (const std::runtime_error& ex) {
-        // 处理队列关闭的情况
-        LOG_ERROR("run exception: {} ", ex.what());
-        // Todo: 挽救措施，重新拉起
-        std::this_thread::sleep_for(std::chrono::seconds(3));
-        process();
+    } catch (const std::runtime_error&) {
+        LOG_WARN("SDModelService process exited");
     }
 }
 
@@ -253,6 +251,10 @@ void SDModelService::stop() {
         worker_thread_->join();
     }
     worker_thread_.reset();
+    sd_ctx_t_.reset();
+
+    Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+    devices_.clear();
 }
 
 int SDModelService::get_state() {

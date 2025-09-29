@@ -46,8 +46,9 @@ namespace {
         device_helper->init(devices);
 
         // 多实例场景
+        const auto replicas = config_services->get_int("server", "replicas", 1);
         if (args.find("--instance_id") == args.end()) {
-            if (const auto replicas = config_services->get_int("server", "replicas", 1); replicas > 1) {
+            if (replicas > 1) {
                 const int device_count = device_helper->get_device_count();
                 if (replicas > device_count) {
                     LOG_ERROR("Copies[{}] is bigger than devices count[]", replicas, device_count);
@@ -106,9 +107,10 @@ namespace {
                 return -1;
             }
 
-            if (config_services->get_bool("server", "memory_saving", false)) {
-                LOG_INFO("multi instance mode and memory_saving is true, start to wait the others for {}s.", instance_id * 30);
-                std::this_thread::sleep_for(std::chrono::seconds( instance_id * 30));
+            if (replicas > 1 && config_services->get_bool("server", "memory_saving", false)) {
+                const auto delay_sec = config_services->get_int("server", "replica_delay_sec", 45);
+                LOG_INFO("multi instance mode and memory_saving is true, start to wait the others for {}s.", instance_id * delay_sec);
+                std::this_thread::sleep_for(std::chrono::seconds(instance_id * delay_sec));
             }
         }
 
@@ -122,7 +124,12 @@ namespace {
 
 int HLIEAppController::run() {
     HLIE_CHECK_NULL_RETURN(workflow_, -1);
-    workflow_->run();
+    if (!zero_load_) {
+        workflow_->run();
+    } else {
+        LOG_WARN("Service starting in Zero-Load Model.");
+    }
+
     web_service_->register_routers();
     if (web_service_->run() < 0) {
         LOG_ERROR("web service failed to run");
@@ -220,8 +227,10 @@ int HLIEWinAppController::initialize() {
     }
 
     workflow_ = std::make_shared<HLIEWorkflow>();
-    if (workflow_->initialize(cur_model) < 0) {
+    if (auto res = workflow_->initialize(cur_model, program_path); res < 0) {
         return -1;
+    } else if (8 == res) { // 空载运行
+        zero_load_ = true;
     }
 
     web_service_ = std::make_shared<HLIEWebService>(workflow_);
@@ -271,8 +280,8 @@ int HLIELinuxAppController::initialize() {
     HLIE_CHECK_NULL_RETURN(access_logger, -6);
 
     spdlog::flush_every(std::chrono::seconds(10));
-
-    if (initialize_ex( "./bin/HLIECpp") < 0) {
+    const auto program_path = "./bin/HLIECpp";
+    if (initialize_ex( program_path) < 0) {
         return -3;
     }
 
@@ -283,8 +292,11 @@ int HLIELinuxAppController::initialize() {
     }
 
     workflow_ = std::make_shared<HLIEWorkflow>();
-    if (workflow_->initialize(cur_model) < 0) {
+    if (const auto res = workflow_->initialize(cur_model, program_path); res < 0) {
         return -1;
+    } else if (8 == res) { // 空载运行
+        zero_load_ = true;
+        return 0;
     }
 
     web_service_ = std::make_shared<HLIEWebService>(workflow_);

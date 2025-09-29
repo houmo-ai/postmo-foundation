@@ -763,15 +763,10 @@ int completion_load_model(HANDLE h, std::string model_path) {
     default_logger_->set_level(spdlog::level::debug);
     spdlog::set_default_logger(default_logger_);
 
-    int ctx_size = 4096;
-    if (model_path.find("8k") != std::string::npos || model_path.find("8K") != std::string::npos) {
-        ctx_size = 8192;
-    }
-
     auto* p_params = new common_params();
     p_params->model.path = tok_model_path;
     p_params->n_parallel = 1;
-    p_params->n_ctx = ctx_size;
+    p_params->n_ctx = 640000; // 配置大值让llama根据模型自动设置
     p_params->ctx_shift = false;
     p_params->warmup = false;
     p_params->hostname = "0.0.0.0";
@@ -907,16 +902,12 @@ int completion_load_model_by_buffer(HANDLE h, uint8_t** buffers, size_t* bufferS
     const auto tok_model_path = constructMemoryString(reinterpret_cast<void**>(buffers), bufferSize, buffers_count);
     std::cout << "++tok_model_path from mem:" << tok_model_path << std::endl;
 
-    int ctx_size = 4096;
     const std::string model_path = ctx_server->model_path;
-    if (model_path.find("8k") != std::string::npos || model_path.find("8K") != std::string::npos) {
-        ctx_size = 8192;
-    }
 
     auto* p_params = new common_params();
     p_params->model.path = tok_model_path;
     p_params->n_parallel = 1;
-    p_params->n_ctx = ctx_size;
+    p_params->n_ctx = 640000; // 配置大值让llama根据模型自动设置
     p_params->ctx_shift = false;
     p_params->warmup = false;
     p_params->hostname = "0.0.0.0";

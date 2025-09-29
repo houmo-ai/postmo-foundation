@@ -12,6 +12,7 @@
 
 HLIE_NAMESPACE_BEGIN
 
+class HLIEDeviceService;
 class LLModelService;
 class SDModelService;
 class HLIEConfigService;
@@ -22,7 +23,7 @@ public:
 
     ~HLIEWorkflow() = default;
 
-    int initialize(const std::string& model_dir);
+    int initialize(const std::string& model_dir, const std::string& program_path);
 
     void run() const;
 
@@ -51,16 +52,29 @@ public:
      *
      * @return the vector of RouteConfig including the Method,  the Path, the Handler, and the Model Type
      */
-    [[nodiscard]] const std::vector<RouteConfig>& get_route_configs() const;
+    [[nodiscard]] const std::vector<RouteConfig>& get_route_configs();
 
 private:
     void handle_health(httplib::Response& res) const;
     void handle_models(httplib::Response& res) const;
+    void start_service(const httplib::Request& req, httplib::Response& res);
+    void stop_service(const httplib::Request& req, httplib::Response& res);
+
+    static int generate_instance_id() {
+        static std::atomic counter{0};
+        return ++counter;
+    }
 
     std::shared_ptr<LLModelService> llm_model_service_;
     std::shared_ptr<SDModelService> sd_model_service_;
 
+    std::shared_ptr<HLIEDeviceService> device_service_;
+
     std::vector<std::string> api_keys_;
+    std::string program_path_;
+    std::string model_dir_;
+
+    std::mutex mutex_;
 };
 
 HLIE_NAMESPACE_END

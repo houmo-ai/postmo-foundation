@@ -179,16 +179,10 @@ void HLIEWebService::register_routers() const {
     for (const auto& [paths, method, handler, require_model, model_type] : routes) {
         // 检查是否需要特定模型服务
         if (require_model) {
-            const auto model_service = workflow_->get_model_service(model_type);
-            if (!model_service) {
-                LOG_INFO("Skipping route {} and related - required model service not available", paths[0]);
-                continue;
-            }
-
-            // 检查模型服务状态
-            if (model_service->get_state() != SERVER_STATE_READY) {
-                LOG_INFO("Skipping route {} and related - model service not ready", paths[0]);
-                continue;
+            if (const auto model_service = workflow_->get_model_service(model_type); !model_service) {
+                LOG_WARN("route {} and related - required model service not available", paths[0]);
+            } else if (model_service->get_state() != SERVER_STATE_READY) {
+                LOG_WARN("route {} and related - model service not ready", paths[0]);
             }
         }
 
@@ -267,7 +261,7 @@ bool HLIEWebService::middleware_server_state(const httplib::Request& req, httpli
         }
     }
 
-    if (req.path == "/models" || req.path == "/v1/models" || req.path == "/api/tags") {
+    if (req.path == "/models" || req.path == "/v1/models" || req.path == "/api/tags" || req.path.rfind("/hlie", 0) == 0) {
         // allow the models endpoint to be accessed during loading
         return true;
     }

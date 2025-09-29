@@ -5,7 +5,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
-
+#include <vector>
 
 #include "hlie_base.h"
 
@@ -37,18 +37,20 @@ public:
      * 尝试获取指定的设备
      *
      * @param applicant
-     * @param devices - 设备ID列表
+     * @param devices - 设备ID列表Str
+     * @param acquiring_devices - 获取到的设备ID列表
+     * @param dry_run - 尝试获取设备，不修改设备状态
      * @return
      */
-    bool acquire_devices(const std::string& applicant, const std::string& devices);
+    bool acquire_devices(const std::string& applicant, const std::string& devices, std::vector<int>& acquiring_devices, bool dry_run = false);
 
     /**
      * 释放设备ID
      *
-     * @param device_id
+     * @param device_ids
      * @return
      */
-    bool release_device(int device_id);
+    size_t release_devices(const std::vector<int>& device_ids);
 
     void print_status() const;
 

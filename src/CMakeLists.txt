@@ -22,6 +22,9 @@ if(HOUMO_XH2)
     set(STABLE_DIFFUSION_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/sd.cpp")
     find_library(STABLE_DIFFUSION NAMES stable-diffusion PATHS ${STABLE_DIFFUSION_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
     message("STABLE_DIFFUSION_LIBRARY=${STABLE_DIFFUSION}")
+    set(HMSYS_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/houmo")
+    find_library(HMSYS_LIBRARY NAMES hal_xh2a.dll PATHS ${HMSYS_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
+    message("HMSYS_LIBRARY=${HMSYS_LIBRARY}")
 endif()
 
 
@@ -36,6 +39,7 @@ include_directories(${TCIM_RUNTIME_PATH}/examples/common/hpp)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include/nlohmann)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/sd.cpp/include)
+include_directories(${PROJECT_SOURCE_DIR}/third_party/houmo/include)
 
 include_directories(${PROJECT_SOURCE_DIR}/third_party/inih/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/spdlog/include)

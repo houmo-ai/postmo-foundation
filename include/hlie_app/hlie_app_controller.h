@@ -31,6 +31,7 @@ protected:
     std::atomic<bool> is_running_{false};
     std::mutex mutex_;
     std::condition_variable cv_;
+    bool zero_load_;
 };
 
 

@@ -67,7 +67,7 @@ std::optional<int> HLIEDeviceHelper::acquire_device(const std::string& applicant
     return std::nullopt;
 }
 
-bool HLIEDeviceHelper::acquire_devices(const std::string& applicant, const std::string& devices) {
+bool HLIEDeviceHelper::acquire_devices(const std::string& applicant, const std::string& devices, std::vector<int>& acquiring_devices, const bool dry_run) {
     if (applicant.empty()) {
         LOG_ERROR("applicant cannot be empty");
         return false;
@@ -75,7 +75,7 @@ bool HLIEDeviceHelper::acquire_devices(const std::string& applicant, const std::
 
     std::lock_guard lock(mutex_);
 
-    std::vector<int> acquiring_devices;
+    acquiring_devices.clear();
     try {
         std::stringstream ss(devices);
         std::string token;
@@ -99,10 +99,13 @@ bool HLIEDeviceHelper::acquire_devices(const std::string& applicant, const std::
     }
 
     if (std::all_of(acquiring_devices.begin(), acquiring_devices.end(),
-                    [&](const int device_id) { return devices_.find(device_id) != devices_.end(); })) {
-        for (auto device : acquiring_devices) {
-            devices_[device] = applicant;
+                    [&](const int device_id) { return devices_.find(device_id) != devices_.end() && devices_.at(device_id).empty(); })) {
+        if (!dry_run) {
+            for (auto device : acquiring_devices) {
+                devices_[device] = applicant;
+            }
         }
+
         return true;
     }
 
@@ -110,13 +113,21 @@ bool HLIEDeviceHelper::acquire_devices(const std::string& applicant, const std::
     return false;
 }
 
-bool HLIEDeviceHelper::release_device(const int device_id) {
+size_t HLIEDeviceHelper::release_devices(const std::vector<int>& device_ids) {
     std::lock_guard lock(mutex_);
-    if (const auto it = devices_.find(device_id); it != devices_.end()) {
-        it->second.clear();
-        return true;
+    size_t count = 0;
+    for (int id : device_ids) {
+        auto it = devices_.find(id);
+        if (it == devices_.end()) continue;
+
+        if (!it->second.empty()) {
+            it->second.clear();
+            LOG_INFO("Device {} released", id);
+            ++count;
+        }
     }
-    return false;
+
+    return count;
 }
 
 void HLIEDeviceHelper::print_status() const {

@@ -9,12 +9,12 @@
 HLIE_NAMESPACE_BEGIN
 
 
-const std::string LLM = "LLM";
-const std::string SD = "SD";
+const std::string LLM = "llm";
+const std::string SD = "sd";
 
 struct HLIEModelType {
-    static constexpr auto LLM = "LLM";
-    static constexpr auto SD = "SD";
+    static constexpr auto LLM = "llm";
+    static constexpr auto SD = "sd";
 
     // model real instance type
     static constexpr auto Qwen25 = "qwen2.5";
@@ -43,6 +43,7 @@ public:
 protected:
     std::string model_path_;
     std::atomic<int> state_;
+    std::vector<int> devices_;
 };
 
 HLIE_NAMESPACE_END

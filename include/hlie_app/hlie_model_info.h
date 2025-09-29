@@ -17,6 +17,14 @@ class HLIE_API HLIEModelInfo {
 public:
     int parse_from_file(const std::string& file_path = "info.json");
 
+    void build_llm(const std::string& model_path, const std::string& model_type, int context_size, int cores, int batch_num, int xh_version,
+                   bool is_multi_model, const std::string& params, const std::string& mm_proj_path, const std::string& devices);
+
+    void build_sd(const std::string& model_type, const std::string& vae_model, const std::string& t5_model, const std::string& clip_model,
+                  const std::string& clip_l_model, const std::string& mmdit_model, int xh_version, const std::string& devices);
+
+    int to_json_file(const std::string& file_path) const;
+
     [[nodiscard]] const std::string& get_model_path() const { return model_path_; }
     [[nodiscard]] const std::string& get_model_type() const { return model_type_; }
     [[nodiscard]] int get_batch_num() const { return batch_num_; }

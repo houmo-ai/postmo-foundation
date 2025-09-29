@@ -37,7 +37,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     const auto& config_service = Singleton<HLIEConfigService>::instance();
     auto args_from_main = config_service->get_args();
     for (const auto& [key, value] : args_from_main) {
-        if (key == "--port" || key == "--device_id" || key == "--instance_id") { // 改为由框架控制，非llama-server参数
+        if (key == "--port" || key == "--device_id" || key == "--instance_id" || key == "--json_info") { // 改为由框架控制，非llama-server参数
             continue;
         }
         llm_params[key] = value;
@@ -107,7 +107,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
             return -1;
         }
 
-        if (!Singleton<HLIEDeviceHelper>::instance()->acquire_devices(LLM, devices)) {
+        if (!Singleton<HLIEDeviceHelper>::instance()->acquire_devices(LLM, devices, devices_)) {
             return -1;
         }
 
@@ -118,6 +118,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         return -1;
     } else {
         HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(val.value()));
+        devices_.push_back(*val);
         LOG_INFO("LLM using device: {}", val.value());
     }
 
@@ -167,6 +168,8 @@ void LLModelService::stop() {
         worker_thread_->join();
     }
     worker_thread_.reset();
+    Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+    devices_.clear();
 }
 
 
