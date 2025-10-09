@@ -310,8 +310,33 @@ struct server_task {
 
         // TODO: add more sanity checks for the input parameters
 
+        if (params.sampling.top_k < 0) {
+            throw std::runtime_error("Invalid parameter: top_k must be >= 0");
+        }
+        if (params.sampling.top_p < 0.0f || params.sampling.top_p > 1.0f) {
+            throw std::runtime_error("Invalid parameter: top_p must be between 0.0 and 1.0");
+        }
+        if (params.sampling.temp < 0.0f) {
+            throw std::runtime_error("Invalid parameter: temperature must be >= 0.0");
+        }
+        if (params.sampling.min_p < 0.0f || params.sampling.min_p > 1.0f) {
+            throw std::runtime_error("Invalid parameter: min_p must be between 0.0 and 1.0");
+        }
+
         if (params.sampling.penalty_last_n < -1) {
-            throw std::runtime_error("Error: repeat_last_n must be >= -1");
+            throw std::runtime_error("Invalid parameter: repeat_last_n must be >= -1");
+        }
+
+        if (params.sampling.penalty_repeat < 0.0f) {
+            throw std::runtime_error("Invalid parameter: repeat_penalty must be >= 0.0");
+        }
+
+        if (params.sampling.penalty_freq < 0.0f) {
+            throw std::runtime_error("Invalid parameter: frequency_penalty must be >= 0.0");
+        }
+
+        if (params.sampling.penalty_present < 0.0f) {
+            throw std::runtime_error("Invalid parameter: presence_penalty must be >= 0.0");
         }
 
         if (params.sampling.dry_penalty_last_n < -1) {

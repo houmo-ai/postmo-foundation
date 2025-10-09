@@ -82,6 +82,7 @@ ProcessID HLIEProcessManager::create_process(const std::string& exe_path,
     info.instance_id = HlieUtil::uuid();
     info.process_handle = pi.hProcess;
     info.process_id = pi.dwProcessId;
+    info.params = cmd_line;
     info.start_time = time(nullptr);
     info.is_running = true;
 

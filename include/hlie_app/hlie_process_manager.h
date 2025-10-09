@@ -38,7 +38,7 @@ public:
 
         ProcessID process_id;
         std::string instance_id;
-        std::string config_path;
+        std::string params;
         time_t start_time;
         bool is_running;
     };

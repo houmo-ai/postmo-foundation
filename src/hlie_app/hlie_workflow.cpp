@@ -157,6 +157,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
             LOG_WARN("No valid model info files found in directory: {}", model_dir);
             if (args.find("--instance_id") == args.end()) {
                 // Master Process Start in Zero-Load Mode
+                start_time_ = time(nullptr);
                 return 8;
             }
 
@@ -203,6 +204,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
 #endif
 
     Singleton<HLIEDeviceHelper>::instance()->print_status();
+    start_time_ = time(nullptr);
     return 0;
 }
 
@@ -539,9 +541,19 @@ const std::vector<HLIEWorkflow::RouteConfig>& HLIEWorkflow::get_route_configs() 
             POST,
             [this](const httplib::Request& req, httplib::Response& res) { this->stop_service(req, res); },
             false // 不需要模型Running
+        },
+        {
+            {"/hlie/v1/status"},
+            GET,
+            [this](const httplib::Request& req, httplib::Response& res) { this->handle_status(req, res); },
+            false // 不需要模型Running
         }};
 
     return routes;
+}
+
+void HLIEWorkflow::set_server_port(const int port) {
+    port_ = port;
 }
 
 void HLIEWorkflow::stop_service(const httplib::Request& req, httplib::Response& res) {
@@ -588,6 +600,39 @@ void HLIEWorkflow::stop_service(const httplib::Request& req, httplib::Response& 
         {"instance_id", instance_id},
         {"process_id", process_id},
     };
+
+    res_ok(res, resp);
+}
+
+void HLIEWorkflow::handle_status(const httplib::Request& req, httplib::Response& res) const {
+
+    const std::vector<HLIEProcessManager::ProcessInfo> process_infos = Singleton<HLIEProcessManager>::instance()->get_running_processes();
+
+    json processors = json::array();
+    processors.push_back({
+        {"params", ""},
+        {"instance_id", 0},
+        {"port", port_},
+        {"uuid", ""},
+        {"pid", 0},
+        {"start_time", start_time_},
+    });
+
+    int id = 1;
+    for (const auto& p : process_infos) {
+        processors.push_back({
+            {"params", p.params},
+            {"instance_id", id},
+            {"port", id + port_},
+            {"uuid", p.instance_id},
+            {"pid", p.process_id},
+            {"start_time", p.start_time},
+        });
+
+        id++;
+    }
+
+    const json resp = {{"code", 0}, {"processor", processors}};
 
     res_ok(res, resp);
 }

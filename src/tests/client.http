@@ -3,7 +3,7 @@ POST http://127.0.0.1:7901/v1/chat/completions
 Content-Type: application/json
 
 {
-  "model": "DeepSeek-R1-Distill-Qwen-7B",
+  "model": "Qwen3-8B-16k",
   "messages": [
     {
       "role": "system",
@@ -15,7 +15,7 @@ Content-Type: application/json
     }
   ],
   "top_k": 30,
-  "temperature": 1.5,
+  "temperature": 0,
   "top_p": 0.88,
   "stream": true
 }
@@ -136,4 +136,10 @@ Content-Type: application/json
   "instance_id": 0,
   "process_id": 0
 }
+
+
+### status
+GET http://localhost:7901/hlie/v1/status
+Content-Type: application/json
+
 

@@ -54,11 +54,14 @@ public:
      */
     [[nodiscard]] const std::vector<RouteConfig>& get_route_configs();
 
+    void set_server_port(int port);
+
 private:
     void handle_health(httplib::Response& res) const;
     void handle_models(httplib::Response& res) const;
     void start_service(const httplib::Request& req, httplib::Response& res);
     void stop_service(const httplib::Request& req, httplib::Response& res);
+    void handle_status(const httplib::Request& req, httplib::Response& res) const;
 
     static int generate_instance_id() {
         static std::atomic counter{0};
@@ -73,6 +76,8 @@ private:
     std::vector<std::string> api_keys_;
     std::string program_path_;
     std::string model_dir_;
+    int port_;
+    time_t start_time_;
 
     std::mutex mutex_;
 };

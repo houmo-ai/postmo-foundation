@@ -160,6 +160,9 @@ int HLIEWebService::run(const std::string& host_name, int port) {
         return -1;
     }
 
+    HLIE_CHECK_NULL_RETURN(workflow_, -1);
+    workflow_->set_server_port(port);
+
     worker_thread_ = std::make_unique<std::thread>([this] {
         int ret = this->web_server_->listen_after_bind();
         spdlog::debug("webserver listen ret: {}", ret);

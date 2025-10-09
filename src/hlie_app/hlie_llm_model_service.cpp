@@ -343,11 +343,50 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
         llama_server_->queue_results.remove_waiting_task_ids(task_ids);
     } else {
         const auto chunked_content_provider = [task_ids, oaicompat, this](size_t, httplib::DataSink& sink) {
+            bool is_first_chunk = true;
             llama_server_->receive_cmpl_results_stream(
                 task_ids,
                 [&](const server_task_result_ptr& result) -> bool {
                     try {
                         json res_json = result->to_json();
+
+                        // -----------------------
+                        // 发送首条 role 帧
+                        // -----------------------
+                        if (is_first_chunk) {
+                            is_first_chunk = false;
+
+                            if (res_json.is_array()) {
+                                for (auto& r : res_json) {
+                                    json role_msg = r;
+                                    if (!role_msg.contains("choices") || !role_msg["choices"].is_array()) {
+                                        role_msg["choices"] = json::array();
+                                    }
+                                    role_msg["choices"] = json::array({{
+                                        {"delta", {{"role", "assistant"}}},
+                                        {"index", 0},
+                                        {"finish_reason", nullptr}
+                                    }});
+                                    if (!server_sent_event(sink, role_msg)) {
+                                        return false;
+                                    }
+                                }
+                            } else if (res_json.is_object()) {
+                                json role_msg = res_json;
+                                if (!role_msg.contains("choices") || !role_msg["choices"].is_array()) {
+                                    role_msg["choices"] = json::array();
+                                }
+                                role_msg["choices"] = json::array({{
+                                    {"delta", {{"role", "assistant"}}},
+                                    {"index", 0},
+                                    {"finish_reason", nullptr}
+                                }});
+                                if (!server_sent_event(sink, role_msg)) {
+                                    return false;
+                                }
+                            }
+                        }
+
                         if (res_json.is_array()) {
                             for (const auto& res_data : res_json) {
                                 if (!server_sent_event(sink, res_data)) {
