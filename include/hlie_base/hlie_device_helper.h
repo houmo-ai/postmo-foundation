@@ -22,7 +22,7 @@ public:
      * @param applicant
      * @return
      */
-    std::optional<int> acquire_device(const std::string& applicant);
+    std::optional<int> acquire_device(const std::string& applicant, bool dry_run = false);
 
     /**
      * 申请设备ID（返回optional明确表示可能失败）
@@ -31,7 +31,7 @@ public:
      * @param device_id
      * @return
      */
-    std::optional<int> acquire_device(const std::string& applicant, int device_id);
+    std::optional<int> acquire_device(const std::string& applicant, int device_id, bool dry_run = false);
 
     /**
      * 尝试获取指定的设备

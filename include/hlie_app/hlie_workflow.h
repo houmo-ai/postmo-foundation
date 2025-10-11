@@ -62,6 +62,7 @@ private:
     void start_service(const httplib::Request& req, httplib::Response& res);
     void stop_service(const httplib::Request& req, httplib::Response& res);
     void handle_status(const httplib::Request& req, httplib::Response& res) const;
+    void handle_unload_model(const httplib::Request& req, httplib::Response& res);
 
     static int generate_instance_id() {
         static std::atomic counter{0};

@@ -175,6 +175,7 @@ int HLIEWinAppController::initialize() {
     const auto boot_log_file = program_dir + "\\boot_log\\service_boot-" + instance_id + ".log";
     const auto boot_logger = HLIELogger::create_logger(boot_log_file, HLIE_BOOT, "debug");
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
+    HlieUtil::set_env("TCIM_LOG_FILE", program_dir + "\\boot_log\\tcim-" + instance_id + ".log");
 
     if (const auto config_path = program_dir + "..\\config\\sys.cfg"; config_services->parse(config_path) < 0) {
         boot_logger->error("sys_config parsed failed");

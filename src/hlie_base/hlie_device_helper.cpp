@@ -30,7 +30,7 @@ void HLIEDeviceHelper::init(const std::string& devices_str) {
     }
 }
 
-std::optional<int> HLIEDeviceHelper::acquire_device(const std::string& applicant) {
+std::optional<int> HLIEDeviceHelper::acquire_device(const std::string& applicant, const bool dry_run) {
     if (applicant.empty()) {
         LOG_ERROR("applicant cannot be empty");
         return std::nullopt;
@@ -41,14 +41,16 @@ std::optional<int> HLIEDeviceHelper::acquire_device(const std::string& applicant
     // 查找第一个空闲设备
     if (const auto it = std::find_if(devices_.begin(), devices_.end(), [](const auto& pair) { return pair.second.empty(); });
         it != devices_.end()) {
-        it->second = applicant;
+        if (!dry_run) {
+            it->second = applicant;
+        }
         return it->first; // 返回分配的设备ID
     }
 
     return std::nullopt;
 }
 
-std::optional<int> HLIEDeviceHelper::acquire_device(const std::string& applicant, const int device_id) {
+std::optional<int> HLIEDeviceHelper::acquire_device(const std::string& applicant, const int device_id, const bool dry_run) {
     if (applicant.empty()) {
         LOG_ERROR("applicant cannot be empty");
         return std::nullopt;
@@ -60,7 +62,9 @@ std::optional<int> HLIEDeviceHelper::acquire_device(const std::string& applicant
     if (const auto it = std::find_if(devices_.begin(), devices_.end(),
                                      [device_id](const auto& pair) { return pair.first == device_id && pair.second.empty(); });
         it != devices_.end()) {
-        it->second = applicant;
+        if (!dry_run) {
+            it->second = applicant;
+        }
         return it->first; // 返回分配的设备ID
     }
 

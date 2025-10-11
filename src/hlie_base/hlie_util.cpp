@@ -124,4 +124,33 @@ bool HlieUtil::is_relative_path(const std::string& path) {
     return true;
 }
 
+/**
+ * @brief 从文件路径中提取文件名（不含扩展名）
+ * @param path 文件路径，可以是绝对路径或相对路径
+ * @return 纯文件名，不包含路径和扩展名
+ */
+std::string HlieUtil::extract_filename(const std::string& path) {
+    // 处理Windows和Linux的路径分隔符
+    size_t last_slash = path.find_last_of("/\\");
+    std::string filename = (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
+
+    // 移除文件扩展名
+    size_t last_dot = filename.find_last_of('.');
+    if (last_dot != std::string::npos) {
+        filename = filename.substr(0, last_dot);
+    }
+
+    return filename;
+}
+
+/**
+ * @brief 检查字符串是否已包含模型参数格式（如 -7B、-8B）
+ * @param str 输入字符串
+ * @return 如果包含模型参数格式则返回true
+ */
+bool HlieUtil::has_model_params(const std::string& str) {
+    static const std::regex params_regex(".*-\\d+B.*");
+    return std::regex_match(str, params_regex);
+}
+
 HLIE_NAMESPACE_END

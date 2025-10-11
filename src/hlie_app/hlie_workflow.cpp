@@ -79,7 +79,7 @@ namespace {
             !params.contains("is_mm") || !params["is_mm"].is_boolean() || !params.contains("mm_proj_path") ||
             !params["mm_proj_path"].is_string() || !params.contains("xh_version") || !params["xh_version"].is_number_integer() ||
             !params.contains("size") || !params["size"].is_string()) {
-            const json resp = {{"code", 80007}, {"msg", "params invalid"}};
+            const json resp = {{"ret", 80007}, {"msg", "params invalid"}};
             res_error(res, resp);
             return {};
         }
@@ -110,7 +110,7 @@ namespace {
                 (is_string_field && !params[field].is_string()) ||
                 (!is_string_field && !params[field].is_number_integer()))
             {
-                const json resp = {{"code", 80007}, {"msg", "params invalid"}};
+                const json resp = {{"ret", 80007}, {"msg", "params invalid"}};
                 res_error(res, resp);
                 return {};
             }
@@ -266,7 +266,7 @@ int HLIEWorkflow::get_model_service_state() const {
     }
 #endif
 
-    LOG_ERROR("model service not initialized");
+    LOG_WARN("model service not initialized");
     return -1;
 }
 
@@ -315,7 +315,7 @@ void HLIEWorkflow::start_service(const httplib::Request& req, httplib::Response&
     const auto& config_services = Singleton<HLIEConfigService>::instance();
     if (config_services->get_int("server", "replicas", 1) > 1) {
         // 集群|多实例模式下，不允许外部调用启动模型实例
-        const json resp = {{"code", 80005},
+        const json resp = {{"ret", 80005},
                            "In the cluster or multi-instance mode, external calls to start model instances are not allowed."};
         res_error(res, resp);
         return;
@@ -327,13 +327,13 @@ void HLIEWorkflow::start_service(const httplib::Request& req, httplib::Response&
     auto model_type = body.at("model_type").get<std::string>();
 
     if (model_type != LLM && model_type != SD) {
-        const json resp = {{"code", 80006}, "Invalid model type."};
+        const json resp = {{"ret", 80006}, "Invalid model type."};
         res_error(res, resp);
         return;
     }
 
     if (!body.contains("params") || !body["params"].is_object()) {
-        const json resp = {{"code", 80007}, {"msg", "params invalid"}};
+        const json resp = {{"ret", 80007}, {"msg", "params invalid"}};
         res_error(res, resp);
         return;
     }
@@ -343,9 +343,17 @@ void HLIEWorkflow::start_service(const httplib::Request& req, httplib::Response&
 
     auto& params = body["params"];
 
-    if (std::vector<int> devices_vec;
-        !Singleton<HLIEDeviceHelper>::instance()->acquire_devices(HlieUtil::uuid(), devices, devices_vec, true)) {
-        const json resp = {{"code", 80006}, "The devices is not available."};
+    if (devices == "undefined") {
+        const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(HlieUtil::uuid(), true);
+        if (!val) {
+            const json resp = {{"ret", 80006}, "The devices is not available."};
+            res_error(res, resp);
+            return;
+        }
+        devices = std::to_string(*val);
+    } else if (std::vector<int> devices_vec;
+               !Singleton<HLIEDeviceHelper>::instance()->acquire_devices(HlieUtil::uuid(), devices, devices_vec, true)) {
+        const json resp = {{"ret", 80006}, "The devices is not available."};
         res_error(res, resp);
         return;
     }
@@ -366,7 +374,7 @@ void HLIEWorkflow::start_service(const httplib::Request& req, httplib::Response&
              llm_model_service_ = std::make_shared<LLModelService>();
             if (llm_model_service_->init(model_dir_, model_info) < 0) {
                 LOG_ERROR("failed to init the LLM model service");
-                const json resp = {{"code", 80007}, "failed to init the LLM model service"};
+                const json resp = {{"ret", 80007}, "failed to init the LLM model service"};
                 res_error(res, resp);
                 return;
             }
@@ -383,7 +391,7 @@ void HLIEWorkflow::start_service(const httplib::Request& req, httplib::Response&
             json_info_file = HlieUtil::join_paths(model_dir_, "model_info" + oss.str() + ".hlif");
             if (model_info.to_json_file(json_info_file) < 0) {
                 LOG_ERROR("failed to write model info to json file");
-                const json resp = {{"code", 80007}, "failed to write model info to json file"};
+                const json resp = {{"ret", 80007}, "failed to write model info to json file"};
                 res_error(res, resp);
                 return;
             }
@@ -417,7 +425,7 @@ void HLIEWorkflow::start_service(const httplib::Request& req, httplib::Response&
              sd_model_service_ = std::make_shared<SDModelService>();
             if (sd_model_service_->init(model_dir_, model_info) < 0) {
                 LOG_ERROR("failed to init the SD model service");
-                const json resp = {{"code", 80007}, "failed to init the SD model service"};
+                const json resp = {{"ret", 80007}, "failed to init the SD model service"};
                 res_error(res, resp);
                 return;
             }
@@ -434,7 +442,7 @@ void HLIEWorkflow::start_service(const httplib::Request& req, httplib::Response&
             json_info_file = HlieUtil::join_paths(model_dir_, "model_info" + oss.str() + ".hlif");
             if (model_info.to_json_file(json_info_file) < 0) {
                 LOG_ERROR("failed to write model info to json file");
-                const json resp = {{"code", 80007}, "failed to write model info to json file"};
+                const json resp = {{"ret", 80007}, "failed to write model info to json file"};
                 res_error(res, resp);
                 return;
             }
@@ -451,7 +459,7 @@ void HLIEWorkflow::start_service(const httplib::Request& req, httplib::Response&
             }
         }
 #else
-        const json resp = {{"code", 80008}, "The sd is not available."};
+        const json resp = {{"ret", 80008}, "The sd is not available."};
         res_error(res, resp);
 #endif
     }
@@ -547,6 +555,12 @@ const std::vector<HLIEWorkflow::RouteConfig>& HLIEWorkflow::get_route_configs() 
             GET,
             [this](const httplib::Request& req, httplib::Response& res) { this->handle_status(req, res); },
             false // 不需要模型Running
+        },
+        {
+            {"/hlie/v1/unload_model"},
+            POST,
+            [this](const httplib::Request& req, httplib::Response& res) { this->handle_unload_model(req, res); },
+            false // 不需要模型Running
         }};
 
     return routes;
@@ -560,7 +574,7 @@ void HLIEWorkflow::stop_service(const httplib::Request& req, httplib::Response& 
     const auto& config_services = Singleton<HLIEConfigService>::instance();
     if (config_services->get_int("server", "replicas", 1) > 1) {
         // 集群|多实例模式下，不允许外部调用启动模型实例
-        const json resp = {{"code", 80005},
+        const json resp = {{"ret", 80005},
                            "In the cluster or multi-instance mode, external calls to start model instances are not allowed."};
         res_error(res, resp);
         return;
@@ -587,7 +601,7 @@ void HLIEWorkflow::stop_service(const httplib::Request& req, httplib::Response& 
     } else if (process_id != 0) {
         if (!Singleton<HLIEProcessManager>::instance()->terminate_process(process_id)) {
             LOG_ERROR("Failed to terminate process for instance_id[{}][{}]", instance_id, process_id);
-            const json resp = {{"code", 80005}, "Failed to terminate process for instance_id."};
+            const json resp = {{"ret", 80005}, "Failed to terminate process for instance_id."};
             res_error(res, resp);
             return;
         }
@@ -636,5 +650,46 @@ void HLIEWorkflow::handle_status(const httplib::Request& req, httplib::Response&
 
     res_ok(res, resp);
 }
+
+
+void HLIEWorkflow::handle_unload_model(const httplib::Request& req, httplib::Response& res) {
+    const auto& config_services = Singleton<HLIEConfigService>::instance();
+    if (config_services->get_int("server", "replicas", 1) > 1) {
+        // 集群|多实例模式下，不允许外部调用启动模型实例
+        const json resp = {{"ret", 80005},
+                           "In the cluster or multi-instance mode, external calls to start model instances are not allowed."};
+        res_error(res, resp);
+        return;
+    }
+
+    const auto body = json::parse(req.body);
+    const auto model_type = body.at("model_type").get<std::string>();
+    if (model_type != LLM && model_type != SD) {
+        const json resp = {{"ret", 80006}, "Invalid model type."};
+        res_error(res, resp);
+        return;
+    }
+
+    std::unique_lock lock(mutex_);
+    if (model_type == LLM && llm_model_service_) {
+        llm_model_service_->stop();
+        llm_model_service_.reset();
+    }
+#ifdef HOUMO_XH2
+    if (model_type == SD && sd_model_service_) {
+        sd_model_service_->stop();
+        sd_model_service_.reset();
+    }
+#endif
+    LOG_INFO("Succeed to uninstall model");
+
+    const json resp = {
+        {"code", 0},
+    };
+
+    res_ok(res, resp);
+}
+
+
 
 HLIE_NAMESPACE_END

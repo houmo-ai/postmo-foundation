@@ -31,6 +31,8 @@ public:
     static int parse_natural_num(const std::string& input, bool include_zero = true);
 
     static bool is_relative_path(const std::string& path);
+    static std::string extract_filename(const std::string& path);
+    static bool has_model_params(const std::string& str);
 };
 
 HLIE_NAMESPACE_END

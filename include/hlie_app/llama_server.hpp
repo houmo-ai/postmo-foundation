@@ -1102,6 +1102,7 @@ struct server_task_result_cmpl_partial : server_task_result {
         };
         // We have to send an initial update to conform to openai behavior
         if (first || is_progress) {
+            LOG_INFO("FDDD");
             add_delta({
                 {"role", "assistant"},
                 {"content", nullptr},

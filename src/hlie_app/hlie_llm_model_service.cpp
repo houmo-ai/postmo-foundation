@@ -84,6 +84,12 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         return -1;
     }
 
+    // 用于models请求，返回Qwen2.5-7B/Qwen3-8B ..
+    params.model_alias = HlieUtil::extract_filename(params.model.path);
+    if (!HlieUtil::has_model_params(params.model_alias)) {
+        params.model_alias += "-" + model_info.get_params();
+    }
+
     // 兼容绝对路径与相对路径
     if (HlieUtil::is_relative_path(params.model.path)) {
         params.model.path = HlieUtil::join_paths(model_dir, params.model.path);
@@ -95,9 +101,6 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
             params.mmproj.path = HlieUtil::join_paths(model_dir, params.mmproj.path);
         }
     }
-
-    // 用于models请求，返回Qwen2.5-7B/Qwen3-8B ..
-    params.model_alias = model_info.get_model_type() + "-" + model_info.get_params();
 
     if (const auto& devices = model_info.get_devices();
         !devices.empty() && Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1) == 1) {
