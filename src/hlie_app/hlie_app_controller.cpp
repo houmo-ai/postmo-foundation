@@ -297,7 +297,6 @@ int HLIELinuxAppController::initialize() {
         return -1;
     } else if (8 == res) { // 空载运行
         zero_load_ = true;
-        return 0;
     }
 
     web_service_ = std::make_shared<HLIEWebService>(workflow_);
