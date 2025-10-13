@@ -130,6 +130,7 @@ int HLIEAppController::run() {
         LOG_WARN("Service starting in Zero-Load Model.");
     }
 
+    HLIE_CHECK_NULL_RETURN(web_service_, -1);
     web_service_->register_routers();
     if (web_service_->run() < 0) {
         LOG_ERROR("web service failed to run");

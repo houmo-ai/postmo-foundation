@@ -98,7 +98,7 @@ deploy_dadao_sdk() {
 
 
     if [[ $PLATFORM == "xh2" ]]; then
-        cp third_party/houmo-sdk/hal/lib/*.so third_party/houmo/lib/
+        cp third_party/houmo-sdk/hal/lib/*.so* third_party/houmo/lib/
         cp third_party/houmo-sdk/hal/export/*.h third_party/houmo/include/
         rm -rf third_party/houmo-sdk third_party/sw_sdk.run third_party/houmo_drv*
     fi

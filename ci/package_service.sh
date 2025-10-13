@@ -98,7 +98,7 @@ deploy_dadao_sdk() {
 
 
     if [[ $PLATFORM == "xh2" ]]; then
-        cp third_party/houmo-sdk/hal/lib/*.so third_party/houmo/lib/
+        cp third_party/houmo-sdk/hal/lib/*.so* third_party/houmo/lib/
         cp third_party/houmo-sdk/hal/export/*.h third_party/houmo/include/
         rm -rf third_party/houmo-sdk third_party/sw_sdk.run third_party/houmo_drv*
     fi
@@ -147,10 +147,19 @@ build_service() {
 
     cd build
     if [ "$ARCH" == "aarch64" ]; then
-        TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DCMAKE_TOOLCHAIN_FILE=../ci/toolchain-aarch64.cmake \
-        -DCMAKE_PREFIX_PATH=/opt/libtorch/aarch64/libtorch
+        if [ $PLATFORM == "xh2" ]; then
+            TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DHOUMO_XH2=True -DCMAKE_TOOLCHAIN_FILE=../ci/toolchain-aarch64.cmake \
+            -DCMAKE_PREFIX_PATH=/opt/libtorch/aarch64/libtorch
+        else
+            TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DCMAKE_TOOLCHAIN_FILE=../ci/toolchain-aarch64.cmake \
+            -DCMAKE_PREFIX_PATH=/opt/libtorch/aarch64/libtorch
+        fi
     else
-        TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DCMAKE_PREFIX_PATH=/opt/libtorch/x86_64/libtorch
+        if [ $PLATFORM == "xh2" ]; then
+            TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DHOUMO_XH2=True -DCMAKE_PREFIX_PATH=/opt/libtorch/x86_64/libtorch
+        else
+            TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DCMAKE_PREFIX_PATH=/opt/libtorch/x86_64/libtorch
+        fi
     fi
     make -j$(nproc)
     cd ..
