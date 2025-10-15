@@ -231,8 +231,8 @@ int HLIEWinAppController::initialize() {
     workflow_ = std::make_shared<HLIEWorkflow>();
     if (auto res = workflow_->initialize(cur_model, program_path); res < 0) {
         return -1;
-    } else if (8 == res) { // 空载运行
-        zero_load_ = true;
+    } else {
+        zero_load_ = 8 == res;
     }
 
     web_service_ = std::make_shared<HLIEWebService>(workflow_);
@@ -296,8 +296,8 @@ int HLIELinuxAppController::initialize() {
     workflow_ = std::make_shared<HLIEWorkflow>();
     if (const auto res = workflow_->initialize(cur_model, program_path); res < 0) {
         return -1;
-    } else if (8 == res) { // 空载运行
-        zero_load_ = true;
+    } else {
+        zero_load_ = 8 == res;
     }
 
     web_service_ = std::make_shared<HLIEWebService>(workflow_);
