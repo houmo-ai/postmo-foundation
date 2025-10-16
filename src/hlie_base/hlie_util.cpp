@@ -1,6 +1,7 @@
 #include "hlie_base/hlie_util.h"
 
 #include <regex>
+#include <sstream>
 
 #include "hlie_base/hlie_logger.h"
 
@@ -151,6 +152,23 @@ std::string HlieUtil::extract_filename(const std::string& path) {
 bool HlieUtil::has_model_params(const std::string& str) {
     static const std::regex params_regex(".*-\\d+B.*");
     return std::regex_match(str, params_regex);
+}
+
+std::string HlieUtil::get_datetime_str() {
+    using namespace std::chrono;
+    const auto now = system_clock::now();
+    std::time_t t = system_clock::to_time_t(now);
+
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%d-%H-%M"); // 年-月-日-时-分
+    return oss.str();
 }
 
 HLIE_NAMESPACE_END

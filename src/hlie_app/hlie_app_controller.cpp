@@ -176,7 +176,9 @@ int HLIEWinAppController::initialize() {
     const auto boot_log_file = program_dir + "\\boot_log\\service_boot-" + instance_id + ".log";
     const auto boot_logger = HLIELogger::create_logger(boot_log_file, HLIE_BOOT, "debug");
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
-    HlieUtil::set_env("TCIM_LOG_FILE", program_dir + "\\boot_log\\tcim-" + instance_id + ".log");
+
+    const auto datetime = HlieUtil::get_datetime_str();
+    HlieUtil::set_env("TCIM_LOG_FILE", program_dir + "\\boot_log\\tcim-" + datetime + "-" + instance_id + ".log");
 
     if (const auto config_path = program_dir + "..\\config\\sys.cfg"; config_services->parse(config_path) < 0) {
         boot_logger->error("sys_config parsed failed");
@@ -267,7 +269,10 @@ int HLIELinuxAppController::initialize() {
         LOG_WARN("sys_config parsed failed and will use env[HLIE__MODEL__CUR_MODEL] to continue");
     }
 
-    const std::string log_location = config_services->get_string("log", "location", "/opt/hicpp/logs");
+    const auto datetime = HlieUtil::get_datetime_str();
+    HlieUtil::set_env("TCIM_LOG_FILE", "/opt/HLIECpp/logs/tcim-" + datetime + "-" + instance_id + ".log");
+
+    const std::string log_location = config_services->get_string("log", "location", "/opt/HLIECpp/logs");
     const std::string log_file_name = HlieUtil::join_paths(log_location, "houmo-llm-" + instance_id + ".log");
     const auto log_level = config_services->get_string("log", "level", "debug");
     const auto max_files = config_services->get_int("log", "max_files", 7);

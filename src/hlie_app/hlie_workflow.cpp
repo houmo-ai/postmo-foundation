@@ -130,6 +130,35 @@ namespace {
 
         return model_info;
     }
+
+    std::string generate_meta_info(const HLIEModelInfo& model_info ,const std::string& model_dir, httplib::Response& res) {
+        using namespace std::chrono;
+        const auto now = system_clock::now();
+        const auto t = system_clock::to_time_t(now);
+
+        std::ostringstream oss;
+        oss << std::put_time(std::localtime(&t), "%Y%m%d_%H%M%S");
+        const auto meta_info_file_name = "model_info" + oss.str() + ".hlif";
+        const auto meta_cache_dir = HlieUtil::join_paths(model_dir, "meta_cache");
+        std::string json_info_file;
+        try {
+            if (std::filesystem::create_directories(meta_cache_dir)) {
+                LOG_INF("MetaCache dir created successfully.");
+            }
+            json_info_file = HlieUtil::join_paths(meta_cache_dir, meta_info_file_name);
+        } catch (const std::filesystem::filesystem_error& ex) {
+            LOG_ERROR("MetaCache Dir created failed, exception: {}", ex.what());
+            json_info_file = HlieUtil::join_paths(model_dir, meta_info_file_name);
+        }
+        if (model_info.to_json_file(json_info_file) < 0) {
+            LOG_ERROR("failed to write model info to json file");
+            const json resp = {{"ret", 80007}, "failed to write model info to json file"};
+            res_error(res, resp);
+            return "";
+        }
+
+        return json_info_file;
+    }
 } // namespace
 
 int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& program_path) {
@@ -382,19 +411,11 @@ void HLIEWorkflow::start_service(const httplib::Request& req, httplib::Response&
             llm_model_service_->run();
         } else {
             // 子进程实例参数
-            using namespace std::chrono;
-            auto now = system_clock::now();
-            auto t = system_clock::to_time_t(now);
-
-            std::ostringstream oss;
-            oss << std::put_time(std::localtime(&t), "%Y%m%d_%H%M%S");
-            json_info_file = HlieUtil::join_paths(model_dir_, "model_info" + oss.str() + ".hlif");
-            if (model_info.to_json_file(json_info_file) < 0) {
-                LOG_ERROR("failed to write model info to json file");
-                const json resp = {{"ret", 80007}, "failed to write model info to json file"};
-                res_error(res, resp);
+            json_info_file = generate_meta_info(model_info, model_dir_, res);
+            if (json_info_file.empty()) {
                 return;
             }
+
             instance_id  = generate_instance_id();
             std::vector args_for_sub_process = {std::string("--instance_id"), std::to_string(instance_id),
                                                 std::string("--device_id"),   devices,
@@ -433,17 +454,8 @@ void HLIEWorkflow::start_service(const httplib::Request& req, httplib::Response&
             sd_model_service_->run();
         } else {
             // 子进程实例参数
-            using namespace std::chrono;
-            auto now = system_clock::now();
-            auto t = system_clock::to_time_t(now);
-
-            std::ostringstream oss;
-            oss << std::put_time(std::localtime(&t), "%Y%m%d_%H%M%S");
-            json_info_file = HlieUtil::join_paths(model_dir_, "model_info" + oss.str() + ".hlif");
-            if (model_info.to_json_file(json_info_file) < 0) {
-                LOG_ERROR("failed to write model info to json file");
-                const json resp = {{"ret", 80007}, "failed to write model info to json file"};
-                res_error(res, resp);
+            json_info_file = generate_meta_info(model_info, model_dir_, res);
+            if (json_info_file.empty()) {
                 return;
             }
 
@@ -628,7 +640,7 @@ void HLIEWorkflow::handle_status(const httplib::Request& req, httplib::Response&
         {"instance_id", 0},
         {"port", port_},
         {"uuid", ""},
-        {"pid", 0},
+        {"process_id", 0},
         {"start_time", start_time_},
     });
 
@@ -639,7 +651,7 @@ void HLIEWorkflow::handle_status(const httplib::Request& req, httplib::Response&
             {"instance_id", id},
             {"port", id + port_},
             {"uuid", p.instance_id},
-            {"pid", p.process_id},
+            {"process_id", p.process_id},
             {"start_time", p.start_time},
         });
 
@@ -689,7 +701,5 @@ void HLIEWorkflow::handle_unload_model(const httplib::Request& req, httplib::Res
 
     res_ok(res, resp);
 }
-
-
 
 HLIE_NAMESPACE_END

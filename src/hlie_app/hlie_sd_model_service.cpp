@@ -184,6 +184,8 @@ int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
     if (!sd_ctx) {
         LOG_ERROR("Failed to init sd_ctx");
+        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+        devices_.clear();
         return -1;
     }
 

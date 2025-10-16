@@ -132,11 +132,15 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     llama_numa_init(params.numa);
 
     if (!llama_server_->load_model(params)) {
+        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+        devices_.clear();
         return -1;
     }
 
     llama_server_->model_status = 0;
     if (llama_server_->initialize() < 0) {
+        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+        devices_.clear();
         return -1;
     }
 
