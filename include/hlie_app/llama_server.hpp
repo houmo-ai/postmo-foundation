@@ -1607,7 +1607,17 @@ struct server_slot {
         if (!new_msg.empty()) {
             new_msg.ensure_tool_call_ids_set(generated_tool_call_ids, gen_tool_call_id);
             chat_msg = new_msg;
-            diffs = common_chat_msg_diff::compute_diffs(previous_msg, new_msg.empty() ? previous_msg : new_msg);
+            try {
+                diffs = common_chat_msg_diff::compute_diffs(previous_msg, new_msg.empty() ? previous_msg : new_msg);
+            } catch (const nlohmann::json::type_error& ex) {
+                auto valid = utf8_sanitize_safe(previous_msg.content);
+                LOG_ERROR("failed to compute_diffs, probably previous_msg[{}] problem, valid[{}], exception: {}", previous_msg.content, valid, ex.what());
+                diffs = common_chat_msg_diff::compute_diffs(previous_msg, new_msg.empty() ? previous_msg : new_msg);
+            } catch (const std::exception& ex) {
+                LOG_ERROR("failed to compute_diffs, exception: {}", ex.what());
+            } catch (...) {
+                LOG_ERROR("failed to compute_diffs, unexpected exception");
+            }
         }
         return chat_msg;
     }
