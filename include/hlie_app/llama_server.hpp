@@ -246,7 +246,7 @@ struct server_task {
         params.stream = json_value(data, "stream", false);
         auto stream_opt = json_value(data, "stream_options", json::object());
         params.include_usage = json_value(stream_opt, "include_usage", false);
-        params.cache_prompt = json_value(data, "cache_prompt", true);
+        // params.cache_prompt = json_value(data, "cache_prompt", true);
         params.return_tokens = json_value(data, "return_tokens", false);
         params.return_progress = json_value(data, "return_progress", false);
         params.n_predict =
@@ -3836,7 +3836,13 @@ struct LlamaServer {
 
     int initialize() {
 
-        const int32_t n_ctx_slot = n_ctx / params_base.n_parallel;
+        int32_t n_ctx_slot = n_ctx / params_base.n_parallel;
+
+        char buf[128] = {0};
+        if(llama_model_meta_val_str(model, "is_hmm", buf, sizeof(buf)/sizeof(buf[0])) > 0) {
+            SRV_INF("model is HMM: %s\n", buf);
+            n_ctx_slot = n_ctx; // for HMM models we use the full context
+        }
 
         SRV_INF("initializing slots, n_slots = %d\n", params_base.n_parallel);
 
