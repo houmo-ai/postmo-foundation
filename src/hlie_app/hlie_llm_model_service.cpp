@@ -229,7 +229,6 @@ void LLModelService::handle_models(json& resp) const {
                          {"parameter_size", ""},
                          {"quantization_level", ""}}}}};
 
-    resp["object"] = "list";
     resp["data"] = {{
         {"id", params.model_alias.empty() ? params.model.path : params.model_alias},
         {"object", "model"},

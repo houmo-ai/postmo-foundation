@@ -36,15 +36,15 @@ esac
 
 # SDK URLs
 xh1_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/08/14/0200/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_${ARCH}-2.4.2.tar.gz"
-xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/11/1653/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_${ARCH}-0.4.0.tar.gz"
-xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/08/14/0200/ubuntu2004/houmo_drv_xh1_v2.4.2_ubuntu2004_${ARCH}.run"
+xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/10/28/1950/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_${ARCH}-0.5.0.tar.gz"
+xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/19/0200/ubuntu2004/houmo_drv_xh1_v2.4.3_ubuntu2004_${ARCH}.run"
 #FIXME:
-xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/16/1031/ubuntu2004/houmo_drv_xh2_v0.4.0_ubuntu2004_${ARCH}.run"
+xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/10/28/1950/ubuntu2004/houmo_drv_xh2_v0.5.0_ubuntu2004_${ARCH}.run"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/10/20/2330/linux/houmo-HLIELLama-xh1_1.2.0_linux_${ARCH}.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/10/20/2330/linux/houmo-HLIELLama-xh2_1.2.0_linux_${ARCH}.tar.gz"
+xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/03/0954/linux/houmo-HLIELLama-xh1_1.3.0_linux_${ARCH}.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/03/0954/linux/houmo-HLIELLama-xh2_1.3.0_linux_${ARCH}.tar.gz"
 
-xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/10/20/2330/linux/houmo-HLIESDCpp-xh2_1.0.0_linux_${ARCH}.tar.gz"
+xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/03/0954/linux/houmo-HLIESDCpp-xh2_1.0.0_linux_${ARCH}.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {

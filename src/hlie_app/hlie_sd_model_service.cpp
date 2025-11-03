@@ -269,15 +269,17 @@ int SDModelService::handle_health(nlohmann::ordered_json& resp) {
 }
 
 void SDModelService::handle_models(nlohmann::ordered_json& resp) const {
-    // 检查resp是否已经有models数组
-    if (!resp.contains("models")) {
-        resp["models"] = nlohmann::json::array();
-    }
-
     // 添加SD3模型信息
     resp["models"].push_back({
         {"name", SD},
-        {"model", SD},
+        {"model", "sd3"},
+    });
+
+    resp["data"].push_back({
+        {"id", "sd3"},
+        {"object", "model"},
+        {"created", std::time(0)},
+        {"owned_by", "HLIECpp"},
     });
 }
 

@@ -270,9 +270,9 @@ int HLIELinuxAppController::initialize() {
     }
 
     const auto datetime = HlieUtil::get_datetime_str();
-    HlieUtil::set_env("TCIM_LOG_FILE", "/opt/HLIECpp/logs/tcim-" + datetime + "-" + instance_id + ".log");
+    HlieUtil::set_env("TCIM_LOG_FILE", "/var/log/houmo/HLIECpp/tcim-" + datetime + "-" + instance_id + ".log");
 
-    const std::string log_location = config_services->get_string("log", "location", "/opt/HLIECpp/logs");
+    const std::string log_location = config_services->get_string("log", "location", "/var/log/houmo/HLIECpp");
     const std::string log_file_name = HlieUtil::join_paths(log_location, "houmo-llm-" + instance_id + ".log");
     const auto log_level = config_services->get_string("log", "level", "debug");
     const auto max_files = config_services->get_int("log", "max_files", 7);

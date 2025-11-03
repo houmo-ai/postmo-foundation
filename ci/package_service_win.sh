@@ -10,14 +10,14 @@ ARCH=x86_64
 
 # SDK URLs
 xh1_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/08/14/0200/windows11/houmo_tcim_runtime_xh1_windows11_x86_64-2.4.2.tar.gz"
-xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/11/1653/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-0.4.0.tar.gz"
-xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/08/14/0200/windows11/houmo_drv_xh1_v2.4.2_windows11_x86_64.zip"
-xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/16/1031/windows11/houmo_drv_xh2_v0.4.0_windows11_x86_64.zip"
+xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/10/28/1950/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-0.5.0.tar.gz"
+xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/19/0200/windows11/houmo_drv_xh1_v2.4.3_windows11_x86_64.zip"
+xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/10/28/1950/windows11/houmo_drv_xh2_v0.5.0_windows11_x86_64.zip"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/10/20/2330/windows11/houmo-HLIELLama-xh1_1.2.0_windows11_x86_64.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/10/20/2330/windows11/houmo-HLIELLama-xh2_1.2.0_windows11_x86_64.tar.gz"
+xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/03/0954/windows11/houmo-HLIELLama-xh1_1.3.0_windows11_x86_64.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/03/0954/windows11/houmo-HLIELLama-xh2_1.3.0_windows11_x86_64.tar.gz"
 
-xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/10/20/2330/windows11/houmo-HLIESDCpp-xh2_1.0.0_windows11_x86_64.tar.gz"
+xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/03/0954/windows11/houmo-HLIESDCpp-xh2_1.1.0_windows11_x86_64.tar.gz"
 
 # libtorch 下载地址
 libtorch_url="http://10.10.1.53:8082/artifactory/thirdparty_local/libtorch/torch.zip"
@@ -135,7 +135,21 @@ build_service() {
     else
         TCIM_RUNTIME_PATH=$(pwd)/third_party/houmo cmake -B build -DCMAKE_PREFIX_PATH=$(pwd)/third_party/libtorch -DWINSERVICE_MODE=True
     fi
+    if [ $? -ne 0 ]; then
+        echo "cmake failed."
+        exit 1
+    else
+        echo "cmake completed."
+    fi
+
     cmake  --build build --config Release -j 8
+    if [ $? -ne 0 ]; then
+        echo "make build failed."
+        exit 1
+    else
+        echo "make build completed."
+    fi
+
     echo "Build completed."
 }
 

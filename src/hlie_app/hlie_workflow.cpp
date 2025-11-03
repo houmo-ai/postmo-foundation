@@ -327,8 +327,12 @@ void HLIEWorkflow::handle_health(httplib::Response& res) const {
 
 void HLIEWorkflow::handle_models(httplib::Response& res) const {
     json resp = {};
+    resp["object"] = "list";
     if (llm_model_service_) {
         llm_model_service_->handle_models(resp);
+    } else {
+        resp["data"] = json::array();
+        resp["models"] = json::array();
     }
 
 #ifdef HOUMO_XH2
