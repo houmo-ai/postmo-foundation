@@ -555,6 +555,26 @@ const std::vector<HLIEWorkflow::RouteConfig>& HLIEWorkflow::get_route_configs() 
             LLM // LLM模型类型
         },
         {
+            {"/embedding", "/embeddings"},
+            POST,
+            [this](const httplib::Request& req, httplib::Response& res) {
+                CHECK_MODEL_READY(llm_model_service_, res);
+                llm_model_service_->handle_embeddings(req, res, OAICOMPAT_TYPE_NONE);
+            },
+            true,
+            LLM // LLM模型类型
+        },
+        {
+            {"/v1/embeddings"},
+            POST,
+            [this](const httplib::Request& req, httplib::Response& res) {
+                CHECK_MODEL_READY(llm_model_service_, res);
+                llm_model_service_->handle_embeddings(req, res, OAICOMPAT_TYPE_EMBEDDING);
+            },
+            true,
+            LLM // LLM模型类型
+        },
+        {
             {"/hlie/v1/start"},
             POST,
             [this](const httplib::Request& req, httplib::Response& res) { this->start_service(req, res); },

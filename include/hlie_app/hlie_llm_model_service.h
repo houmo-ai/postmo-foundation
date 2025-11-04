@@ -39,7 +39,9 @@ public:
 
     void handle_completions(const httplib::Request& req, httplib::Response& res) const;
 
-    void handle_completions_oai(const httplib::Request & req, httplib::Response & res) const;
+    void handle_completions_oai(const httplib::Request& req, httplib::Response& res) const;
+
+    void handle_embeddings(const httplib::Request& req, httplib::Response& res, oaicompat_type oaicompat) const;
 
 private:
     /**
@@ -55,7 +57,6 @@ private:
      */
     void handle_completions_impl(server_task_type type, json& data, const std::vector<raw_buffer>& files,
                                  const std::function<bool()>& is_connection_closed, httplib::Response& res, oaicompat_type oaicompat) const;
-
 
     std::shared_ptr<LlamaServer> llama_server_;
     std::unique_ptr<std::thread> worker_thread_;  // 工作线程

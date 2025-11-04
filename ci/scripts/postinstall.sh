@@ -1,9 +1,20 @@
 #!/bin/bash
 
-# 复制服务文件并启用服务
-sudo cp /opt/HLIECpp/HLIECpp.service /etc/systemd/system/
-sudo chmod 777 /etc/systemd/system/HLIECpp.service
+# ==============================
+# 安装脚本
+# 可选参数：
+#   ./install.sh [INSTALL_DIR]
+#   默认 INSTALL_DIR=/opt
+# ==============================
 
+INSTALL_DIR=${1:-/opt}  # 若用户未传参数，则使用 /opt 作为默认安装路径
+SERVICE_NAME="HLIECpp"
+
+echo "安装路径: ${INSTALL_DIR}"
+
+# 复制服务文件并启用服务
+sudo cp "${INSTALL_DIR}/${SERVICE_NAME}/${SERVICE_NAME}.service" /etc/systemd/system/
+sudo chmod 777 /etc/systemd/system/${SERVICE_NAME}.service
 
 check_os() {
     # 方法1: 检查/etc/os-release
@@ -39,6 +50,7 @@ check_os() {
     echo "Unknown"
     return 1
 }
+
 echo "calling os check"
 os_type=$(check_os)
 echo "检测结果: $os_type"
@@ -47,60 +59,46 @@ echo "检测结果: $os_type"
 case "$os_type" in
     "Ubuntu")
         echo "执行Ubuntu特定操作..."
-        rm -rf  /opt/HLIECpp/lib/ld-linux-x86-64.so.2
-        rm -rf  /opt/HLIECpp/lib/libc.so.6   /opt/HLIECpp/lib/libm.so.6  /opt/HLIECpp/lib/librt.so.1 /opt/HLIECpp/lib/libdl.so.2  /opt/HLIECpp/lib/libpthread.so.0
-        # 检查文件是否存在
-        FILE_PATH1="/opt/HLIECpp/lib/ld-linux-x86-64.so.2"  # 需要检查的文件路径
-        if [ -e "$FILE_PATH1" ]; then
-            echo "错误：文件 $FILE_PATH1 依然已存在！请确认是否使用sudo权限" >&2
-            exit 1
-        fi
-        FILE_PATH2="/opt/HLIECpp/lib/libc.so.6"  # 需要检查的文件路径
-        if [ -e "$FILE_PATH2" ]; then
-            echo "错误：文件 $FILE_PATH2 依然已存在！请确认是否使用sudo权限" >&2
-            exit 1
-        fi
-        FILE_PATH3="/opt/HLIECpp/lib/libm.so.6"  # 需要检查的文件路径
-        if [ -e "$FILE_PATH3" ]; then
-            echo "错误：文件 $FILE_PATH3 依然已存在！请确认是否使用sudo权限" >&2
-            exit 1
-        fi
-        FILE_PATH4="/opt/HLIECpp/lib/librt.so.1"  # 需要检查的文件路径
-        if [ -e "$FILE_PATH4" ]; then
-            echo "错误：文件 $FILE_PATH4 依然已存在！请确认是否使用sudo权限" >&2
-            exit 1
-        fi
-        FILE_PATH5="/opt/HLIECpp/lib/libdl.so.2"  # 需要检查的文件路径
-        if [ -e "$FILE_PATH5" ]; then
-            echo "错误：文件 $FILE_PATH5 依然已存在！请确认是否使用sudo权限" >&2
-            exit 1
-        fi
 
-        FILE_PATH6="/opt/HLIECpp/lib/libpthread.so.0"  # 需要检查的文件路径
-        if [ -e "$FILE_PATH6" ]; then
-            echo "错误：文件 $FILE_PATH6 依然已存在！请确认是否使用sudo权限" >&2
-            exit 1
-        fi
-        echo "++For Ubuntu  delete all unnecessary libs successfully"
+        rm -rf  "${INSTALL_DIR}/${SERVICE_NAME}/lib/ld-linux-x86-64.so.2"
+        rm -rf  "${INSTALL_DIR}/${SERVICE_NAME}/lib/libc.so.6" \
+                 "${INSTALL_DIR}/${SERVICE_NAME}/lib/libm.so.6" \
+                 "${INSTALL_DIR}/${SERVICE_NAME}/lib/librt.so.1" \
+                 "${INSTALL_DIR}/${SERVICE_NAME}/lib/libdl.so.2" \
+                 "${INSTALL_DIR}/${SERVICE_NAME}/lib/libpthread.so.0"
+
+        # 检查文件是否存在
+        for file in \
+            "ld-linux-x86-64.so.2" \
+            "libc.so.6" \
+            "libm.so.6" \
+            "librt.so.1" \
+            "libdl.so.2" \
+            "libpthread.so.0"; do
+            FILE_PATH="${INSTALL_DIR}/${SERVICE_NAME}/lib/${file}"
+            if [ -e "$FILE_PATH" ]; then
+                echo "错误：文件 $FILE_PATH 依然已存在！请确认是否使用sudo权限" >&2
+                exit 1
+            fi
+        done
+
+        echo "++For Ubuntu delete all unnecessary libs successfully"
         ;;
     "Kylin")
         echo "执行麒麟特定操作..."
         ;;
     *)
         echo "未知系统，当前run包只在麒麟和Ubuntu操作系统测试过，未知系统安装此run包，可能不正常，请知悉"
-        #exit 1
         ;;
 esac
 
-
-
 # 重载 systemd 并启动服务
-systemctl daemon-reload
-systemctl enable HLIECpp
-systemctl start HLIECpp
+sudo systemctl daemon-reload
+sudo systemctl enable ${SERVICE_NAME}
+sudo systemctl start ${SERVICE_NAME}
 
 echo "HoumoInfer 服务已启动！使用以下命令管理："
-echo "sudo systemctl start HLIECpp   - 启动服务"
-echo "sudo systemctl stop HLIECpp    - 停止服务"
-echo "sudo systemctl restart HLIECpp - 重启服务"
-echo "sudo systemctl status HLIECpp  - 查看状态"
+echo "sudo systemctl start ${SERVICE_NAME}   - 启动服务"
+echo "sudo systemctl stop ${SERVICE_NAME}    - 停止服务"
+echo "sudo systemctl restart ${SERVICE_NAME} - 重启服务"
+echo "sudo systemctl status ${SERVICE_NAME}  - 查看状态"

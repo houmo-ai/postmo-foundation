@@ -400,6 +400,115 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
     }
 }
 
+void LLModelService::handle_embeddings(const httplib::Request& req, httplib::Response& res, oaicompat_type oaicompat) const {
+    if (!llama_server_->params_base.embedding) {
+        res_error(res,
+                  format_error_response("This server does not support embeddings. Start it with `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
+        return;
+    }
+
+    if (oaicompat != OAICOMPAT_TYPE_NONE && llama_pooling_type(llama_server_->ctx) == LLAMA_POOLING_TYPE_NONE) {
+        res_error(res,
+                  format_error_response("Pooling type 'none' is not OAI compatible. Please use a different pooling type",
+                                        ERROR_TYPE_INVALID_REQUEST));
+        return;
+    }
+
+    const json body = json::parse(req.body);
+
+    // for the shape of input/content, see tokenize_input_prompts()
+    json prompt;
+    if (body.count("input") != 0) {
+        prompt = body.at("input");
+    } else if (body.contains("content")) {
+        oaicompat = OAICOMPAT_TYPE_NONE; // "content" field is not OAI compatible
+        prompt = body.at("content");
+    } else {
+        res_error(res, format_error_response("\"input\" or \"content\" must be provided", ERROR_TYPE_INVALID_REQUEST));
+        return;
+    }
+
+    bool use_base64 = false;
+    if (body.count("encoding_format") != 0) {
+        const std::string& format = body.at("encoding_format");
+        if (format == "base64") {
+            use_base64 = true;
+        } else if (format != "float") {
+            res_error(
+                res,
+                format_error_response("The format to return the embeddings in. Can be either float or base64", ERROR_TYPE_INVALID_REQUEST));
+            return;
+        }
+    }
+
+    auto tokenized_prompts = tokenize_input_prompts(llama_server_->vocab, llama_server_->mctx, prompt, true, true);
+    for (const auto& tokens : tokenized_prompts) {
+        // this check is necessary for models that do not add BOS token to the input
+        if (tokens.empty()) {
+            res_error(res, format_error_response("Input content cannot be empty", ERROR_TYPE_INVALID_REQUEST));
+            return;
+        }
+    }
+
+    int embd_normalize = 2; // default to Euclidean/L2 norm
+    if (body.count("embd_normalize") != 0) {
+        embd_normalize = body.at("embd_normalize");
+        if (llama_pooling_type(llama_server_->ctx) == LLAMA_POOLING_TYPE_NONE) {
+            SRV_DBG("embd_normalize is not supported by pooling type %d, ignoring it\n", llama_pooling_type(llama_server_->ctx));
+        }
+    }
+
+    // create and queue the task
+    json responses = json::array();
+    bool error = false;
+    std::unordered_set<int> task_ids;
+    {
+        std::vector<server_task> tasks;
+        for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+            server_task task = server_task(SERVER_TASK_TYPE_EMBEDDING);
+
+            task.id = llama_server_->queue_tasks.get_new_id();
+            task.index = i;
+            task.prompt_tokens = std::move(tokenized_prompts[i]);
+
+            // OAI-compat
+            task.params.oaicompat = oaicompat;
+            task.params.embd_normalize = embd_normalize;
+
+            tasks.push_back(std::move(task));
+        }
+
+        task_ids = server_task::get_list_id(tasks);
+        llama_server_->queue_results.add_waiting_tasks(tasks);
+        llama_server_->queue_tasks.post(std::move(tasks));
+    }
+
+    // get the result
+    llama_server_->receive_multi_results(
+        task_ids,
+        [&](std::vector<server_task_result_ptr>& results) {
+            for (auto& res : results) {
+                GGML_ASSERT(dynamic_cast<server_task_result_embd*>(res.get()) != nullptr);
+                responses.push_back(res->to_json());
+            }
+        },
+        [&](const json& error_data) {
+            res_error(res, error_data);
+            error = true;
+        },
+        req.is_connection_closed);
+
+    llama_server_->queue_results.remove_waiting_task_ids(task_ids);
+
+    if (error) {
+        return;
+    }
+
+    // write JSON response
+    json root = oaicompat == OAICOMPAT_TYPE_EMBEDDING ? format_embeddings_response_oaicompat(body, responses, use_base64) : json(responses);
+    res_ok(res, root);
+}
+
 int LLModelService::get_state() {
     return state_;
 }
