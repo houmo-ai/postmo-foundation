@@ -12,8 +12,35 @@ SERVICE_NAME="HLIECpp"
 
 echo "安装路径: ${INSTALL_DIR}"
 
-# 复制服务文件并启用服务
-sudo cp "${INSTALL_DIR}/${SERVICE_NAME}/${SERVICE_NAME}.service" /etc/systemd/system/
+# 服务文件路径
+SRC_SERVICE_FILE="${INSTALL_DIR}/${SERVICE_NAME}/${SERVICE_NAME}.service"
+DST_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+
+# 检查服务文件是否存在
+if [ ! -f "$SRC_SERVICE_FILE" ]; then
+    echo "错误: 未找到服务文件 $SRC_SERVICE_FILE"
+    exit 1
+fi
+
+# 如果安装路径不是 /opt，则修改服务文件中的路径
+if [ "$INSTALL_DIR" != "/opt" ]; then
+    echo "检测到自定义安装路径，正在替换 .service 文件中的路径..."
+    # 临时文件用于替换
+    TMP_SERVICE_FILE=$(mktemp)
+
+    # 用 sed 将 /opt 替换为新的 INSTALL_DIR
+    sudo sed "s#/opt#${INSTALL_DIR}#g" "$SRC_SERVICE_FILE" > "$TMP_SERVICE_FILE"
+
+    # 复制修改后的文件到系统服务目录
+    sudo cp "$TMP_SERVICE_FILE" "$DST_SERVICE_FILE"
+
+    # 删除临时文件
+    rm -f "$TMP_SERVICE_FILE"
+else
+    # 默认路径，直接复制
+    sudo cp "$SRC_SERVICE_FILE" "$DST_SERVICE_FILE"
+fi
+
 sudo chmod 777 /etc/systemd/system/${SERVICE_NAME}.service
 
 check_os() {

@@ -41,10 +41,10 @@ xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0
 #FIXME:
 xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/10/28/1950/ubuntu2004/houmo_drv_xh2_v0.5.0_ubuntu2004_${ARCH}.run"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/03/0954/linux/houmo-HLIELLama-xh1_1.3.0_linux_${ARCH}.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/03/0954/linux/houmo-HLIELLama-xh2_1.3.0_linux_${ARCH}.tar.gz"
+xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/05/2330/linux/houmo-HLIELLama-xh1_1.3.0_linux_${ARCH}.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/05/2330/linux/houmo-HLIELLama-xh2_1.3.0_linux_${ARCH}.tar.gz"
 
-xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/03/0954/linux/houmo-HLIESDCpp-xh2_1.0.0_linux_${ARCH}.tar.gz"
+xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/11/05/2330/linux/houmo-HLIESDCpp-xh2_1.0.0_linux_${ARCH}.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {
