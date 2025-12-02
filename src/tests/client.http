@@ -17,7 +17,7 @@ Content-Type: application/json
   "top_k": 30,
   "temperature": 0,
   "top_p": 0.88,
-  "stream": true
+  "stream": false
 }
 
 ###
@@ -141,5 +141,24 @@ Content-Type: application/json
 ### status
 GET http://localhost:7901/hlie/v1/status
 Content-Type: application/json
+
+### start mm
+POST http://localhost:7901/hlie/v1/start
+Content-Type: application/json
+
+{
+  "devices": "0",
+  "model_path": "HiModel_xh2_qwen3-vl_8b_256_8k_b1_1chip_2cores_v0.6.0_20251201.gguf",
+  "model_type": "llm",
+  "params": {
+    "context_size": 8192,
+    "batch": 1,
+    "core_num": 2,
+    "is_mm": true,
+    "mm_proj_path": "mmproj_xh2_qwen3-vl_8b_vit_448_448_v0.6.0_20251201.gguf",
+    "xh_version": 1,
+    "size": "8B"
+  }
+}
 
 

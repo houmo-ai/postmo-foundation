@@ -495,7 +495,7 @@ void HLIEWorkflow::start_service(const httplib::Request& req, httplib::Response&
 const std::vector<HLIEWorkflow::RouteConfig>& HLIEWorkflow::get_route_configs() {
     static std::vector<RouteConfig> routes = {
         {
-            {"/health"},
+            {"/health", "/v1/health"},
             GET,
             [this](const httplib::Request&, httplib::Response& res) { this->handle_health(res); },
             false // 不需要模型Running

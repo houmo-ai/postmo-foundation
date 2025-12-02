@@ -1,4 +1,5 @@
 #include "hlie_app/hlie_llm_model_service.h"
+#include "hlie_app/info_printer.h"
 #include "hlie_app/llama_server.hpp"
 
 #include <unordered_set>
@@ -158,6 +159,14 @@ void LLModelService::run() {
 
     llama_server_->queue_tasks.on_update_slots([server = &*llama_server_] { server->update_slots(); });
 
+    if (!info_printer_) {
+        info_printer_ = std::make_shared<InfoPrinter>();
+    }
+
+    auto model_meta = llama_server_->model_meta();
+    info_printer_->print_model_info(model_meta);
+    info_printer_->print_process_memory_info();
+
     worker_thread_ = std::make_unique<std::thread>(&LLModelService::process, this);
 }
 
@@ -177,6 +186,9 @@ void LLModelService::stop() {
     worker_thread_.reset();
     Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
     devices_.clear();
+    if (llama_server_) {
+        llama_memory_breakdown_print(llama_server_->ctx);
+    }
 }
 
 
@@ -265,6 +277,10 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
     GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
 
     auto completion_id = gen_chatcmplid();
+    // need to store the reader as a pointer, so that it won't be destroyed when the handle returns
+    // use shared_ptr as it's shared between the chunked_content_provider() and on_complete()
+    const auto rd = std::make_shared<server_response_reader>(llama_server_);
+
     std::unordered_set<int> task_ids;
     try {
         std::vector<server_task> tasks;
@@ -284,7 +300,6 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
             inputs = tokenize_input_prompts(llama_server_->vocab, llama_server_->mctx, prompt, true, true);
         }
 
-
         tasks.reserve(inputs.size());
 
         const std::string request_id = res.has_header("X-Request-ID") ? res.get_header_value("X-Request-ID") : "null";
@@ -297,9 +312,9 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
 
             task.http_request_id = request_id;
 
-            task.prompt_tokens = std::move(inputs[i]);
+            task.tokens = std::move(inputs[i]);
             task.params = server_task::params_from_json_cmpl(llama_server_->ctx, llama_server_->params_base, data);
-            task.id_selected_slot = json_value(data, "id_slot", -1);
+            task.id_slot = json_value(data, "id_slot", -1);
 
             // OAI-compat
             task.params.oaicompat = oaicompat;
@@ -309,92 +324,127 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
             tasks.push_back(std::move(task));
         }
 
-        task_ids = server_task::get_list_id(tasks);
-        llama_server_->queue_results.add_waiting_tasks(tasks);
-        llama_server_->queue_tasks.post(std::move(tasks));
+        rd->post_tasks(std::move(tasks));
     } catch (const std::exception& e) {
         res_error(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
         return;
     }
 
-    if (bool stream = json_value(data, "stream", false); !stream) {
-        llama_server_->receive_multi_results(
-            task_ids,
-            [&](const std::vector<server_task_result_ptr>& results) {
-                try {
-                    if (results.size() == 1) {
-                        // single result
-                        res_ok(res, results[0]->to_json());
-                    } else {
-                        // multiple results (multitask)
-                        json arr = json::array();
-                        for (auto& res_data : results) {
-                            arr.push_back(res_data->to_json());
-                        }
-                        res_ok(res, arr);
-                    }
-                } catch (const nlohmann::json::type_error& ex) {
-                    HLIELogger::get_logger()->error("Non-Stream Mode JSON Exception: {}", ex.what());
-                    res_error(res, format_error_response(ex.what(), ERROR_TYPE_SERVER));
-                } catch (const std::exception& ex) {
-                    HLIELogger::get_logger()->error("Non-Stream Mode Exception: {}", ex.what());
-                    res_error(res, format_error_response(ex.what(), ERROR_TYPE_SERVER));
-                } catch (...) {
-                    HLIELogger::get_logger()->error("Non-Stream Mode Unexpected Exception");
-                    res_error(res, format_error_response("Stream Model Exception", ERROR_TYPE_SERVER));
-                }
-            },
-            [&](const json& error_data) { res_error(res, error_data); }, is_connection_closed);
-
-        llama_server_->queue_results.remove_waiting_task_ids(task_ids);
-    } else {
-        const auto chunked_content_provider = [task_ids, oaicompat, this](size_t, httplib::DataSink& sink) {
-            llama_server_->receive_cmpl_results_stream(
-                task_ids,
-                [&](const server_task_result_ptr& result) -> bool {
-                    try {
-                        json res_json = result->to_json();
-                        if (res_json.is_array()) {
-                            for (const auto& res_data : res_json) {
-                                if (!server_sent_event(sink, res_data)) {
-                                    // sending failed (HTTP connection closed), cancel the generation
-                                    return false;
-                                }
-                            }
-                            return true;
-                        }
-
-                        return server_sent_event(sink, res_json);
-                    } catch (const nlohmann::json::type_error& ex) {
-                        HLIELogger::get_logger()->error("Stream Mode JSON Exception: {}", ex.what());
-                        const auto error_data = format_error_response(ex.what(), ERROR_TYPE_SERVER);
-                        return server_sent_event(sink, error_data);
-                    } catch (const std::exception& ex) {
-                        HLIELogger::get_logger()->error("Stream Mode Exception: {}", ex.what());
-                        const auto error_data = format_error_response(ex.what(), ERROR_TYPE_SERVER);
-                        return server_sent_event(sink, error_data);
-                    } catch (...) {
-                        HLIELogger::get_logger()->error("Stream Mode Unexpected Exception");
-                        const auto error_data = format_error_response("Unknown error", ERROR_TYPE_SERVER);
-                        return server_sent_event(sink, error_data);
-                    }
-                },
-                [&](const json& error_data) {
-                    server_sent_event(sink, json{{"error", error_data}});
-                },
-                [&sink]() {
-                    // note: do not use req.is_connection_closed here because req is already destroyed
-                    return !sink.is_writable();
-                });
-            if (oaicompat != OAICOMPAT_TYPE_NONE) {
-                static const std::string ev_done = "data: [DONE]\n\n";
-                sink.write(ev_done.data(), ev_done.size());
+    if (const bool stream = json_value(data, "stream", false); !stream) {
+        // non-stream, wait for the results
+        try {
+            auto all_results = rd->wait_for_all(is_connection_closed);
+            if (all_results.is_terminated) {
+                return; // connection is closed
             }
-            sink.done();
-            return false;
+
+            if (all_results.error) {
+                res_error(res, all_results.error->to_json());
+                return;
+            }
+
+            json arr = json::array();
+            for (auto& res : all_results.results) {
+                GGML_ASSERT(dynamic_cast<server_task_result_cmpl_final*>(res.get()) != nullptr);
+                arr.push_back(res->to_json());
+            }
+            // if single request, return single object instead of array
+            res_ok(res, arr.size() == 1 ? arr[0] : arr);
+        } catch (const nlohmann::json::type_error& ex) {
+            HLIELogger::get_logger()->error("Non-Stream Mode JSON Exception: {}", ex.what());
+            res_error(res, format_error_response(ex.what(), ERROR_TYPE_SERVER));
+        } catch (const std::exception& ex) {
+            HLIELogger::get_logger()->error("Non-Stream Mode Exception: {}", ex.what());
+            res_error(res, format_error_response(ex.what(), ERROR_TYPE_SERVER));
+        } catch (...) {
+            HLIELogger::get_logger()->error("Non-Stream Mode Unexpected Exception");
+            res_error(res, format_error_response("Stream Model Exception", ERROR_TYPE_SERVER));
+        }
+    } else {
+        // in streaming mode, the first error must be treated as non-stream response
+        // this is to match the OAI API behavior
+        // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
+        server_task_result_ptr first_result = rd->next(is_connection_closed);
+        if (first_result == nullptr) {
+            return; // connection is closed
+        }
+
+        if (first_result->is_error()) {
+            res_error(res, first_result->to_json());
+            return;
+        }
+
+        GGML_ASSERT(dynamic_cast<server_task_result_cmpl_partial*>(first_result.get()) != nullptr ||
+                    dynamic_cast<server_task_result_cmpl_final*>(first_result.get()) != nullptr);
+
+
+        // next responses are streamed
+        json first_result_json = first_result->to_json();
+        const auto chunked_content_provider = [first_result_json, rd, oaicompat](size_t, httplib::DataSink& sink) mutable -> bool {
+            // flush the first result as it's not an error
+            if (!first_result_json.empty()) {
+                if (!server_sent_event(sink, first_result_json)) {
+                    sink.done();
+                    return false; // sending failed, go to on_complete()
+                }
+                first_result_json.clear(); // mark as sent
+            }
+
+            // receive subsequent results
+            const auto result = rd->next([&sink] { return !sink.is_writable(); });
+            if (result == nullptr) {
+                sink.done();
+                return false; // connection is closed, go to on_complete()
+            }
+
+            json res_json;
+            bool ok = false;
+            try {
+                // send the results
+                res_json = result->to_json();
+                if (result->is_error()) {
+                    ok = server_sent_event(sink, json{{"error", result->to_json()}});
+                    sink.done();
+                    return false; // go to on_complete()
+                }
+            } catch (const nlohmann::json::type_error& ex) {
+                HLIELogger::get_logger()->error("Stream Mode JSON Exception: {}", ex.what());
+                const auto error_data = format_error_response(ex.what(), ERROR_TYPE_SERVER);
+                return server_sent_event(sink, error_data);
+            } catch (const std::exception& ex) {
+                HLIELogger::get_logger()->error("Stream Mode Exception: {}", ex.what());
+                const auto error_data = format_error_response(ex.what(), ERROR_TYPE_SERVER);
+                return server_sent_event(sink, error_data);
+            } catch (...) {
+                HLIELogger::get_logger()->error("Stream Mode Unexpected Exception");
+                const auto error_data = format_error_response("Unknown error", ERROR_TYPE_SERVER);
+                return server_sent_event(sink, error_data);
+            }
+
+            GGML_ASSERT(dynamic_cast<server_task_result_cmpl_partial*>(result.get()) != nullptr ||
+                        dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr);
+            ok = server_sent_event(sink, res_json);
+
+            if (!ok) {
+                sink.done();
+                return false; // sending failed, go to on_complete()
+            }
+
+            // check if there is more data
+            if (!rd->has_next()) {
+                if (oaicompat != OAICOMPAT_TYPE_NONE) {
+                    static const std::string ev_done = "data: [DONE]\n\n";
+                    sink.write(ev_done.data(), ev_done.size());
+                }
+                sink.done();
+                return false; // no more data, go to on_complete()
+            }
+
+            // has next data, continue
+            return true;
         };
 
-        auto on_complete = [task_ids, this](bool) { llama_server_->queue_results.remove_waiting_task_ids(task_ids); };
+        auto on_complete = [rd](bool) { rd->stop(); };
 
         res.set_chunked_content_provider("text/event-stream", chunked_content_provider, on_complete);
     }
@@ -460,16 +510,15 @@ void LLModelService::handle_embeddings(const httplib::Request& req, httplib::Res
 
     // create and queue the task
     json responses = json::array();
-    bool error = false;
-    std::unordered_set<int> task_ids;
+    server_response_reader rd(llama_server_);
     {
         std::vector<server_task> tasks;
         for (size_t i = 0; i < tokenized_prompts.size(); i++) {
             server_task task = server_task(SERVER_TASK_TYPE_EMBEDDING);
 
-            task.id = llama_server_->queue_tasks.get_new_id();
-            task.index = i;
-            task.prompt_tokens = std::move(tokenized_prompts[i]);
+            task.id     = llama_server_->queue_tasks.get_new_id();
+            task.index  = i;
+            task.tokens = std::move(tokenized_prompts[i]);
 
             // OAI-compat
             task.params.oaicompat = oaicompat;
@@ -477,31 +526,25 @@ void LLModelService::handle_embeddings(const httplib::Request& req, httplib::Res
 
             tasks.push_back(std::move(task));
         }
-
-        task_ids = server_task::get_list_id(tasks);
-        llama_server_->queue_results.add_waiting_tasks(tasks);
-        llama_server_->queue_tasks.post(std::move(tasks));
+        rd.post_tasks(std::move(tasks));
     }
 
-    // get the result
-    llama_server_->receive_multi_results(
-        task_ids,
-        [&](std::vector<server_task_result_ptr>& results) {
-            for (auto& res : results) {
-                GGML_ASSERT(dynamic_cast<server_task_result_embd*>(res.get()) != nullptr);
-                responses.push_back(res->to_json());
-            }
-        },
-        [&](const json& error_data) {
-            res_error(res, error_data);
-            error = true;
-        },
-        req.is_connection_closed);
+    // wait for the results
+    auto all_results = rd.wait_for_all(req.is_connection_closed);
 
-    llama_server_->queue_results.remove_waiting_task_ids(task_ids);
+    // collect results
+    if (all_results.is_terminated) {
+        return; // connection is closed
+    }
 
-    if (error) {
+    if (all_results.error) {
+        res_error(res, all_results.error->to_json());
         return;
+    }
+
+    for (auto& res : all_results.results) {
+        GGML_ASSERT(dynamic_cast<server_task_result_embd*>(res.get()) != nullptr);
+        responses.push_back(res->to_json());
     }
 
     // write JSON response

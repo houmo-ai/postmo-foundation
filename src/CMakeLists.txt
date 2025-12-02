@@ -42,6 +42,8 @@ include_directories(${TCIM_RUNTIME_PATH}/examples/common/hpp)
 
 include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include/nlohmann)
+include_directories(${PROJECT_SOURCE_DIR}/third_party/cpp-httplib)
+
 include_directories(${PROJECT_SOURCE_DIR}/third_party/sd.cpp/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/houmo/include)
 
@@ -100,7 +102,7 @@ add_library(${TARGET} houmo-llm-sdk.cpp)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR} ../include)
 
 
-target_link_libraries(${TARGET} PRIVATE ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_MTMD} ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
+target_link_libraries(${TARGET} PRIVATE ${LLAMA_CPP_LIBRARY_COMMON} ${LLAMA_CPP_LIBRARY_MTMD} cpp-httplib ${LLAMA_CPP_LIBRARY_LLAMA} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE}
         ${LLAMA_CPP_LIBRARY_GGML_CPU}  ${INIH_LIBRARY_CPP}  ${INIH_LIBRARY}  "${TORCH_LIBRARIES}" ${TCIM_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 
 target_compile_features(${TARGET} PRIVATE cxx_std_17)

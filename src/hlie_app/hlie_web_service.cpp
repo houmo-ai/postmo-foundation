@@ -59,7 +59,7 @@ namespace {
     
     void log_server_request(const httplib::Request& req, const httplib::Response& res) {
         // skip GH copilot requests when using default port
-        if (req.path == "/health" || req.path == "/v1/completions") {
+        if (req.path == "/v1/health" || req.path == "/health") {
             return;
         }
 
@@ -278,7 +278,7 @@ bool HLIEWebService::middleware_server_state(const httplib::Request& req, httpli
 
 bool HLIEWebService::middleware_validate_api_key(const httplib::Request& req, httplib::Response& res) const {
     HLIE_CHECK_NULL_RETURN(workflow_, 0);
-    static const std::unordered_set<std::string> public_endpoints = {"/health", "/models", "/v1/models", "/api/tags"};
+    static const std::unordered_set<std::string> public_endpoints = {"/health", "/v1/health", "/models", "/v1/models", "/api/tags"};
 
     // If API key is not set, skip validation
     if (workflow_->get_api_keys().empty()) {

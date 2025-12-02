@@ -10,6 +10,8 @@
 #include "json.hpp"
 #include "utils.hpp"
 
+class InfoPrinter;
+
 HLIE_NAMESPACE_BEGIN
 
 struct LlamaServer;
@@ -58,6 +60,7 @@ private:
     void handle_completions_impl(server_task_type type, json& data, const std::vector<raw_buffer>& files,
                                  const std::function<bool()>& is_connection_closed, httplib::Response& res, oaicompat_type oaicompat) const;
 
+    std::shared_ptr<InfoPrinter> info_printer_;
     std::shared_ptr<LlamaServer> llama_server_;
     std::unique_ptr<std::thread> worker_thread_;  // 工作线程
     std::atomic<bool> should_stop_{false};  // 线程停止标志
