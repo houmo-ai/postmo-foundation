@@ -142,7 +142,7 @@ build_service() {
         echo "cmake completed."
     fi
 
-    cmake  --build build --config Release -j 8
+    cmake  --build build --target houmo-llm-hi-cpp-win --config Release -j 8
     if [ $? -ne 0 ]; then
         echo "make build failed."
         exit 1

@@ -46,7 +46,7 @@ struct slot_params {
     bool stream = true;
     bool include_usage = false;
     bool cache_prompt = false; // remember the prompt to avoid reprocessing all prompt
-    bool return_tokens = true;
+    bool return_tokens = false;
     bool return_progress = false;
 
     int32_t n_keep = 0; // number of tokens to keep from initial prompt
@@ -1558,9 +1558,6 @@ struct server_slot {
     int32_t n_prompt_tokens_cache = 0;
     int32_t n_prompt_tokens_processed = 0;
 
-    // input prompt tokens
-    server_tokens prompt_tokens;
-
     size_t last_nl_pos = 0;
 
     std::string generated_text;
@@ -2394,10 +2391,6 @@ struct LlamaServer {
     int generate_status = 0; // 0 -> finished; 1 -> generating; 2 -> stopped; 3 -> exceed; -1 -> failed;
     int model_status = 0; // 0 -> init; 1 -> loaded; 2 -> unloaded; 3 -> infer; -1 -> error;
     bool stop = false;
-    bool hm_running = false;
-    bool houmo_sampling = true;
-    int instance_no = 0; // Windows下多卡多服务实例场景
-    int device_id = 0; // Windows下依赖instance_no, Linux下依赖环境变量
 
     common_params* params = nullptr;
     std::thread ctx_t;
@@ -3559,8 +3552,7 @@ struct LlamaServer {
                     break;
                 }
                 if (slot->is_processing()) {
-                    // if requested slot is unavailable, we defer this task for processing
-                    // later
+                    // if requested slot is unavailable, we defer this task for processing later
                     SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
                     queue_tasks.defer(std::move(task));
                     break;
@@ -3670,6 +3662,8 @@ struct LlamaServer {
                     slot.prompt.tokens.clear();
                     slot.prompt.tokens.insert(new_tokens);
                 }
+
+                slot.truncated = true;
             }
         }
 
@@ -3842,7 +3836,7 @@ struct LlamaServer {
                                         }
                                     }
 
-                                    SLT_DBG(slot, "after context reuse, new slot.n_past = %d\n", n_past);
+                                    SLT_DBG(slot, "after context reuse, new n_past = %d\n", n_past);
                                 }
                             } else {
                                 // if we don't cache the prompt, we have to remove all previous tokens
@@ -4182,10 +4176,8 @@ struct LlamaServer {
                 n_tokens, batch.token + i, nullptr, batch.pos + i, batch.n_seq_id + i, batch.seq_id + i, batch.logits + i,
             };
 
-            int ret = 0;
-
             SRV_INF("%s\r\n", "++call hm llama_decode");
-            ret = llama_decode(ctx, batch_view);
+            const int ret = llama_decode(ctx, batch_view);
             metrics.on_decoded(slots);
 
             if (ret != 0) {

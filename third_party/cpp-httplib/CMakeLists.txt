@@ -5,7 +5,7 @@ find_package(Threads REQUIRED)
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
 if (NOT MSVC)
     # disable warnings in 3rd party code
-    target_compile_options(${TARGET} PRIVATE -w)
+    target_compile_options(${TARGET} PRIVATE -w -fPIC)
 endif()
 
 target_link_libraries  (${TARGET} PRIVATE Threads::Threads)

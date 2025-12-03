@@ -169,7 +169,7 @@ build_service() {
         echo "cmake completed."
     fi
 
-    make -j$(nproc)
+    make houmo-llm-hi-cpp-linux -j$(nproc)
     if [ $? -ne 0 ]; then
         echo "make build failed."
         exit 1
