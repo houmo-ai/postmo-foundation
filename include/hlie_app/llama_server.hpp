@@ -1928,13 +1928,13 @@ struct server_slot {
             t_prompt        = t_prompt_processing_no_image / n_prompt_tokens_processed;
             n_prompt_second = 1e3 / t_prompt_processing_no_image * n_prompt_tokens_processed;
             SLT_INF(*this,
-                    "\n==================================================================\n"
+                    "\n====================================================================================================\n"
                     "=image   eval time = %10.2f ms / %5d images (%8.2f ms per image, %9d tokens per image)\n"
                     "=prefill eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n"
                     "=decoder eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n"
                     "=total   eval time = %10.2f ms\n"
                     "=context %d/%d (%f%%)\n"
-                    "==================================================================\n",
+                    "\n====================================================================================================\n",
                     t_image_processing, n_images, t_image_processing / n_images, n_image_tokens / n_images,
                     t_prompt_processing_no_image, n_prompt_tokens_processed, t_prompt, n_prompt_second,
                     t_token_generation, n_decoded, t_gen, n_gen_second,
@@ -1942,12 +1942,12 @@ struct server_slot {
                     (n_prompt_tokens_processed + n_decoded), n_ctx, percent_used);
         } else {
             SLT_INF(*this,
-                    "\n==================================================================\n"
+                    "\n====================================================================================================\n"
                     "=prefill eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n"
                     "=decoder eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n"
                     "=total   eval time = %10.2f ms\n"
                     "=context %d/%d (%f%%)\n"
-                    "==================================================================\n",
+                    "\n====================================================================================================\n",
                     t_prompt_processing, n_prompt_tokens_processed, t_prompt, n_prompt_second,
                     t_token_generation, n_decoded, t_gen, n_gen_second,
                     t_prompt_processing + t_token_generation,
@@ -1955,14 +1955,14 @@ struct server_slot {
         }
         double e2e_latency = (t_prompt_processing + t_token_generation)/1000;
         SLT_INF(*this,
-                "\n==================================================================\n"
+                "\n====================================================================================================\n"
                 "=Model Context Lenght                   = %5d tokens\n"
                 "=Prompt Tokens Processed                = %5d tokens\n"
                 "=TTFT(Time to First Token)              = %8.2f ms\n"
                 "=TOPT(Time Per Output Token             = %8.2f ms\n"
                 "=E2E Latency (End-to-End Latency)       = %8.2f s\n"
                 "=E2E TPS (End-to-End Tokens Per Second) = %8.2f tokens/s\n"
-                "==================================================================\n",
+                "\n====================================================================================================\n",
                 n_ctx, n_prompt_tokens_processed, t_prompt_processing, t_gen, e2e_latency, n_decoded / e2e_latency);
 
         if (n_draft_total > 0) {
@@ -2303,7 +2303,7 @@ struct server_response {
 
     // This function blocks the thread until there is a response for one of the id_tasks
     server_task_result* recv_aync(const std::unordered_set<int>& id_tasks) {
-        std::unique_lock<std::mutex> lock(mutex_results);
+        std::unique_lock lock(mutex_results);
         for (int i = 0; i < (int)queue_results.size(); i++) {
             if (id_tasks.find(queue_results[i]->id) != id_tasks.end()) {
                 server_task_result* res = queue_results[i].get();
@@ -2406,9 +2406,6 @@ struct LlamaServer {
     int32_t decode_n_tokens = 0;
 
     size_t n_finished = 0;
-
-    std::vector<server_task> tasks;
-    std::unordered_set<int> task_ids;
 
     common_params params_base;
 
@@ -4176,7 +4173,7 @@ struct LlamaServer {
                 n_tokens, batch.token + i, nullptr, batch.pos + i, batch.n_seq_id + i, batch.seq_id + i, batch.logits + i,
             };
 
-            SRV_INF("%s\r\n", "++call hm llama_decode");
+            SRV_DBG("%s\r\n", "++call hm llama_decode");
             const int ret = llama_decode(ctx, batch_view);
             metrics.on_decoded(slots);
 
@@ -4439,13 +4436,11 @@ struct LlamaServer {
             };
     }
 
-    int completion_generate(json& data, std::vector<server_task_result_ptr>& results);
+    int completion_generate_str(const json& data, std::string& result_str);
 
-    int completion_generate_str(json &data, std::string &result_str);
+    int completion_stream_generate(const json& data);
 
-    int completion_stream_generate(json &data);
-
-    int completion_token_count(json &data) const;
+    int completion_token_count(const json& data) const;
 
     int completion_stream_generate_next_token_str(std::string& result_str, bool confirm = true);
 
@@ -4455,12 +4450,13 @@ struct LlamaServer {
 // generator-like API for server responses, support pooling connection state and aggregating results
 struct server_response_reader {
     std::unordered_set<int> id_tasks;
-    std::shared_ptr<LlamaServer> ctx_server;
+    LlamaServer* ctx_server;
     size_t received_count = 0;
     bool cancelled = false;
 
-    server_response_reader(const std::shared_ptr<LlamaServer>& ctx_server) : ctx_server(ctx_server) {
+    explicit server_response_reader(LlamaServer* ctx_server) : ctx_server(ctx_server) {
     }
+
     ~server_response_reader() {
         stop();
     }
@@ -4471,7 +4467,7 @@ struct server_response_reader {
         ctx_server->queue_tasks.post(std::move(tasks));
     }
 
-    bool has_next() {
+    bool has_next() const {
         return !cancelled && received_count < id_tasks.size();
     }
 
@@ -4508,7 +4504,7 @@ struct server_response_reader {
         server_task_result_ptr error; // nullptr if no error
     };
 
-    batch_response wait_for_all(const std::function<bool()>& should_stop) {
+    batch_response wait_for_all(const std::function<bool()>& should_stop = []() { return false; }) {
         batch_response batch_res;
         batch_res.results.resize(id_tasks.size());
         while (has_next()) {

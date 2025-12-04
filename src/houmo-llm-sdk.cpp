@@ -243,95 +243,27 @@ public:
     static std::vector<int16_t> ToVector(const tcim::Tensor& tcim_tensor);
 };
 
-
-// api_Generate 中调用了这个函数
-int LlamaServer::completion_generate(json& data, std::vector<server_task_result_ptr>& results) {
-    auto type = SERVER_TASK_TYPE_COMPLETION;
-    GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
-
-    std::unique_lock<std::mutex> lock(mutex_context);
-    generate_status = 1;
-    model_status = 3;
-    auto completion_id = gen_chatcmplid();
-    std::vector<server_task> tasks;
-    oaicompat_type oaicompat = OAICOMPAT_TYPE_NONE;
-
-    try {
-        const auto& prompt = data.at("prompt");
-        std::vector<server_tokens> inputs = tokenize_input_prompts(vocab, mctx, prompt, true, true);
-        tasks.reserve(inputs.size());
-        for (size_t i = 0; i < inputs.size(); i++) {
-            server_task task = server_task(type);
-
-            task.id = queue_tasks.get_new_id();
-            task.index = i;
-
-            task.prompt_tokens = std::move(inputs[i]);
-            task.params = server_task::params_from_json_cmpl(ctx, params_base, data);
-            task.id_selected_slot = json_value(data, "id_slot", -1);
-            SRV_INF("++task.id_selected_slot is:%d \r\n", task.id_selected_slot);
-
-            // OAI-compat
-            task.params.oaicompat = oaicompat;
-            task.params.oaicompat_cmpl_id = completion_id;
-            // oaicompat_model is already populated by params_from_json_cmpl
-
-            tasks.push_back(std::move(task));
-        }
-    } catch (const std::exception& e) {
-        log_error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
-        return -1;
-    }
-
-    queue_results.add_waiting_tasks(tasks);
-    queue_tasks.post(std::move(tasks));
-
-    bool stream = json_value(data, "stream", false);
-    const auto task_ids = server_task::get_list_id(tasks);
-    results.resize(task_ids.size());
-
-    if (!stream) {
-        SRV_DBG("mode: %s\n", "no stream");
-        for (size_t i = 0; i < task_ids.size(); i++) {
-            server_task_result_ptr result = queue_results.recv(task_ids);
-
-            if (result->is_error()) {
-                cancel_tasks(task_ids);
-                return -1;
-            }
-
-            GGML_ASSERT(dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr ||
-                        dynamic_cast<server_task_result_embd*>(result.get()) != nullptr ||
-                        dynamic_cast<server_task_result_rerank*>(result.get()) != nullptr);
-            const size_t idx = result->get_index();
-            GGML_ASSERT(idx < results.size() && "index out of range");
-            results[idx] = std::move(result);
-        }
-
-        queue_results.remove_waiting_task_ids(task_ids);
-        return 0;
-    }
-
-    SRV_ERR("Error: %s\n", "This is not stream api!");
-    queue_results.remove_waiting_task_ids(task_ids);
-    return -1;
-}
-
-int LlamaServer::completion_generate_str(json& data, std::string& result_str) {
+int LlamaServer::completion_generate_str(const json& data, std::string& result_str) {
     bool stream = json_value(data, "stream", false);
     if (stream) {
         SRV_ERR("Error: %s\n", "This is not stream api!");
         return -1;
     }
-    std::unique_lock<std::mutex> lock(mutex_context);
+    std::unique_lock lock(mutex_context);
     generate_status = 1;
     model_status = 3;
     auto type = SERVER_TASK_TYPE_COMPLETION;
     GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
     auto completion_id = gen_chatcmplid();
-    std::vector<server_task> tasks;
+
+    // need to store the reader as a pointer, so that it won't be destroyed when the handle returns
+    // use shared_ptr as it's shared between the chunked_content_provider() and on_complete()
+    const auto rd = std::make_shared<server_response_reader>(this);
+
     oaicompat_type oaicompat = OAICOMPAT_TYPE_NONE;
     try {
+        std::vector<server_task> tasks;
+
         const auto& prompt = data.at("prompt");
         std::vector<server_tokens> inputs = tokenize_input_prompts(vocab, mctx, prompt, true, true);
         tasks.reserve(inputs.size());
@@ -342,9 +274,9 @@ int LlamaServer::completion_generate_str(json& data, std::string& result_str) {
             task.id = queue_tasks.get_new_id();
             task.index = i;
 
-            task.prompt_tokens = std::move(inputs[i]);
+            task.tokens = std::move(inputs[i]);
             task.params = server_task::params_from_json_cmpl(ctx, params_base, data);
-            task.id_selected_slot = json_value(data, "id_slot", -1);
+            task.id_slot = json_value(data, "id_slot", -1);
 
             // OAI-compat
             task.params.oaicompat = oaicompat;
@@ -353,39 +285,39 @@ int LlamaServer::completion_generate_str(json& data, std::string& result_str) {
 
             tasks.push_back(std::move(task));
         }
+
+        rd->post_tasks(std::move(tasks));
     } catch (const std::exception& e) {
         log_error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
         return -1;
     }
-    queue_results.add_waiting_tasks(tasks);
-    queue_tasks.post(std::move(tasks));
-    const auto task_ids = server_task::get_list_id(tasks);
-    std::vector<server_task_result_ptr> results(task_ids.size());
+
+
     if (!stream) {
         SRV_DBG("mode: %s\n", "no stream");
-        for (size_t i = 0; i < task_ids.size(); i++) {
-            server_task_result_ptr result = queue_results.recv(task_ids);
-
-            if (result->is_error()) {
-                cancel_tasks(task_ids);
-                generate_status = -1;
-                return -1;
-            }
-
-            GGML_ASSERT(dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr ||
-                        dynamic_cast<server_task_result_embd*>(result.get()) != nullptr ||
-                        dynamic_cast<server_task_result_rerank*>(result.get()) != nullptr);
-            const size_t idx = result->get_index();
-            GGML_ASSERT(idx < results.size() && "index out of range");
-            results[idx] = std::move(result);
+        const auto all_results = rd->wait_for_all();
+        if (all_results.error) {
+            rd->stop();
+            generate_status = -1;
+            return -1;
         }
 
-        if (results.size() == 1) {
-            result_str = dump_result(results[0]->to_json());
+        for (auto& res : all_results.results) {
+
+            GGML_ASSERT(dynamic_cast<server_task_result_cmpl_final*>(res.get()) != nullptr);
+
+            const size_t idx = res->get_index();
+            GGML_ASSERT(idx < all_results.results.size() && "index out of range");
+
+        }
+
+        if (all_results.results.size() == 1) {
+            result_str = dump_result(all_results.results[0]->to_json());
         } else {
             SRV_ERR("Error: %s\n", "More than one requests not supported!");
         }
-        queue_results.remove_waiting_task_ids(task_ids);
+
+        rd->stop();
         generate_status = 0;
         model_status = 1;
         return 0;
@@ -396,58 +328,54 @@ int LlamaServer::completion_generate_str(json& data, std::string& result_str) {
     return 0;
 }
 
-int LlamaServer::completion_stream_generate(json& data) {
+static std::shared_ptr<server_response_reader> rd_stream_ = nullptr;
+
+int LlamaServer::completion_stream_generate(const json& data) {
     LOG_DBG("this: %p\n", this);
-    bool stream = json_value(data, "stream", false);
-    if (!stream) {
+    if (const bool stream = json_value(data, "stream", false); !stream) {
         LOG_ERR("Error: %s\n", "This is stream api!");
         return -1;
     }
-    std::unique_lock<std::mutex> lock(mutex_context);
+
+    std::unique_lock lock(mutex_context);
     generate_status = 1;
     model_status = 3;
 
-    auto type = SERVER_TASK_TYPE_COMPLETION;
-    GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
-
-    auto completion_id = gen_chatcmplid();
-
-    oaicompat_type oaicompat = OAICOMPAT_TYPE_NONE;
+    const auto completion_id = gen_chatcmplid();
+    // need to store the reader as a pointer, so that it won't be destroyed when the handle returns
+    // use shared_ptr as it's shared between the chunked_content_provider() and on_complete()
+    if (!rd_stream_) {
+        rd_stream_ =  std::make_shared<server_response_reader>(this);
+    }
 
     try {
+        std::vector<server_task> tasks;
         const auto& prompt = data.at("prompt");
         std::vector<server_tokens> inputs = tokenize_input_prompts(vocab, mctx, prompt, true, true);
         tasks.reserve(inputs.size());
         for (size_t i = 0; i < inputs.size(); i++) {
-            server_task task = server_task(type);
+            auto task = server_task(SERVER_TASK_TYPE_COMPLETION);
 
             task.id = queue_tasks.get_new_id();
             task.index = i;
 
-            task.prompt_tokens = std::move(inputs[i]);
+            task.tokens = std::move(inputs[i]);
             task.params = server_task::params_from_json_cmpl(ctx, params_base, data);
-            task.id_selected_slot = json_value(data, "id_slot", -1);
+            task.id_slot = json_value(data, "id_slot", -1);
 
             // OAI-compat
-            task.params.oaicompat = oaicompat;
+            task.params.oaicompat = OAICOMPAT_TYPE_NONE;
             task.params.oaicompat_cmpl_id = completion_id;
             // oaicompat_model is already populated by params_from_json_cmpl
             SRV_DBG("push_back one task i=%d", i);
             tasks.push_back(std::move(task));
         }
+
+        rd_stream_->post_tasks(std::move(tasks));
     } catch (const std::exception& e) {
         log_error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
         return -1;
     }
-
-    queue_results.add_waiting_tasks(tasks);
-    queue_tasks.post(std::move(tasks));
-
-    for (const int task_id : task_ids) {
-        std::cout << task_id << " ";
-    }
-
-    task_ids = server_task::get_list_id(tasks);
 
     stop = false;
     SRV_INF("create stop: %p\n", &stop);
@@ -456,11 +384,10 @@ int LlamaServer::completion_stream_generate(json& data) {
     return 0;
 }
 
-int LlamaServer::completion_token_count(json& data) const {
+int LlamaServer::completion_token_count(const json& data) const {
     try {
         const auto& prompt = data.at("prompt");
-        auto tokenized_prompts = tokenize_input_prompts(vocab, mctx, prompt, true, true);
-        if (tokenized_prompts.size() == 1) {
+        if (const auto tokenized_prompts = tokenize_input_prompts(vocab, mctx, prompt, true, true); tokenized_prompts.size() == 1) {
             return tokenized_prompts[0].size();
         }
 
@@ -489,20 +416,21 @@ int LlamaServer::completion_stream_generate_next_token_str(std::string& result_s
         return 1;
     }
 
-    if (task_ids.empty() && !confirm) {
-        SRV_WRN("task_ids is empty and not confirm = %d , ignore it.\n", task_ids.size());
+    if (rd_stream_ && rd_stream_->id_tasks.empty() && !confirm) {
+        SRV_WRN("task_ids is empty and not confirm = %d , ignore it.\n", rd_stream_->id_tasks.size());
         generate_status = 0;
         model_status = 1;
         return -1;
     }
+
     if (stop) {
         SRV_WRN("%s\n", "stop, ignore it.");
         generate_status = 2;
         return -1;
     }
 
-    if (task_ids.empty()) {
-        SRV_WRN("task_ids is empty = %d , ignore it.\n", task_ids.size());
+    if (rd_stream_->id_tasks.empty()) {
+        SRV_WRN("task_ids is empty = %d , ignore it.\n", rd_stream_->id_tasks.size());
         generate_status = 0;
         model_status = 1;
         return -1;
@@ -513,24 +441,27 @@ int LlamaServer::completion_stream_generate_next_token_str(std::string& result_s
     // szj confirm 和 not confirm 都会进
     if (confirm) {
         SRV_INF("confirm: %d\n", confirm);
-        result = queue_results.recv_aync_confirm(task_ids);
+        result = queue_results.recv_aync_confirm(rd_stream_->id_tasks);
         SRV_INF("result confirm: %p\n", result.get());
     } else {
         SRV_INF("confirm: %d\n", confirm);
-        result2 = queue_results.recv_aync(task_ids);
+        result2 = queue_results.recv_aync(rd_stream_->id_tasks);
         SRV_INF("result not confirm: %p\n", result2);
     }
+
     if (confirm && !result) {
         // SRV_INF("confirm no data: %p\n", result.get());
         return 2;
-    } else if (!confirm && !result2) {
+    }
+
+    if (!confirm && !result2) {
         // SRV_INF("no data: %p\n", result2);
         return 2;
     }
 
     if (!confirm) {
         if (result2->is_error()) {
-            cancel_tasks(task_ids);
+            rd_stream_->stop();
             generate_status = -1;
             return -1;
         }
@@ -543,7 +474,7 @@ int LlamaServer::completion_stream_generate_next_token_str(std::string& result_s
     }
 
     if (result->is_error()) {
-        cancel_tasks(task_ids);
+        rd_stream_->stop();
         generate_status = -1;
         return -1;
     }
@@ -557,12 +488,10 @@ int LlamaServer::completion_stream_generate_next_token_str(std::string& result_s
 
     if (result->is_stop()) {
         SRV_DBG("result->is_stop n_finished = %d\n", n_finished);
-        SRV_DBG("result->is_stop task_ids size  = %d\n", task_ids.size());
-        if (++n_finished == task_ids.size()) {
+        SRV_DBG("result->is_stop task_ids size  = %d\n", rd_stream_->id_tasks.size());
+        if (++n_finished == rd_stream_->id_tasks.size()) {
             SRV_DBG("all task finished = %d\n", n_finished);
-            queue_results.remove_waiting_task_ids(task_ids);
-            task_ids.clear();
-            tasks.clear();
+            rd_stream_->stop();
             n_finished = 0;
             generate_status = 0;
             model_status = 1;
@@ -578,23 +507,19 @@ int LlamaServer::completion_stream_generate_next_token_str(std::string& result_s
 int LlamaServer::completion_stream_generate_stop() {
     std::unique_lock<std::mutex> lock(mutex_context);
 
-    if (task_ids.empty()) {
-        SRV_DBG("task_ids is empty = %d\n", task_ids.size());
+    if (rd_stream_ && rd_stream_->id_tasks.empty()) {
+        SRV_DBG("task_ids is empty = %d\n", rd_stream_->id_tasks.size());
         generate_status = 0;
         model_status = 1;
         return 0;
     }
 
-    cancel_tasks(task_ids);
+    rd_stream_->stop();
 
     stop = true;
     SRV_INF("stop stop: %p\n", &stop);
     SRV_INF("stop stop: %d\n", stop);
 
-    queue_results.remove_waiting_task_ids(task_ids);
-
-    task_ids.clear();
-    tasks.clear();
     n_finished = 0;
     generate_status = 2;
     model_status = 1;
@@ -849,7 +774,9 @@ int completion_load_model(HANDLE h, std::string model_path) {
             if (ctx_server->generate_status == 0) {
                 SRV_INF("stop found str: %s\n", result_json_str.c_str());
                 break;
-            } else if (ret == 2) {
+            }
+
+            if (ret == 2) {
                 SRV_INF("Data not ready: %d\n", ret);
             } else if (ret == -1) {
                 LOG_ERR("Error: %d\n", ret);
@@ -1186,6 +1113,8 @@ int completion_destroy_instance(HANDLE h) {
         ctx_server->ctx_t.join();
     }
     SRV_INF("join ctx_t finished: %s\n", "");
+    rd_stream_ = nullptr;
+    default_logger_ = nullptr;
     delete ctx_server;
     ctx_server = nullptr;
     SRV_INF("ctx_server: %p\n", ctx_server);

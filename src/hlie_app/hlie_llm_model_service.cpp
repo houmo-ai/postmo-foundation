@@ -279,9 +279,8 @@ void LLModelService::handle_completions_impl(server_task_type type, json& data, 
     auto completion_id = gen_chatcmplid();
     // need to store the reader as a pointer, so that it won't be destroyed when the handle returns
     // use shared_ptr as it's shared between the chunked_content_provider() and on_complete()
-    const auto rd = std::make_shared<server_response_reader>(llama_server_);
+    const auto rd = std::make_shared<server_response_reader>(llama_server_.get());
 
-    std::unordered_set<int> task_ids;
     try {
         std::vector<server_task> tasks;
 
@@ -510,7 +509,7 @@ void LLModelService::handle_embeddings(const httplib::Request& req, httplib::Res
 
     // create and queue the task
     json responses = json::array();
-    server_response_reader rd(llama_server_);
+    server_response_reader rd(llama_server_.get());
     {
         std::vector<server_task> tasks;
         for (size_t i = 0; i < tokenized_prompts.size(); i++) {
