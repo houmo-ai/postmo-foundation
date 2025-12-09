@@ -125,8 +125,16 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         devices_.push_back(*val);
         LOG_INFO("LLM using device: {}", val.value());
     }
+    if (const auto log_level = config_service->get_string("log", "level", "debug"); log_level == "debug") {
+        common_log_set_verbosity_thold(-1);
+    } else if (log_level == "info") {
+        common_log_set_verbosity_thold(-2);
+    } else if (log_level == "warn") {
+        common_log_set_verbosity_thold(-3);
+    } else if (log_level == "error") {
+        common_log_set_verbosity_thold(-4);
+    }
 
-    common_log_set_verbosity_thold(-888); // 负数用于同化llama.cpp日志
     common_init();
 
     llama_backend_init();

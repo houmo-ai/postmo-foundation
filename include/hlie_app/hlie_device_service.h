@@ -15,7 +15,7 @@ struct HLIEDeviceInfo {
     uint32_t mem_total;
     uint32_t mem_used;
     uint32_t mem_avail;
-    int temperature;
+    float temperature;
 };
 
 class HLIEDeviceService {
@@ -32,7 +32,7 @@ public:
      */
     int acquire_mem(int device, int size);
 
-    int get_mem_info(std::vector<HLIEDeviceInfo>& mem_infos);
+    int get_device_infos(std::vector<HLIEDeviceInfo>& device_infos);
 
     void handle_devices(const httplib::Request& req, httplib::Response& res);
 

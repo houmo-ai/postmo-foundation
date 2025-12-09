@@ -13,7 +13,10 @@ HLIE_NAMESPACE_BEGIN
 
 
 int HLIEDeviceService::acquire_mem(int device, int size) {
-    if (const int dev_count = hm_sys_get_device_count(); device >= dev_count) {
+    hm_device_info info = {};
+    const uint32_t ret = hm_sys_get_device_info(&info);
+    /* prefer info.num_devices if filled, otherwise use return value */
+    if (const uint32_t dev_count = info.num_devices ? info.num_devices : ret; device >= dev_count) {
         LOG_ERROR("device {} not found", device);
         return -1;
     }
@@ -32,8 +35,11 @@ int HLIEDeviceService::acquire_mem(int device, int size) {
     return 0;
 }
 
-int HLIEDeviceService::get_mem_info(std::vector<HLIEDeviceInfo>& device_infos) {
-    const int dev_count = hm_sys_get_device_count();
+int HLIEDeviceService::get_device_infos(std::vector<HLIEDeviceInfo>& device_infos) {
+    hm_device_info info = {};
+    const uint32_t ret_code = hm_sys_get_device_info(&info);
+    /* prefer info.num_devices if filled, otherwise use return value */
+    const uint32_t dev_count = info.num_devices ? info.num_devices : ret_code;
     if (dev_count <= 0) {
         LOG_ERROR("no device found!");
         return -1;
@@ -41,41 +47,42 @@ int HLIEDeviceService::get_mem_info(std::vector<HLIEDeviceInfo>& device_infos) {
 
     LOG_INFO("found {} devices", dev_count);
 
-    int temp;
+    float temp = 0.0f;
 
     for (int i = 0; i < dev_count; i++) {
-        LOG_INFO("try to get mem info of device {}", i);
+        int dev = static_cast<int>(info.device_ids[i]);
+        LOG_INFO("try to get mem info of device {}", dev);
         hm_mem_info mem_info{};
-        auto ret = hm_sys_get_mem_info(i, &mem_info);
+        auto ret = hm_sys_get_mem_info(dev, &mem_info);
         if (ret) {
-            LOG_ERROR("failed to get mem info of device {}", i);
+            LOG_ERROR("failed to get mem info of device {}", dev);
             //return -1;
         }
 
-        LOG_INFO("get mem info of device {}: total {}MB, used {}MB, avail {}MB", i, mem_info.mem_total, mem_info.mem_used,
+        LOG_INFO("get mem info of device {}: total {}MB, used {}MB, avail {}MB", dev, mem_info.mem_total, mem_info.mem_used,
                  mem_info.mem_avail);
 
-        LOG_INFO("try to get temperature of device {}", i);
+        LOG_INFO("try to get temperature of device {}", dev);
 
-        ret = hm_sys_get_temp(i, &temp);
+        ret = hm_sys_get_temperature(dev, &temp);
         if (ret < 0) {
-            LOG_ERROR("failed to get temperature of device{}", i);
+            LOG_ERROR("failed to get temperature of device{}", dev);
            // return -1;
         }
 
-        LOG_INFO("get temperature of device {}: {}", i, temp);
+        LOG_INFO("get temperature of device {}: {}", dev, temp);
 
-        HLIEDeviceInfo device_info{device_info.id = i, device_info.mem_total = mem_info.mem_total, device_info.mem_used = mem_info.mem_used,
+        HLIEDeviceInfo device_info{device_info.id = dev, device_info.mem_total = mem_info.mem_total, device_info.mem_used = mem_info.mem_used,
                                    device_info.mem_avail = mem_info.mem_avail, device_info.temperature = temp};
         device_infos.emplace_back(device_info);
     }
 
-    return dev_count;
+    return static_cast<int>(dev_count);
 }
 
 void HLIEDeviceService::handle_devices(const httplib::Request& req, httplib::Response& res) {
     std::vector<HLIEDeviceInfo> device_infos;
-    get_mem_info(device_infos);
+    get_device_infos(device_infos);
 
     json devices = json::array();
     for (size_t i = 0; i < device_infos.size(); ++i) {

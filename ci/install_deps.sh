@@ -35,16 +35,18 @@ case "$PLATFORM" in
 esac
 
 # SDK URLs
-xh1_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/08/14/0200/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_${ARCH}-2.4.2.tar.gz"
-xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/10/28/1950/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_${ARCH}-0.5.0.tar.gz"
-xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/19/0200/ubuntu2004/houmo_drv_xh1_v2.4.3_ubuntu2004_${ARCH}.run"
-#FIXME:
-xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/10/28/1950/ubuntu2004/houmo_drv_xh2_v0.5.0_ubuntu2004_${ARCH}.run"
+xh1_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/18/2140/ubuntu1804/houmo_tcim_runtime_xh1_ubuntu1804_x86_64-2.5.0.tar.gz"
+xh1_dadao_sdk_url_aarch64="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/18/2140/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_aarch64-2.5.0.tar.gz"
+xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/04/2104/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_${ARCH}-0.6.0.tar.gz"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/03/2330/linux/houmo-HLIELLama-xh1_1.3.0_linux_${ARCH}.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/03/2330/linux/houmo-HLIELLama-xh2_1.3.0_linux_${ARCH}.tar.gz"
+xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/21/2224/ubuntu2004/houmo_drv_xh1_v2.5.0_ubuntu2004_${ARCH}.run"
+xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/04/2104/ubuntu1804/houmo_drv_xh2_v0.6.0_ubuntu1804_x86_64.run"
+xh2_sw_sdk_url_aarch64="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/04/2104/ubuntu2004/houmo_drv_xh2_v0.6.0_ubuntu2004_aarch64.run"
 
-xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/03/2330/linux/houmo-HLIESDCpp-xh2_1.1.0_linux_${ARCH}.tar.gz"
+xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/09/1119/linux/houmo-HLIELLama-xh1_1.3.1_linux_${ARCH}.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/09/1119/linux/houmo-HLIELLama-xh2_1.3.1_linux_${ARCH}.tar.gz"
+
+xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/09/1119/linux/houmo-HLIESDCpp-xh2_1.1.0_linux_${ARCH}.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {
@@ -99,7 +101,7 @@ deploy_dadao_sdk() {
 
     if [[ $PLATFORM == "xh2" ]]; then
         cp third_party/houmo-sdk/hal/lib/*.so* third_party/houmo/lib/
-        cp third_party/houmo-sdk/hal/export/*.h third_party/houmo/include/
+        cp third_party/houmo-sdk/hal/export/include/*.h third_party/houmo/include/
         rm -rf third_party/houmo-sdk third_party/sw_sdk.run third_party/houmo_drv*
     fi
 
