@@ -88,8 +88,6 @@ int main(const int argc, char** argv) {
     config_service->set_args(argc, argv);
 
 #ifdef HOUMO_XH2
-    _putenv("TCIM_BACKEND=Xh2HalBackend");
-
     char exePath[MAX_PATH];
     GetModuleFileName(nullptr, exePath, MAX_PATH); // 获取exe绝对路径
     const auto programPath = std::string(exePath);

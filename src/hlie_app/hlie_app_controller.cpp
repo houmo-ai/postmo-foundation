@@ -117,6 +117,10 @@ namespace {
         const auto tcim_log_level = config_services->get_int("log", "tcim_level", 2);
         HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(tcim_log_level));
 
+#ifdef HOUMO_XH2
+        HlieUtil::set_env("TCIM_BACKEND", "Xh2HalBackend");
+#endif
+
         return 0;
     }
 

@@ -116,7 +116,11 @@ main() {
             deploy_llama_sdk "$xh1_llama_sdk_url"
             ;;
         xh2)
-            deploy_dadao_sdk "$xh2_dadao_sdk_url"
+            if [ "$ARCH" == "aarch64" ]; then
+                deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url_aarch64"
+            else
+                deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url"
+            fi
             deploy_llama_sdk "$xh2_llama_sdk_url"
             deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
             ;;
