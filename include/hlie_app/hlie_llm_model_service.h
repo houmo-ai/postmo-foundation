@@ -7,14 +7,18 @@
 
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_model_service.h"
-#include "json.hpp"
-#include "utils.hpp"
+#include <httplib.h>
+#include <server/server-common.h>
+#include <server/server-task.h>
 
 class InfoPrinter;
+struct server_context;
+struct server_routes;
+struct server_http_res;
+struct server_http_req;
+using server_http_res_ptr = std::unique_ptr<server_http_res>;
 
 HLIE_NAMESPACE_BEGIN
-
-struct LlamaServer;
 
 class LLModelService final : public IHLIEModelService {
 public:
@@ -33,37 +37,25 @@ public:
 
     int get_batch_num() const;
 
-    int handle_health(json& resp) const;
+    server_http_res_ptr handle_health(const server_http_req& req) const;
 
-    void handle_models(json& resp) const;
+    server_http_res_ptr handle_models(const server_http_req& req) const;
 
-    void handle_chat_completions(const httplib::Request& req, httplib::Response& res) const;
+    server_http_res_ptr handle_chat_completions(const server_http_req& req) const;
 
-    void handle_completions(const httplib::Request& req, httplib::Response& res) const;
+    server_http_res_ptr handle_completions(const server_http_req& req) const;
 
-    void handle_completions_oai(const httplib::Request& req, httplib::Response& res) const;
+    server_http_res_ptr handle_completions_oai(const server_http_req& req) const;
 
-    void handle_embeddings(const httplib::Request& req, httplib::Response& res, oaicompat_type oaicompat) const;
+    server_http_res_ptr handle_embeddings(const server_http_req& req, task_response_type oaicompat) const;
 
 private:
-    /**
-     * handle completion-like requests (completion, chat, infill)
-     * we can optionally provide a custom format for partial results and final results
-     *
-     * @param type
-     * @param data
-     * @param files
-     * @param is_connection_closed
-     * @param res
-     * @param oaicompat
-     */
-    void handle_completions_impl(server_task_type type, json& data, const std::vector<raw_buffer>& files,
-                                 const std::function<bool()>& is_connection_closed, httplib::Response& res, oaicompat_type oaicompat) const;
-
     std::shared_ptr<InfoPrinter> info_printer_;
-    std::shared_ptr<LlamaServer> llama_server_;
+    std::shared_ptr<server_context> llama_server_;
+    std::shared_ptr<server_routes> llama_server_routes_;
     std::unique_ptr<std::thread> worker_thread_;  // 工作线程
     std::atomic<bool> should_stop_{false};  // 线程停止标志
+    std::atomic<bool> is_ready = false;
     int batch_num_{1};
 };
 

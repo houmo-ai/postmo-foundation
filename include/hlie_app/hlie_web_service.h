@@ -6,6 +6,7 @@
 
 #include "hlie_base/hlie_base.h"
 #include "httplib.h"
+#include "server/server-http.h"
 
 namespace httplib {
     class Server;
@@ -22,6 +23,8 @@ public:
     void init(int n_threads_http);
 
     int run(const std::string& host_name = "0.0.0.0", int port = 7901);
+    void get(const std::string& path, const server_http_context::handler_t& handler) const;
+    void post(const std::string& path, const server_http_context::handler_t& handler) const;
 
     void register_routers() const;
     void register_post(const std::string& path, httplib::Server::Handler&& func) const;

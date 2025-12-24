@@ -80,7 +80,7 @@ int HLIEDeviceService::get_device_infos(std::vector<HLIEDeviceInfo>& device_info
     return static_cast<int>(dev_count);
 }
 
-void HLIEDeviceService::handle_devices(const httplib::Request& req, httplib::Response& res) {
+server_http_res_ptr HLIEDeviceService::handle_devices(const server_http_req& req) {
     std::vector<HLIEDeviceInfo> device_infos;
     get_device_infos(device_infos);
 
@@ -92,8 +92,9 @@ void HLIEDeviceService::handle_devices(const httplib::Request& req, httplib::Res
     }
 
     const json resp = {{"code", 0}, {"devices", devices}};
-
-    res_ok(res, resp);
+    auto res = std::make_unique<server_res_generator>();
+    res->ok(resp);
+    return res;
 }
 
 

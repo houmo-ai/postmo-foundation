@@ -9,19 +9,17 @@ PLATFORM=$1
 ARCH=x86_64
 
 # SDK URLs
-xh1_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/18/2140/windows11/houmo_tcim_runtime_xh1_windows11_x86_64-2.5.0.tar.gz"
-xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/10/2033/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-0.6.0.tar.gz"
+xh1_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2025/12/10/1457/windows11/houmo_tcim_runtime_xh1_windows11_x86_64-0.6.0.tar.gz"
+xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/18/1632/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-0.7.0.tar.gz"
 
 xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/21/2224/windows11/houmo_drv_xh1_v2.5.0_windows11_x86_64.zip"
-xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/10/2033/windows11/houmo_drv_xh2_v0.6.0_windows11_x86_64.zip"
+xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/18/1632/windows11/houmo_drv_xh2_v0.7.0_windows11_x86_64.zip"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/11/1511/windows11/houmo-HLIELLama-xh1_1.3.1_windows11_x86_64.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/11/1511/windows11/houmo-HLIELLama-xh2_1.3.1_windows11_x86_64.tar.gz"
+xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/24/2330/windows11/houmo-HLIELLama-xh1_1.3.1_windows11_x86_64.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/24/2330/windows11/houmo-HLIELLama-xh2_1.3.1_windows11_x86_64.tar.gz"
 
-xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/11/1511/windows11/houmo-HLIESDCpp-xh2_1.1.0_windows11_x86_64.tar.gz"
+xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/24/2330/windows11/houmo-HLIESDCpp-xh2_1.1.0_windows11_x86_64.tar.gz"
 
-# libtorch 下载地址
-libtorch_url="http://10.10.1.53:8082/artifactory/thirdparty_local/libtorch/torch.zip"
 
 # 下载文件并检查是否成功
 download_file() {
@@ -30,25 +28,6 @@ download_file() {
     echo "Downloading $url..."
     wget "$url" -O "$output" || { echo "Failed to download $url"; return 1; }
     echo "Download completed: $output"
-}
-
-deploy_torch() {
-    # 检查torch.zip是否存在
-    if [ ! -f "third_party/torch.zip" ]; then
-        echo "未找到torch.zip，开始下载..."
-        download_file "$libtorch_url" "third_party/torch.zip"
-    else
-        echo "找到torch.zip文件，跳过下载"
-    fi
-
-    # 检查目标目录是否存在，若存在则删除
-    if [ -d "third_party/libtorch" ]; then
-        echo "删除已存在的 third_party/libtorch 目录..."
-        rm -rf third_party/libtorch
-    fi
-
-    # 解压文件
-    unzip -o third_party/torch.zip -d third_party/
 }
 
 deploy_llama_sdk() {
@@ -98,8 +77,8 @@ deploy_dadao_sdk() {
         cp third_party/houmo_drv_xh2/hal/lib/*.dll third_party/houmo/lib/
         cp third_party/houmo_drv_xh2/hal/lib/*.dll.a third_party/houmo/lib/
         cp third_party/houmo_drv_xh2/hal/export/include/*.h third_party/houmo/include/
+        cp third_party/houmo_drv_xh2/hal/include/*.h third_party/houmo/include/
         mkdir -p third_party/houmo/lib/bin/
-        cp third_party/houmo_drv_xh2/hal/lib/*_hal.dll third_party/houmo/lib/bin/cygxh2a_hal.dll
 
         rm -rf third_party/sw_sdk.zip third_party/houmo_drv*
         # FIXME: 临时解决方案，等待SystemWare SDK更新
@@ -132,9 +111,9 @@ build_service() {
     # 创建或清理构建目录
     rm -rf build/*
     if [ $PLATFORM == "xh2" ]; then
-        TCIM_RUNTIME_PATH=$(pwd)/third_party/houmo cmake -B build -DHOUMO_XH2=True -DCMAKE_PREFIX_PATH=$(pwd)/third_party/libtorch -DWINSERVICE_MODE=True
+        TCIM_RUNTIME_PATH=$(pwd)/third_party/houmo cmake -B build -DHOUMO_XH2=True
     else
-        TCIM_RUNTIME_PATH=$(pwd)/third_party/houmo cmake -B build -DCMAKE_PREFIX_PATH=$(pwd)/third_party/libtorch -DWINSERVICE_MODE=True
+        TCIM_RUNTIME_PATH=$(pwd)/third_party/houmo cmake -B build
     fi
     if [ $? -ne 0 ]; then
         echo "cmake failed."
@@ -193,7 +172,6 @@ main() {
     esac
 
     echo "Deployed Dadao SDK and System SDK for $PLATFORM/$ARCH."
-    deploy_torch
 
     # 编译和打包
     build_service

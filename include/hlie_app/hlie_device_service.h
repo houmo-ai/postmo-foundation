@@ -3,9 +3,9 @@
 
 #include <future>
 #include <vector>
+#include <server/server-http.h>
 
 #include "hlie_base/hlie_base.h"
-#include "httplib.h"
 #include "hm_sys.h"
 
 HLIE_NAMESPACE_BEGIN
@@ -34,7 +34,7 @@ public:
 
     int get_device_infos(std::vector<HLIEDeviceInfo>& device_infos);
 
-    void handle_devices(const httplib::Request& req, httplib::Response& res);
+    server_http_res_ptr handle_devices(const server_http_req& req);
 
 private:
     int total_mem_;

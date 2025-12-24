@@ -6,6 +6,7 @@
 #define HLIE_MODEL_INFO_H
 
 #include <string>
+#include <vector>
 
 #include "hlie_base/hlie_base.h"
 
@@ -16,15 +17,18 @@ HLIE_NAMESPACE_BEGIN
 class HLIE_API HLIEModelInfo {
 public:
     int parse_from_file(const std::string& file_path = "info.json");
+    int parse_from_gguf_filename(const std::string& file_path);
+    static void ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, const std::string& dir);
 
     void build_llm(const std::string& model_path, const std::string& model_type, int context_size, int cores, int batch_num, int xh_version,
                    bool is_multi_model, const std::string& params, const std::string& mm_proj_path, const std::string& devices);
 
     void build_sd(const std::string& model_type, const std::string& vae_model, const std::string& t5_model, const std::string& clip_model,
-                  const std::string& clip_l_model, const std::string& mmdit_model, int xh_version, const std::string& devices);
+                  const std::string& clip_l_model, const std::string& mmdit_model, const std::string& devices);
 
     int to_json_file(const std::string& file_path) const;
 
+    [[nodiscard]] const std::string& get_model_name() const { return model_name_; }
     [[nodiscard]] const std::string& get_model_path() const { return model_path_; }
     [[nodiscard]] const std::string& get_model_type() const { return model_type_; }
     [[nodiscard]] int get_batch_num() const { return batch_num_; }
@@ -42,17 +46,30 @@ public:
     [[nodiscard]] const std::string& get_vae_model() const { return vae_model_; }
     [[nodiscard]] const std::string& get_devices() const { return devices_; }
 
+    // ===== 模型类型 =====
+    bool is_llm_ = true;
+    bool is_multi_model_ = false; // VL = true
+
+    // ===== VL 相关 =====
+    std::string mm_proj_path_;    // mmproj 路径
+    std::string vl_spec_;         // vit_448_448 / vit_644_364 / unknown
+
+    // ===== 构建信息 =====
+    std::string model_version_;   // v0.6.0
+    std::string build_time_;      // 20251202...
+
 private:
-    std::string model_path_;
-    std::string model_type_;
-    std::string model_version_;
-    std::string mm_proj_path_;
-    std::string params_;
-    int xh_version_{1};
-    int context_size_{2048};
-    int cores_{0};
-    int batch_num_{1};
-    bool is_multi_model_{false};
+    // ===== 基本信息 =====
+    std::string model_type_;      // qwen2.5 / qwen2.5-vl / qwen3-vl
+    std::string model_path_;      // /path/to/model.gguf
+    std::string model_name_;
+    std::string params_;          // 7b / 4b
+    int context_size_ = 0;
+    int batch_num_ = 1;
+    int cores_ = 2;
+    int device_num_ = 1;
+    int xh_version_{2};           // xh1 / xh2
+
     std::string clip_model_;
     std::string clip_l_model_;
     std::string t5_model_;

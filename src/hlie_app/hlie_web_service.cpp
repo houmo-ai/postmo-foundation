@@ -2,6 +2,9 @@
 
 #include <string>
 
+#include <server/server-common.h>
+#include <server/server-http.h>
+
 #include "hlie_app/hlie_workflow.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
@@ -9,29 +12,28 @@
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_singleton.h"
 #include "hlie_base/hlie_util.h"
-#include "json.hpp"
-#include "utils.hpp"
 
 HLIE_NAMESPACE_BEGIN
 
 namespace {
     std::string process_body(const std::string& body) {
         try {
-            if(body.empty()) {
+            if (body.empty()) {
                 return body;
             }
             auto body_json = nlohmann::json::parse(body);
             // request
-            if(body_json.contains("messages") && body_json["messages"].is_array() && !body_json["messages"].empty()) {
-                for(auto& message: body_json["messages"]) {
-                    if(message.contains("content") && message["content"].is_array() && !message["content"].empty()) {
+            if (body_json.contains("messages") && body_json["messages"].is_array() && !body_json["messages"].empty()) {
+                for (auto& message : body_json["messages"]) {
+                    if (message.contains("content") && message["content"].is_array() && !message["content"].empty()) {
                         for (auto& content_item : message["content"]) {
                             if (content_item.contains("type") && content_item["type"] == "image_url" &&
-                            content_item.contains("image_url") && content_item["image_url"].contains("url")){
+                                content_item.contains("image_url") && content_item["image_url"].contains("url")) {
                                 std::string b64_json_data = content_item["image_url"]["url"];
                                 LOG_TRACE("Request b64_json: {}", b64_json_data);
-                                if(b64_json_data.length() > 100) {
-                                    content_item["image_url"]["url"] = b64_json_data.substr(0, 100) + "..., length=" + std::to_string(b64_json_data.length());
+                                if (b64_json_data.length() > 100) {
+                                    content_item["image_url"]["url"] =
+                                        b64_json_data.substr(0, 100) + "..., length=" + std::to_string(b64_json_data.length());
                                 }
                             }
                         }
@@ -39,12 +41,12 @@ namespace {
                 }
             }
             // response
-            if(body_json.contains("data") && body_json["data"].is_array() && !body_json["data"].empty()) {
-                for(auto& item: body_json["data"]) {
-                    if(item.contains("b64_json")) {
+            if (body_json.contains("data") && body_json["data"].is_array() && !body_json["data"].empty()) {
+                for (auto& item : body_json["data"]) {
+                    if (item.contains("b64_json")) {
                         std::string b64_json_data = item["b64_json"];
                         LOG_TRACE("Response b64_json: {}", b64_json_data);
-                        if(b64_json_data.length() > 100) {
+                        if (b64_json_data.length() > 100) {
                             item["b64_json"] = b64_json_data.substr(0, 100) + "..., length=" + std::to_string(b64_json_data.length());
                         }
                     }
@@ -53,10 +55,10 @@ namespace {
             return body_json.dump();
         } catch (const json::exception& e) {
             LOG_WARN("Failed to parse body as JSON: {}", e.what());
-            return body; 
+            return body;
         }
     }
-    
+
     void log_server_request(const httplib::Request& req, const httplib::Response& res) {
         // skip GH copilot requests when using default port
         if (req.path == "/v1/health" || req.path == "/health") {
@@ -93,12 +95,73 @@ namespace {
             message = "Unknown Exception";
         }
 
-        const std::string request_id = res.has_header("X-Request-ID")
-                ? res.get_header_value("X-Request-ID")
-                : "null";
-        const nlohmann::json formatted_error = format_error_response(message, ERROR_TYPE_SERVER, ret);
+        const std::string request_id = res.has_header("X-Request-ID") ? res.get_header_value("X-Request-ID") : "null";
+        const nlohmann::json formatted_error = format_error_response_ex(message, ERROR_TYPE_SERVER, ret);
         LOG_ERROR("[Request-{}] got server exception: {}", request_id, formatted_error.dump().c_str());
         res_error(res, formatted_error);
+    }
+
+
+    void set_headers(httplib::Response& res, const std::map<std::string, std::string>& headers) {
+        for (const auto& [key, value] : headers) {
+            res.set_header(key, value);
+        }
+    }
+
+    std::map<std::string, std::string> get_params(const httplib::Request& req) {
+        std::map<std::string, std::string> params;
+        for (const auto& [key, value] : req.params) {
+            params[key] = value;
+        }
+        for (const auto& [key, value] : req.path_params) {
+            params[key] = value;
+        }
+        return params;
+    }
+
+    std::map<std::string, std::string> get_headers(const httplib::Request& req) {
+        std::map<std::string, std::string> headers;
+        for (const auto& [key, value] : req.headers) {
+            headers[key] = value;
+        }
+        return headers;
+    }
+
+    void process_handler_response(server_http_res_ptr& response, httplib::Response& res) {
+        if (response->is_stream()) {
+            res.status = response->status;
+            set_headers(res, response->headers);
+            std::string content_type = response->content_type;
+            // convert to shared_ptr as both chunked_content_provider() and on_complete() need to use it
+            std::shared_ptr<server_http_res> r_ptr = std::move(response);
+            const auto chunked_content_provider = [response = r_ptr](size_t, httplib::DataSink& sink) -> bool {
+                std::string chunk;
+                const bool has_next = response->next(chunk);
+                if (!chunk.empty()) {
+                    // TODO: maybe handle sink.write unsuccessful? for now, we rely on is_connection_closed()
+                    sink.write(chunk.data(), chunk.size());
+                    LOG_DEBUG("http: streamed chunk: {}", chunk.c_str());
+                }
+                if (!has_next) {
+                    sink.done();
+                    LOG_DEBUG("http: stream ended");
+                }
+                return has_next;
+            };
+            const auto on_complete = [response = r_ptr](bool) mutable {
+                response.reset(); // trigger the destruction of the response object
+            };
+            res.set_chunked_content_provider(content_type, chunked_content_provider, on_complete);
+        } else {
+            res.status = response->status;
+            set_headers(res, response->headers);
+            res.set_content(response->data, response->content_type);
+        }
+    }
+
+    void res_ok(httplib::Response &res, const json &data) {
+        res.set_content(safe_json_to_str(data), MIMETYPE_JSON);
+        res.status = 200;
     }
 } // namespace
 
@@ -174,6 +237,64 @@ int HLIEWebService::run(const std::string& host_name, int port) {
     return 0;
 }
 
+
+void HLIEWebService::get(const std::string& path, const server_http_context::handler_t& handler) const {
+    web_server_->Get(path, [handler](const httplib::Request& req, httplib::Response& res) {
+        server_http_res_ptr response =
+            handler(server_http_req{get_params(req), get_headers(req), req.path, req.body, req.is_connection_closed});
+        process_handler_response(response, res);
+    });
+}
+
+void HLIEWebService::post(const std::string& path, const server_http_context::handler_t& handler) const {
+    web_server_->Post(path, [handler](const httplib::Request& req, httplib::Response& res) {
+        if (const std::string request_id = res.has_header("X-Request-ID") ? res.get_header_value("X-Request-ID") : "";
+            !request_id.empty()) {
+            LOG_DEBUG("[Request-{}] start to generate", request_id);
+        }
+        server_http_res_ptr response =
+            handler(server_http_req{get_params(req), get_headers(req), req.path, req.body, req.is_connection_closed});
+        process_handler_response(response, res);
+    });
+}
+
+
+// wrapper function that handles exceptions and logs errors
+// this is to make sure handler_t never throws exceptions; instead, it returns an error response
+static server_http_context::handler_t ex_wrapper(server_http_context::handler_t func) {
+    return [func = std::move(func)](const server_http_req & req) -> server_http_res_ptr {
+        std::string message;
+        error_type error;
+        try {
+            return func(req);
+        } catch (const std::invalid_argument & e) {
+            // treat invalid_argument as invalid request (400)
+            error = ERROR_TYPE_INVALID_REQUEST;
+            message = e.what();
+        } catch (const std::exception & e) {
+            // treat other exceptions as server error (500)
+            error = ERROR_TYPE_SERVER;
+            message = e.what();
+        } catch (...) {
+            error = ERROR_TYPE_SERVER;
+            message = "unknown error";
+        }
+
+        auto res = std::make_unique<server_http_res>();
+        res->status = 500;
+        try {
+            json error_data = format_error_response(message, error);
+            res->status = json_value(error_data, "code", 500);
+            res->data = safe_json_to_str({{ "error", error_data }});
+            LOG_WARN("got exception: {}", res->data.c_str());
+        } catch (const std::exception & e) {
+            LOG_ERROR("got another exception: {} | while handling exception: {}", e.what(), message.c_str());
+            res->data = "Internal Server Error";
+        }
+        return res;
+    };
+}
+
 void HLIEWebService::register_routers() const {
     HLIE_CHECK_NULL(workflow_);
 
@@ -193,12 +314,12 @@ void HLIEWebService::register_routers() const {
         if (method == GET) {
             for (const auto& path : paths) {
                 LOG_INFO("Registered GET route: {}", path);
-                web_server_->Get(path, handler);
+                get(path, ex_wrapper(handler));
             }
         } else if (method == POST) {
             for (const auto& path : paths) {
                 LOG_INFO("Registered POST route: {}", path);
-                web_server_->Post(path, handler);
+                post(path, ex_wrapper(handler));
             }
         }
     }

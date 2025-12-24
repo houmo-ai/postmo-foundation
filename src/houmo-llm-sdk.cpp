@@ -4,7 +4,7 @@
 #include "json-schema-to-grammar.h"
 #include "llama.h"
 #include "log.h"
-#include "utils.hpp"
+#include <server/server-common.h>
 
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
@@ -13,7 +13,6 @@
 #define MIMETYPE_JSON "application/json; charset=utf-8"
 
 #include <csignal>
-#include <torch/torch.h>
 #include <cstddef>
 #include <deque>
 #include <memory>
@@ -29,7 +28,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <locale>
+
+#include "server/server-task.h"
 #include "tcim/tcim_runtime.h"
 
 #ifdef _WIN32
@@ -526,87 +528,6 @@ int LlamaServer::completion_stream_generate_stop() {
     return 0;
 }
 
-//将torch::Tensor转换为tcim::Tensor
-void TensorConverter::FromTorch(const torch::Tensor& torch_tensor, tcim::Tensor &tcim_tensor) {
-    int16toint16((int16_t *)tcim_tensor.Data(),
-                (int16_t *)torch_tensor.data_ptr<int16_t>(),
-                torch_tensor.numel());
-}
-
-// 将tcim::Tensor转换为torch::Tensor
-torch::Tensor TensorConverter::ToTorch(const tcim::Tensor& tcim_tensor) {
-    // 获取tcim tensor的形状
-    auto info = tcim_tensor.Info();
-    auto shape = info.Shape();
-
-    // 获取tcim tensor的数据类型并转换为torch类型
-    torch::ScalarType dtype;
-    switch(info.DataType()) {
-        case tcim::FLOAT32: dtype = torch::kFloat32; break;
-        case tcim::FLOAT16: dtype = torch::kFloat16; break;
-        case tcim::INT32: dtype = torch::kInt32; break;
-        case tcim::INT16: dtype = torch::kInt16; break;
-        case tcim::INT8: dtype = torch::kInt8; break;
-        case tcim::UINT8: dtype = torch::kUInt8; break;
-        default:
-            throw std::runtime_error("Unsupported tensor type");
-    }
-
-    // 创建torch tensor
-    auto options = torch::TensorOptions().dtype(dtype);
-    auto torch_tensor = torch::empty(
-        std::vector<int64_t>(shape.begin(), shape.end()),
-        options
-    );
-
-    // 复制数据
-    void* data = tcim_tensor.Data();
-    memcpy(torch_tensor.data_ptr(), data, tcim_tensor.Info().MemSize());
-
-    return torch_tensor;
-}
-
-// 将vector<float>转换为tcim::Tensor
-//template<typename T>
-// tcim::Tensor TensorConverter::FromVector(const std::vector<int16_t>& vec, const std::vector<uint64_t>& shape,
-//                                HmQwen *hmqwen, const std::string &tcim_tensorname,int which_part) {
-void TensorConverter::FromVector(const std::vector<int16_t>& vec, tcim::Tensor &tcim_tensor) {
-    int16toint16((int16_t *) tcim_tensor.Data(),
-                (int16_t*)vec.data(),
-                vec.size());
-}
-
-// 将tcim::Tensor转换为vector<T>
-//template<typename T>
-std::vector<int16_t> TensorConverter::ToVector(const tcim::Tensor& tcim_tensor) {
-    auto info = tcim_tensor.Info();
-    // 检查数据类型是否匹配
-    // bool type_matched = false;
-    // if (typeid(T) == typeid(float) && info.DataType() == tcim::FLOAT32) {
-    //     type_matched = true;
-    // } else if (typeid(T) == typeid(int32_t) && info.DataType() == tcim::INT32) {
-    //     type_matched = true;
-    // } else if (typeid(T) == typeid(int16_t) && info.DataType() == tcim::INT16) {
-    //     type_matched = true;
-    // } else if (typeid(T) == typeid(int8_t) && info.DataType() == tcim::INT8) {
-    //     type_matched = true;
-    // }
-
-    // if (!type_matched) {
-    //     throw std::runtime_error("Tensor type does not match requested vector type");
-    // }
-
-    // 计算元素总数
-    size_t element_count = info.MemSize() / sizeof(int16_t);
-    std::cout<<"element_count is:"<<element_count<<std::endl;
-    std::vector<int16_t> result(element_count);
-
-    // 复制数据
-    const void* data = tcim_tensor.Data();
-    memcpy(result.data(), data, info.MemSize());
-
-    return std::move(result);
-}
 
 HANDLE completion_create_instance(void* param) {
     auto* ctx_server = new LlamaServer();
@@ -635,6 +556,120 @@ HANDLE completion_create_instance(void* param) {
 
 static std::shared_ptr<spdlog::logger> default_logger_ = nullptr;
 
+
+static json oaicompat_completion_params_parse(
+    const json & body, /* openai api json semantics */
+    bool use_jinja,
+    common_reasoning_format reasoning_format,
+    const struct common_chat_templates * tmpls)
+{
+    json llama_params;
+
+    auto tools = json_value(body, "tools", json());
+    auto stream = json_value(body, "stream", false);
+
+    if (tools.is_array() && !tools.empty()) {
+        if (stream) {
+            throw std::runtime_error("Cannot use tools with stream");
+        }
+        if (!use_jinja) {
+            throw std::runtime_error("tools param requires --jinja flag");
+        }
+    }
+    if (!use_jinja) {
+        if (body.contains("tool_choice") && !body.at("tool_choice").is_null()) {
+            throw std::runtime_error("Unsupported param: tool_choice");
+        }
+    }
+
+    // Handle "stop" field
+    if (body.contains("stop") && body.at("stop").is_string()) {
+        llama_params["stop"] = json::array({body.at("stop").get<std::string>()});
+    } else {
+        llama_params["stop"] = json_value(body, "stop", json::array());
+    }
+
+    auto json_schema = json_value(body, "json_schema", json());
+    auto grammar = json_value(body, "grammar", std::string());
+    if (!json_schema.is_null() && !grammar.empty()) {
+        throw std::runtime_error("Cannot use both json_schema and grammar");
+    }
+
+    // Handle "response_format" field
+    if (body.contains("response_format")) {
+        json response_format      = json_value(body, "response_format", json::object());
+        std::string response_type = json_value(response_format, "type", std::string());
+        if (response_type == "json_object") {
+            json_schema = json_value(response_format, "schema", json::object());
+        } else if (response_type == "json_schema") {
+            auto schema_wrapper = json_value(response_format, "json_schema", json::object());
+            json_schema = json_value(schema_wrapper, "schema", json::object());
+        } else if (!response_type.empty() && response_type != "text") {
+            throw std::runtime_error("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
+        }
+    }
+
+    common_chat_templates_inputs inputs;
+    inputs.messages              = common_chat_msgs_parse_oaicompat(body.at("messages"));
+    inputs.tools                 = common_chat_tools_parse_oaicompat(tools);
+    inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(json_value(body, "tool_choice", std::string("auto")));
+    inputs.json_schema           = json_schema.is_null() ? "" : json_schema.dump();
+    inputs.grammar               = grammar;
+    inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
+    inputs.use_jinja             = use_jinja;
+    inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
+    inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
+    if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && body.contains("grammar")) {
+        throw std::runtime_error("Cannot use custom grammar constraints with tools.");
+    }
+
+    // Apply chat template to the list of messages
+    auto chat_params = common_chat_templates_apply(tmpls, inputs);
+
+    llama_params["chat_format"]      = static_cast<int>(chat_params.format);
+    llama_params["prompt"]           = chat_params.prompt;
+    if (!chat_params.grammar.empty()) {
+        llama_params["grammar"] = chat_params.grammar;
+    }
+    llama_params["grammar_lazy"]     = chat_params.grammar_lazy;
+    auto grammar_triggers = json::array();
+    for (const auto & trigger : chat_params.grammar_triggers) {
+        server_grammar_trigger ct(trigger);
+        grammar_triggers.push_back(ct.to_json());
+    }
+    llama_params["grammar_triggers"] = grammar_triggers;
+    llama_params["preserved_tokens"] = chat_params.preserved_tokens;
+    for (const auto & stop : chat_params.additional_stops) {
+        llama_params["stop"].push_back(stop);
+    }
+
+    // Handle "n" field
+    int n_choices = json_value(body, "n", 1);
+    if (n_choices != 1) {
+        throw std::runtime_error("Only one completion choice is allowed");
+    }
+
+    // Handle "logprobs" field
+    // TODO: The response format of this option is not yet OAI-compatible, but seems like no one really using it; We may need to fix it in the future
+    if (json_value(body, "logprobs", false)) {
+        llama_params["n_probs"] = json_value(body, "top_logprobs", 20);
+    } else if (body.contains("top_logprobs") && !body.at("top_logprobs").is_null()) {
+        throw std::runtime_error("top_logprobs requires logprobs to be set to true");
+    }
+
+    // Copy remaining properties to llama_params
+    // This allows user to use llama.cpp-specific params like "mirostat", ... via OAI endpoint.
+    // See "launch_slot_with_task()" for a complete list of params supported by llama.cpp
+    for (const auto & item : body.items()) {
+        // Exception: if "n_predict" is present, we overwrite the value specified earlier by "max_tokens"
+        if (!llama_params.contains(item.key()) || item.key() == "n_predict") {
+            llama_params[item.key()] = item.value();
+        }
+    }
+
+    return llama_params;
+}
+
 int completion_load_model(HANDLE h, std::string model_path) {
     if (h == nullptr) {
         LOG_ERR("HANDLE is: %p\n", h);
@@ -660,7 +695,7 @@ int completion_load_model(HANDLE h, std::string model_path) {
     std::string tok_model_path = model_path;
     LOG_INF("--Loading  HiModel file:%s \r\n", tok_model_path.c_str());
     if (!fileExists(tok_model_path)) {
-        LOG_ERR("Error:HiModel file:%s  not exists,Please check model params passed to this function\r\n", tok_model_path);
+        LOG_ERROR("Error:HiModel file:{} not exists,Please check model params passed to this function", tok_model_path);
         exit(-1);
     }
 

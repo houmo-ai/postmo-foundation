@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include <server/server-http.h>
 
 #include "hlie_base/hlie_blocking_queue.h"
 #include "hlie_model_service.h"
@@ -146,7 +147,7 @@ public:
 
     void handle_models(nlohmann::ordered_json& resp) const;
 
-    void handle_image_generations(const httplib::Request& req, httplib::Response& res) const;
+    server_http_res_ptr handle_image_generations(const server_http_req& req) const;
 
     std::shared_ptr<SDParams> get_params() const {
         return params_;

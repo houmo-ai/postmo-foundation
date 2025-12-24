@@ -97,17 +97,9 @@ POST http://localhost:7901/hlie/v1/start
 Content-Type: application/json
 
 {
-  "devices": "0",
-  "model_path": "HiModel-Qwen3-8B-16k.gguf",
-  "model_type": "llm",
+  "model": "HiModel_xh2_qwen3-vl_4b_256_32k_b1_1chip_2cores_v0.7.0_20251220",
   "params": {
-    "context_size": 16384,
-    "batch": 1,
-    "core_num": 2,
-    "is_mm": false,
-    "mm_proj_path": "",
-    "xh_version": 1,
-    "size": "8B"
+    "mm_proj_path": "mmproj_xh2_qwen3-vl_4b_2cores_vit_448x448_v0.7.0_20251220.gguf"
   }
 }
 
@@ -116,15 +108,13 @@ POST http://localhost:7901/hlie/v1/start
 Content-Type: application/json
 
 {
-  "devices": "1",
   "model_type": "sd",
   "params": {
-    "vae_model": "D:/workspace/models/SD3/vae.hmm",
-    "t5_model": "D:/workspace/models/SD3/t5.hmm",
-    "clip_model" : "D:/workspace/models/SD3/clip.hmm",
-    "clip_l_model" : "D:/workspace/models/SD3/clip_l.hmm",
-    "mmdit_model" : "D:/workspace/models/SD3/mmdit.hmm",
-    "xh_version": 2
+    "vae_model": "SD3/vae.hmm",
+    "t5_model": "SD3/t5.hmm",
+    "clip_model" : "SD3/clip.hmm",
+    "clip_l_model" : "SD3/clip_l.hmm",
+    "mmdit_model" : "SD3/mmdit.hmm"
   }
 }
 

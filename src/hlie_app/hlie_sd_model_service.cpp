@@ -324,15 +324,9 @@ std::shared_ptr<sd_image_t> SDModelService::generate_image(const ImagesRequest& 
     return std::move(result);
 }
 
-void SDModelService::handle_image_generations(const httplib::Request& req, httplib::Response& res) const {
+server_http_res_ptr SDModelService::handle_image_generations(const server_http_req& req) const {
     try {
         const auto request_json = nlohmann::ordered_json::parse(req.body);
-        if (const std::string request_id = res.has_header("X-Request-ID") ? res.get_header_value("X-Request-ID") : "";
-            !request_id.empty()) {
-            LOG_DEBUG("[Request-{}] start to generate image", request_id);
-        }
-
-
         ImagesRequest images_request;
         images_request.prompt = request_json.value("prompt", "");
         if (images_request.prompt.empty()) {
@@ -366,11 +360,12 @@ void SDModelService::handle_image_generations(const httplib::Request& req, httpl
                 std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
             response["data"] = nlohmann::json::array({{{"b64_json", b64_json}}});
             response["timings"] = nlohmann::json::object({{"predicted_ms", predicted_ms}});
-            res.set_content(response.dump(), "application/json");
-            res.status = 200;
-        } else {
-            throw CommonException(1, "generate_image_sync failed");
+            auto res = std::make_unique<server_res_generator>();
+            res->ok(response);
+            return res;
         }
+
+        throw CommonException(1, "generate_image_sync failed");
     } catch (const std::exception& ex) {
         LOG_ERROR("handle_image_generations ex: {}", ex.what());
         throw;

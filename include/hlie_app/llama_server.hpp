@@ -3,6 +3,7 @@
 
 #include <deque>
 #include <vector>
+#include <server/server-common.h>
 
 #include "ggml.h"
 #include "hlie_base/hlie_base.h"
@@ -10,13 +11,11 @@
 #include "json-schema-to-grammar.h"
 #include "llama.h"
 #include "mtmd.h"
-#include "info_printer.h"
 
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
 #include "sampling.h"
 #include "speculative.h"
-#include "utils.hpp"
 
 
 HLIE_NAMESPACE_BEGIN

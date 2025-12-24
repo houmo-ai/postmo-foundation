@@ -37,6 +37,8 @@ public:
     static bool has_model_params(const std::string& str);
 
     static std::string get_datetime_str();
+    static std::tuple<int, int, int> parse_version(const std::string& v);
+    static bool version_ge(const std::string& v, const std::string& target);
 };
 
 HLIE_NAMESPACE_END

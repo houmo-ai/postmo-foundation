@@ -3,10 +3,12 @@
 
 #include <memory>
 #include <vector>
+#include <server/server-models.h>
 
 
 #include "hlie_base/hlie_base.h"
 #include "hlie_base/hlie_common_define.h"
+#include "hlie_model_info.h"
 #include "hlie_model_service.h"
 #include "httplib.h"
 
@@ -42,9 +44,16 @@ public:
     struct RouteConfig {
         std::vector<std::string> paths;
         HttpType method;  // "GET" or "POST"
-        RequestHandler handler;
+        // RequestHandler handler;
+        std::function<server_http_res_ptr(const server_http_req& req)> handler;
         bool require_model = false;  // 是否需要特定模型服务
         std::string model_type = LLM;  // 需要的模型类型
+    };
+
+    struct ModelInstance {
+        int port;
+        server_model_meta meta;
+        HLIEModelInfo model_info;
     };
 
     /**
@@ -52,17 +61,21 @@ public:
      *
      * @return the vector of RouteConfig including the Method,  the Path, the Handler, and the Model Type
      */
-    [[nodiscard]] const std::vector<RouteConfig>& get_route_configs();
+    std::vector<RouteConfig> get_route_configs();
 
     void set_server_port(int port);
 
 private:
-    void handle_health(httplib::Response& res) const;
-    void handle_models(httplib::Response& res) const;
-    void start_service(const httplib::Request& req, httplib::Response& res);
-    void stop_service(const httplib::Request& req, httplib::Response& res);
-    void handle_status(const httplib::Request& req, httplib::Response& res) const;
-    void handle_unload_model(const httplib::Request& req, httplib::Response& res);
+    [[nodiscard]] server_http_res_ptr handle_health(const server_http_req& req) const;
+    server_http_res_ptr handle_models(const server_http_req& req);
+    server_http_res_ptr start_service(const server_http_req& req);
+    server_http_res_ptr stop_service(const server_http_req& req);
+    server_http_res_ptr handle_status(const server_http_req& req) const;
+    server_http_res_ptr handle_unload_model(const server_http_req& req);
+
+    std::vector<server_model_meta> get_all_model_metas();
+
+    std::optional<server_model_meta> get_model_meta(const std::string& name);
 
     static int generate_instance_id() {
         static std::atomic counter{0};
@@ -71,6 +84,7 @@ private:
 
     std::shared_ptr<LLModelService> llm_model_service_;
     std::shared_ptr<SDModelService> sd_model_service_;
+    std::map<std::string, ModelInstance> model_instances_;
 
     std::shared_ptr<HLIEDeviceService> device_service_;
 

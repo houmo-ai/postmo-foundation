@@ -6,13 +6,13 @@
 #include "hlie_base/hlie_logger.h"
 
 
-#if defined(_WIN32) || defined(_WIN64)  // Windows 平台
-    #include <objbase.h>
-    #pragma comment(lib, "Rpcrt4.lib")
+#if defined(_WIN32) || defined(_WIN64) // Windows 平台
+#include <objbase.h>
+#pragma comment(lib, "Rpcrt4.lib")
 #else
-    #include <random>
-    #include <sstream>
-    #include <iomanip>
+#include <iomanip>
+#include <random>
+#include <sstream>
 #endif
 
 HLIE_NAMESPACE_BEGIN
@@ -52,20 +52,17 @@ std::string HlieUtil::uuid() {
     std::uniform_int_distribution<uint32_t> dis(0, 0xFFFFFFFF);
 
     uint32_t data[4];
-    for (auto& d : data) d = dis(gen);
+    for (auto& d : data)
+        d = dis(gen);
 
     // UUID v4 规则
     data[1] = (data[1] & 0xFFFF0FFF) | 0x00004000;
     data[2] = (data[2] & 0x3FFFFFFF) | 0x80000000;
 
     std::stringstream ss;
-    ss << std::hex << std::setfill('0')
-       << std::setw(8) << data[0] << "-"
-       << std::setw(4) << ((data[1] >> 16) & 0xFFFF) << "-"
-       << std::setw(4) << (data[1] & 0xFFFF) << "-"
-       << std::setw(4) << ((data[2] >> 16) & 0xFFFF) << "-"
-       << std::setw(4) << (data[2] & 0xFFFF)
-       << std::setw(8) << data[3];
+    ss << std::hex << std::setfill('0') << std::setw(8) << data[0] << "-" << std::setw(4) << ((data[1] >> 16) & 0xFFFF) << "-"
+       << std::setw(4) << (data[1] & 0xFFFF) << "-" << std::setw(4) << ((data[2] >> 16) & 0xFFFF) << "-" << std::setw(4)
+       << (data[2] & 0xFFFF) << std::setw(8) << data[3];
     return ss.str();
 #endif
 }
@@ -169,6 +166,25 @@ std::string HlieUtil::get_datetime_str() {
     std::ostringstream oss;
     oss << std::put_time(&tm, "%Y-%m-%d-%H-%M"); // 年-月-日-时-分
     return oss.str();
+}
+
+std::tuple<int, int, int> HlieUtil::parse_version(const std::string& v) {
+    int major = 0, minor = 0, patch = 0;
+
+    std::string s = v;
+    if (!s.empty() && s[0] == 'v')
+        s.erase(0, 1); // 去掉 'v'
+
+    char dot;
+    std::istringstream iss(s);
+    iss >> major >> dot >> minor >> dot >> patch;
+
+    return {major, minor, patch};
+}
+
+bool HlieUtil::version_ge(const std::string& v, const std::string& target)
+{
+    return parse_version(v) >= parse_version(target);
 }
 
 HLIE_NAMESPACE_END
