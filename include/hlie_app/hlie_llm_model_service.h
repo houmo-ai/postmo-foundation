@@ -49,6 +49,12 @@ public:
 
     server_http_res_ptr handle_embeddings(const server_http_req& req, task_response_type oaicompat) const;
 
+    server_http_res_ptr handle_props(const server_http_req& req) const;
+
+    [[nodiscard]] std::string get_model_name() const {
+        return model_name_;
+    }
+
 private:
     std::shared_ptr<InfoPrinter> info_printer_;
     std::shared_ptr<server_context> llama_server_;
@@ -56,6 +62,7 @@ private:
     std::unique_ptr<std::thread> worker_thread_;  // 工作线程
     std::atomic<bool> should_stop_{false};  // 线程停止标志
     std::atomic<bool> is_ready = false;
+    std::string model_name_;
     int batch_num_{1};
 };
 

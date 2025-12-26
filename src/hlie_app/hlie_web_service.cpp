@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include <server/index.html.gz.hpp>
+#include <server/loading.html.hpp>
 #include <server/server-common.h>
 #include <server/server-http.h>
 
@@ -159,7 +161,7 @@ namespace {
         }
     }
 
-    void res_ok(httplib::Response &res, const json &data) {
+    void res_ok(httplib::Response& res, const json& data) {
         res.set_content(safe_json_to_str(data), MIMETYPE_JSON);
         res.status = 200;
     }
@@ -188,6 +190,19 @@ void HLIEWebService::init(int n_threads_http) {
 
     web_server_->set_pre_routing_handler(
         [this](const httplib::Request& req, httplib::Response& res) { return this->pre_routing_handler(req, res); });
+
+    web_server_->Get("/", [](const httplib::Request& req, httplib::Response& res) {
+        if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+            res.set_content("Error: gzip is not supported by this browser", "text/plain");
+        } else {
+            res.set_header("Content-Encoding", "gzip");
+            // COEP and COOP headers, required by pyodide (python interpreter)
+            res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+            res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+            res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
+        }
+        return false;
+    });
 
     web_server_->new_task_queue = [n_threads_http] { return new httplib::ThreadPool(n_threads_http); };
     LOG_INFO("Web Service init done, n_threads_http: {}", n_threads_http);
@@ -233,7 +248,7 @@ int HLIEWebService::run(const std::string& host_name, int port) {
     web_server_->wait_until_ready();
 
     LOG_INFO("HTTP server is listening, hostname: {}, port: {}", host_name, port);
-
+    is_ready.store(true);
     return 0;
 }
 
@@ -262,16 +277,16 @@ void HLIEWebService::post(const std::string& path, const server_http_context::ha
 // wrapper function that handles exceptions and logs errors
 // this is to make sure handler_t never throws exceptions; instead, it returns an error response
 static server_http_context::handler_t ex_wrapper(server_http_context::handler_t func) {
-    return [func = std::move(func)](const server_http_req & req) -> server_http_res_ptr {
+    return [func = std::move(func)](const server_http_req& req) -> server_http_res_ptr {
         std::string message;
         error_type error;
         try {
             return func(req);
-        } catch (const std::invalid_argument & e) {
+        } catch (const std::invalid_argument& e) {
             // treat invalid_argument as invalid request (400)
             error = ERROR_TYPE_INVALID_REQUEST;
             message = e.what();
-        } catch (const std::exception & e) {
+        } catch (const std::exception& e) {
             // treat other exceptions as server error (500)
             error = ERROR_TYPE_SERVER;
             message = e.what();
@@ -285,9 +300,9 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
         try {
             json error_data = format_error_response(message, error);
             res->status = json_value(error_data, "code", 500);
-            res->data = safe_json_to_str({{ "error", error_data }});
+            res->data = safe_json_to_str({{"error", error_data}});
             LOG_WARN("got exception: {}", res->data.c_str());
-        } catch (const std::exception & e) {
+        } catch (const std::exception& e) {
             LOG_ERROR("got another exception: {} | while handling exception: {}", e.what(), message.c_str());
             res->data = "Internal Server Error";
         }
@@ -391,6 +406,12 @@ bool HLIEWebService::middleware_server_state(const httplib::Request& req, httpli
     }
 
     if (state == SERVER_STATE_LOADING_MODEL) {
+        // auto tmp = string_split<std::string>(req.path, '.');
+        // if (req.path == "/" || tmp.back() == "html") {
+        //     res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
+        //     res.status = 503;
+        // }
+
         res_error(res, format_error_response("Loading model", ERROR_TYPE_UNAVAILABLE));
         return false;
     }

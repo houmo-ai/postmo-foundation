@@ -42,10 +42,6 @@ namespace {
 
 
 int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& model_info) {
-    if (model_info.get_xh_version() < 2) {
-        return -1;
-    }
-
     blocking_queue_ = std::make_shared<HLIEBlockingQueue<QueueItem>>();
 
     params_ = std::make_shared<SDParams>();

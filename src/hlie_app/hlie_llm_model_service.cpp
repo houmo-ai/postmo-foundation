@@ -148,6 +148,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         return -1;
     }
 
+    model_name_ = model_info.get_model_name();
     llama_server_->init();
     is_ready.store(true);
     LOG_DEBUG("LLM init done");
@@ -223,6 +224,11 @@ server_http_res_ptr LLModelService::handle_embeddings(const server_http_req& req
     }
 
     auto res = llama_server_routes_->post_embeddings(req);
+    return res;
+}
+
+server_http_res_ptr LLModelService::handle_props(const server_http_req& req) const {
+    auto res = llama_server_routes_->get_props(req);
     return res;
 }
 

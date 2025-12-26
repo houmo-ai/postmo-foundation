@@ -15,10 +15,10 @@ xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2
 xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/21/2224/windows11/houmo_drv_xh1_v2.5.0_windows11_x86_64.zip"
 xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/18/1632/windows11/houmo_drv_xh2_v0.7.0_windows11_x86_64.zip"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/24/2330/windows11/houmo-HLIELLama-xh1_1.3.1_windows11_x86_64.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/24/2330/windows11/houmo-HLIELLama-xh2_1.3.1_windows11_x86_64.tar.gz"
+xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/26/1630/windows11/houmo-HLIELLama-xh1_1.3.1_windows11_x86_64.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/26/1630/windows11/houmo-HLIELLama-xh2_1.3.1_windows11_x86_64.tar.gz"
 
-xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/24/2330/windows11/houmo-HLIESDCpp-xh2_1.1.0_windows11_x86_64.tar.gz"
+xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/26/1630/windows11/houmo-HLIESDCpp-xh2_1.1.0_windows11_x86_64.tar.gz"
 
 # libtorch 下载地址
 libtorch_url="http://10.10.1.53:8082/artifactory/thirdparty_local/libtorch/torch.zip"

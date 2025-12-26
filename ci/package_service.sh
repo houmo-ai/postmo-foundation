@@ -42,10 +42,10 @@ xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2
 xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/18/1632/ubuntu1804/houmo_drv_xh2_v0.7.0_ubuntu1804_x86_64.run"
 xh2_sw_sdk_url_aarch64="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/18/1632/ubuntu2004/houmo_drv_xh2_v0.7.0_ubuntu2004_aarch64.run"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/24/2330/linux/houmo-HLIELLama-xh1_1.3.1_linux_${ARCH}.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/24/2330/linux/houmo-HLIELLama-xh2_1.3.1_linux_${ARCH}.tar.gz"
+xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/26/1630/linux/houmo-HLIELLama-xh1_1.3.1_linux_${ARCH}.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/26/1630/linux/houmo-HLIELLama-xh2_1.3.1_linux_${ARCH}.tar.gz"
 
-xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/24/2330/linux/houmo-HLIESDCpp-xh2_1.1.0_linux_${ARCH}.tar.gz"
+xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/26/1630/linux/houmo-HLIESDCpp-xh2_1.1.0_linux_${ARCH}.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {

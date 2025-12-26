@@ -27,7 +27,7 @@ public:
 
     int initialize(const std::string& model_dir, const std::string& program_path);
 
-    void run() const;
+    void run();
 
     void stop() const;
 
@@ -70,7 +70,8 @@ private:
     server_http_res_ptr handle_models(const server_http_req& req);
     server_http_res_ptr start_service(const server_http_req& req);
     server_http_res_ptr stop_service(const server_http_req& req);
-    server_http_res_ptr handle_status(const server_http_req& req) const;
+    [[nodiscard]] server_http_res_ptr handle_get_status(const server_http_req& req) const;
+    [[nodiscard]] server_http_res_ptr handle_post_status(const server_http_req& req);
     server_http_res_ptr handle_unload_model(const server_http_req& req);
 
     std::vector<server_model_meta> get_all_model_metas();
@@ -92,6 +93,7 @@ private:
     std::string program_path_;
     std::string model_dir_;
     int port_;
+    bool is_slave_{false};
     time_t start_time_;
 
     std::mutex mutex_;

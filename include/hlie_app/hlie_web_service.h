@@ -37,6 +37,7 @@ private:
     std::shared_ptr<httplib::Server> web_server_;
 
     std::unique_ptr<std::thread> worker_thread_;  // 工作线程
+    std::atomic<bool> is_ready = false;
 
     httplib::Server::HandlerResponse pre_routing_handler(const httplib::Request& req, httplib::Response& res) const;
     bool middleware_server_state(const httplib::Request& req, httplib::Response& res) const;
