@@ -55,6 +55,21 @@ namespace {
                     return -1;
                 }
 
+                const auto default_model = config_services->get_string("model", "default","", true);
+                const auto enable_sd3 = config_services->get_bool("model", "enable_sd3", false);
+                std::vector<std::string> model_names;
+                if (default_model.empty() && !enable_sd3) {
+                    LOG_ERROR("default_model is empty && enable_sd3 is false in Multi Copies Case");
+                    return -1;
+                }
+
+                if (!default_model.empty()) {
+                    model_names.push_back(default_model);
+                }
+                if (enable_sd3) {
+                    model_names.emplace_back(HLIEModelType::SD3);
+                }
+
                 LOG_INFO("Main process start to pull new replicas[{}]", replicas - 1);
 
                 int acquires_count = device_count / replicas; // 每个实例获取的NPU数量, 因为每个实例可以同时运行生文和生图
@@ -86,7 +101,7 @@ namespace {
                         args_for_sub_process.push_back(val);
                     }
 
-                    if (auto pid = Singleton<HLIEProcessManager>::instance()->create_process(program_path, args_for_sub_process);
+                    if (auto pid = Singleton<HLIEProcessManager>::instance()->create_process(program_path, args_for_sub_process, {model_names}, i);
                         pid == 0 || pid == -1) {
                         LOG_ERROR("Failed to start process for instance_id[{}]", i);
                     } else {
@@ -223,15 +238,15 @@ int HLIEWinAppController::initialize() {
 
     spdlog::flush_every(std::chrono::seconds(10));
 
-    if (initialize_ex(program_path) < 0) {
-        return -3;
-    }
-
     // 为啥方便手动扩展，支持配置环境变量HLIE__MODEL__CUR_MODEL用于指定独立的模型目录, 这种场景必须指定--device_id
     const std::string cur_model = config_services->get_string("model", "cur_model", "", instance_id != "0");
     if (cur_model.empty()) {
         boot_logger->error("WINSERVICE cannot found model, cur_model is empty");
         return -2;
+    }
+
+    if (initialize_ex(program_path) < 0) {
+        return -3;
     }
 
     workflow_ = std::make_shared<HLIEWorkflow>();

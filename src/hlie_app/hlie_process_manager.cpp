@@ -43,7 +43,7 @@ HLIEProcessManager::~HLIEProcessManager() {
 }
 
 ProcessID HLIEProcessManager::create_process(const std::string& exe_path,
-    const std::vector<std::string>& args) {
+    const std::vector<std::string>& args, const std::vector<std::string>& model_names, const int instance_id) {
     std::lock_guard lock(mutex_);
 
 #ifdef _WIN32
@@ -79,10 +79,12 @@ ProcessID HLIEProcessManager::create_process(const std::string& exe_path,
     CloseHandle(pi.hThread);
 
     ProcessInfo info;
-    info.instance_id = HlieUtil::uuid();
+    info.uuid = HlieUtil::uuid();
     info.process_handle = pi.hProcess;
     info.process_id = pi.dwProcessId;
     info.params = cmd_line;
+    info.model_names = model_names;
+    info.instance_id = instance_id;
     info.start_time = time(nullptr);
     info.is_running = true;
 
@@ -116,7 +118,10 @@ ProcessID HLIEProcessManager::create_process(const std::string& exe_path,
         // 父进程
         ProcessInfo info;
         info.pid = pid;
+        info.uuid = HlieUtil::uuid();
         info.process_id = pid;
+        info.model_names = model_names;
+        info.instance_id = instance_id;
         info.start_time = time(nullptr);
         info.is_running = true;
 

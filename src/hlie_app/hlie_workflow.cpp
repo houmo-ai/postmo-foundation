@@ -165,7 +165,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         return -1;
     }
 
-    // 处理每个模型信息, 讲目录下面的模型全部扫描出来
     const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
     std::vector<HLIEModelInfo> model_infos;
     if (args.find("--json_info") != args.end()) { // 是否为外部接口调用启动服务
@@ -175,39 +174,60 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
             LOG_INFO("Successfully parsed model info from --json_info: {}", json_path);
             is_slave_ = true;
             LOG_INFO("Initializing LLModelService");
-            llm_model_service_ = std::make_shared<LLModelService>();
-            if (llm_model_service_->init(model_dir, model_info) < 0) {
-                LOG_ERROR("failed to init the LLM model service");
-                return -1;
+            if (model_info.is_llm_) {
+                llm_model_service_ = std::make_shared<LLModelService>();
+                if (llm_model_service_->init(model_dir, model_info) < 0) {
+                    LOG_ERROR("failed to init the LLM model service");
+                    return -1;
+                }
             }
-        } else {
-            LOG_ERROR("Failed to parse model info from --json_info: {}", json_path);
-            return -1;
-        }
-    } else { // 主进程或者是负载均衡模式
-        model_infos = load_model_info_files_from_directory(model_dir);
-        HLIEModelInfo::ScanLocalModelsFromDir(model_infos, model_dir_);
-        for (const auto& model_info : model_infos) {
-            ModelInstance model_instance;
-            server_model_meta meta;
-            meta.name = model_info.get_model_name();
-            meta.path = model_info.get_model_path();
-            meta.path_mmproj = model_info.get_mm_proj_path();
-            model_instance.meta = std::move(meta);
-            model_instance.model_info = model_info;
-            model_instances_[model_info.get_model_name()] = std::move(model_instance);
-        }
-
-        if (model_infos.empty()) {
-            LOG_WARN("No valid model info files found in directory: {}", model_dir);
-            if (args.find("--instance_id") == args.end()) {
-                // Master Process Start in Zero-Load Mode
-                start_time_ = time(nullptr);
-                return 8;
+#ifdef HOUMO_XH2
+            else {
+                sd_model_service_ = std::make_shared<SDModelService>();
+                if (sd_model_service_->init(model_dir, model_info) < 0) {
+                    LOG_ERROR("failed to init the SD model service");
+                    return -1;
+                }
             }
 
-            return -1;
+            device_service_ = std::make_shared<HLIEDeviceService>();
+#endif
+            Singleton<HLIEDeviceHelper>::instance()->print_status();
+            start_time_ = time(nullptr);
+            return 0;
         }
+
+        LOG_ERROR("Failed to parse model info from --json_info: {}", json_path);
+        return -1;
+    }
+
+    // 主进程或者是负载均衡模式
+    model_infos = load_model_info_files_from_directory(model_dir);
+    HLIEModelInfo::ScanLocalModelsFromDir(model_infos, model_dir_);
+    for (const auto& model_info : model_infos) {
+        ModelInstance model_instance;
+        server_model_meta meta;
+        meta.name = model_info.get_model_name();
+        meta.path = model_info.get_model_path();
+        meta.path_mmproj = model_info.get_mm_proj_path();
+        model_instance.meta = std::move(meta);
+        model_instance.model_info = model_info;
+        model_instances_[model_info.get_model_name()] = std::move(model_instance);
+    }
+
+    if (model_infos.empty()) {
+        LOG_WARN("No valid model info files found in directory: {}", model_dir);
+        if (args.find("--instance_id") == args.end()) {
+            // Master Process Start in Zero-Load Mode
+#ifdef HOUMO_XH2
+            device_service_ = std::make_shared<HLIEDeviceService>();
+#endif
+            Singleton<HLIEDeviceHelper>::instance()->print_status();
+            start_time_ = time(nullptr);
+            return 8;
+        }
+
+        return -1;
     }
 
     const std::string default_model = Singleton<HLIEConfigService>::instance()->get_string("model", "default");
@@ -216,6 +236,10 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         LOG_WARN("No default model: {}", default_model);
         if (args.find("--instance_id") == args.end()) {
             // Master Process Start in Zero-Load Mode
+#ifdef HOUMO_XH2
+            device_service_ = std::make_shared<HLIEDeviceService>();
+#endif
+            Singleton<HLIEDeviceHelper>::instance()->print_status();
             start_time_ = time(nullptr);
             return 8;
         }
@@ -251,12 +275,13 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
 #ifdef HOUMO_XH2
     else if (enable_sd3) {
         auto it = std::find_if(model_infos.begin(), model_infos.end(),
-                               [&](const HLIEModelInfo& info) { return info.get_model_path() == HLIEModelType::SD3; });
+                               [&](const HLIEModelInfo& info) { return info.get_model_name() == HLIEModelType::SD3; });
         if (it == model_infos.end()) {
             LOG_WARN("No SD3 model found");
             return -1;
         }
 
+        found_sd3 = true;
         sd3_model_info = *it;
     }
 #endif
@@ -264,6 +289,10 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
     if (!found_llm && !found_sd3) {
         if (args.find("--instance_id") == args.end()) {
             // Master Process Start in Zero-Load Mode
+#ifdef HOUMO_XH2
+            device_service_ = std::make_shared<HLIEDeviceService>();
+#endif
+            Singleton<HLIEDeviceHelper>::instance()->print_status();
             start_time_ = time(nullptr);
             return 8;
         }
@@ -587,7 +616,8 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
                 args_for_sub_process.push_back(val);
             }
 
-            if (auto pid = Singleton<HLIEProcessManager>::instance()->create_process(program_path_, args_for_sub_process);
+            if (auto pid = Singleton<HLIEProcessManager>::instance()->create_process(program_path_, args_for_sub_process, {model_name},
+                                                                                     instance_id);
                 pid == 0 || pid == -1) {
                 LOG_ERROR("Failed to start process for instance_id[{}]", instance_id);
             } else {
@@ -627,7 +657,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             std::vector args_for_sub_process = {std::string("--instance_id"), std::to_string(instance_id),
                                                 std::string("--device_id"),   devices,
                                                 std::string("--json_info"),   json_info_file};
-            if (process_id = Singleton<HLIEProcessManager>::instance()->create_process(program_path_, args_for_sub_process);
+            if (process_id = Singleton<HLIEProcessManager>::instance()->create_process(program_path_, args_for_sub_process, {HLIEModelType::SD3}, instance_id);
                 process_id == 0 || process_id == -1) {
                 LOG_ERROR("Failed to start process for instance_id[{}]", instance_id);
             } else {
@@ -764,11 +794,11 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 false // 不需要模型Running
             },
             {
-                    {"/models/status"},
-                    POST,
-                    [this](const server_http_req& req) -> server_http_res_ptr { return handle_get_status(req); },
-                    false // 不需要模型Running
-                },
+                {"/models/status"},
+                POST,
+                [this](const server_http_req& req) -> server_http_res_ptr { return handle_post_status(req); },
+                false // 不需要模型Running
+            },
             {
                 {"/hlie/v1/unload_model", "/models/unload"},
                 POST,
@@ -844,27 +874,31 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
     const std::vector<HLIEProcessManager::ProcessInfo> process_infos = Singleton<HLIEProcessManager>::instance()->get_running_processes();
 
     json processors = json::array();
-    processors.push_back({
-        {"params", ""},
-        {"instance_id", 0},
-        {"port", port_},
-        {"uuid", ""},
-        {"process_id", 0},
-        {"start_time", start_time_},
-    });
+    json models = json::array();
+    if (llm_model_service_) {
+        models.push_back(llm_model_service_->get_model_name());
+    }
+    if (sd_model_service_) {
+        models.push_back(HLIEModelType::SD3);
+    }
+    processors.push_back({{"params", ""},
+                          {"instance_id", 0},
+                          {"port", port_},
+                          {"uuid", ""},
+                          {"process_id", 0},
+                          {"start_time", start_time_},
+                          {"models", models}});
 
-    int id = 1;
     for (const auto& p : process_infos) {
         processors.push_back({
             {"params", p.params},
-            {"instance_id", id},
-            {"port", id + port_},
+            {"instance_id", p.instance_id},
+            {"port", p.instance_id + port_},
             {"uuid", p.instance_id},
             {"process_id", p.process_id},
             {"start_time", p.start_time},
+            {"models", p.model_names},
         });
-
-        id++;
     }
 
     const json resp = {{"code", 0}, {"processor", processors}};
@@ -879,7 +913,7 @@ server_http_res_ptr HLIEWorkflow::handle_post_status(const server_http_req& req)
     std::string model = json_value(body, "model", std::string());
     std::string value = json_value(body, "value", std::string());
     // for now, we only allow updating to LOADED status
-    const auto status =server_model_status_from_string(value);
+    const auto status = server_model_status_from_string(value);
     if (status != SERVER_MODEL_STATUS_LOADED) {
         throw std::runtime_error("invalid status value");
     }

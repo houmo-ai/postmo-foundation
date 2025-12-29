@@ -94,12 +94,13 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
         devices_ = config.value("Devices", "");
         mmdit_model_ = config.value("MMDitModel", "");
         vae_model_ = config.value("VaeModel", "");
-
+        is_llm_ = true;
         if (!model_path_.empty()) {
             const std::filesystem::path p(model_path_);
             model_name_ = p.stem().string();   // 去掉扩展名
         } else if (!clip_model_.empty()) {
             model_name_ = "sd3";
+            is_llm_ = false;
         } else {
             model_name_.clear();
         }

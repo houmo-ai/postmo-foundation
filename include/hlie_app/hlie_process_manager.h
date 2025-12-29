@@ -21,7 +21,7 @@
 HLIE_NAMESPACE_BEGIN
 
 #ifdef _WIN32
-    using ProcessID = DWORD;
+using ProcessID = DWORD;
 #else
 using ProcessID = pid_t;
 #endif
@@ -37,7 +37,9 @@ public:
 #endif
 
         ProcessID process_id;
-        std::string instance_id;
+        std::string uuid;
+        std::vector<std::string> model_names;
+        int instance_id;
         std::string params;
         time_t start_time;
         bool is_running;
@@ -45,8 +47,7 @@ public:
 
     ~HLIEProcessManager();
 
-    ProcessID create_process(const std::string& exe_path,
-    const std::vector<std::string>& args);
+    ProcessID create_process(const std::string& exe_path, const std::vector<std::string>& args, const std::vector<std::string>& model_names, int instance_id);
     bool terminate_process(ProcessID pid);
     bool terminate_all();
     std::vector<ProcessInfo> get_running_processes();
@@ -61,4 +62,4 @@ private:
 
 HLIE_NAMESPACE_END
 
-#endif //HLIE_PROCESS_MANAGER_H
+#endif // HLIE_PROCESS_MANAGER_H
