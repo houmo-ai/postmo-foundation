@@ -1,10 +1,10 @@
+#include <server/server-common.h>
 #include "arg.h"
 #include "common.h"
-#include "hlie_app/llama_server.hpp"
 #include "json-schema-to-grammar.h"
 #include "llama.h"
+#include "llama_server.hpp"
 #include "log.h"
-#include <server/server-common.h>
 
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
@@ -21,7 +21,6 @@
 #include <unordered_set>
 
 #include "http_server_c_interface_3.h"
-#include "INIReader.h"
 #include "spdlog/sinks/daily_file_sink.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/spdlog.h"
@@ -32,7 +31,7 @@
 #include <locale>
 
 #include "server/server-task.h"
-#include "tcim/tcim_runtime.h"
+#include <regex>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -225,26 +224,6 @@ std::string getenv_or_default(const std::string& name, const std::string& defaul
     return value ? std::string(value) : default_value;
 }
 
-class TensorConverter {
-public:
-    // 将torch::Tensor转换为tcim::Tensor
-    //static tcim::Tensor FromTorch(const torch::Tensor& torch_tensor, HmQwen *hmqwen, const std::string &tcim_tensorname,int which_part) ;
-    static void FromTorch(const torch::Tensor& torch_tensor, tcim::Tensor &tcim_tensor);
-
-    // 将tcim::Tensor转换为torch::Tensor
-    static torch::Tensor ToTorch(const tcim::Tensor& tcim_tensor);
-
-    // 将vector<float>转换为tcim::Tensor
-    //template<typename T>
-    //static tcim::Tensor FromVector(const std::vector<int16_t>& vec, const std::vector<uint64_t>& shape, HmQwen *hmqwen, const std::string &tcim_tensorname,int which_part);
-
-    static void FromVector(const std::vector<int16_t>& vec, tcim::Tensor &tcim_tensor);
-
-    // 将tcim::Tensor转换为vector<T>
-    //template<typename T>
-    static std::vector<int16_t> ToVector(const tcim::Tensor& tcim_tensor);
-};
-
 int LlamaServer::completion_generate_str(const json& data, std::string& result_str) {
     bool stream = json_value(data, "stream", false);
     if (stream) {
@@ -260,9 +239,9 @@ int LlamaServer::completion_generate_str(const json& data, std::string& result_s
 
     // need to store the reader as a pointer, so that it won't be destroyed when the handle returns
     // use shared_ptr as it's shared between the chunked_content_provider() and on_complete()
-    const auto rd = std::make_shared<server_response_reader>(this);
+    const auto rd = std::make_shared<server_response_reader_ex>(this, HTTP_POLLING_SECONDS);
 
-    oaicompat_type oaicompat = OAICOMPAT_TYPE_NONE;
+    task_response_type oaicompat = TASK_RESPONSE_TYPE_NONE;
     try {
         std::vector<server_task> tasks;
 
@@ -281,7 +260,7 @@ int LlamaServer::completion_generate_str(const json& data, std::string& result_s
             task.id_slot = json_value(data, "id_slot", -1);
 
             // OAI-compat
-            task.params.oaicompat = oaicompat;
+            task.params.res_type = oaicompat;
             task.params.oaicompat_cmpl_id = completion_id;
             // oaicompat_model is already populated by params_from_json_cmpl
 
@@ -330,7 +309,7 @@ int LlamaServer::completion_generate_str(const json& data, std::string& result_s
     return 0;
 }
 
-static std::shared_ptr<server_response_reader> rd_stream_ = nullptr;
+static std::shared_ptr<server_response_reader_ex> rd_stream_ = nullptr;
 
 int LlamaServer::completion_stream_generate(const json& data) {
     LOG_DBG("this: %p\n", this);
@@ -346,9 +325,11 @@ int LlamaServer::completion_stream_generate(const json& data) {
     const auto completion_id = gen_chatcmplid();
     // need to store the reader as a pointer, so that it won't be destroyed when the handle returns
     // use shared_ptr as it's shared between the chunked_content_provider() and on_complete()
-    if (!rd_stream_) {
-        rd_stream_ =  std::make_shared<server_response_reader>(this);
+    if (rd_stream_) {
+        rd_stream_.reset();
     }
+
+    rd_stream_ = std::make_shared<server_response_reader_ex>(this, HTTP_POLLING_SECONDS);
 
     try {
         std::vector<server_task> tasks;
@@ -366,7 +347,7 @@ int LlamaServer::completion_stream_generate(const json& data) {
             task.id_slot = json_value(data, "id_slot", -1);
 
             // OAI-compat
-            task.params.oaicompat = OAICOMPAT_TYPE_NONE;
+            task.params.res_type = TASK_RESPONSE_TYPE_NONE;
             task.params.oaicompat_cmpl_id = completion_id;
             // oaicompat_model is already populated by params_from_json_cmpl
             SRV_DBG("push_back one task i=%d", i);
@@ -444,11 +425,18 @@ int LlamaServer::completion_stream_generate_next_token_str(std::string& result_s
     if (confirm) {
         SRV_INF("confirm: %d\n", confirm);
         result = queue_results.recv_aync_confirm(rd_stream_->id_tasks);
+        if (!rd_stream_->states.empty()) {
+            // update the generation state if needed
+            size_t idx = result->get_index();
+            GGML_ASSERT(idx < rd_stream_->states.size());
+            result->update(rd_stream_->states[idx]);
+        }
+
         SRV_INF("result confirm: %p\n", result.get());
     } else {
-        SRV_INF("confirm: %d\n", confirm);
+        SRV_INF("no confirm: %d\n", confirm);
         result2 = queue_results.recv_aync(rd_stream_->id_tasks);
-        SRV_INF("result not confirm: %p\n", result2);
+        SRV_INF("result no confirm: %p\n", result2);
     }
 
     if (confirm && !result) {
@@ -468,6 +456,13 @@ int LlamaServer::completion_stream_generate_next_token_str(std::string& result_s
             return -1;
         }
 
+        if (!rd_stream_->states.empty()) {
+            // update the generation state if needed
+            size_t idx = result2->get_index();
+            GGML_ASSERT(idx < rd_stream_->states.size());
+            result2->update(rd_stream_->states[idx]);
+        }
+
         result_str = dump_result(result2->to_json());
         rtrim(result_str);
         SRV_INF("result_str not confirm: %s\n", result_str.c_str());
@@ -479,6 +474,13 @@ int LlamaServer::completion_stream_generate_next_token_str(std::string& result_s
         rd_stream_->stop();
         generate_status = -1;
         return -1;
+    }
+
+    if (!rd_stream_->states.empty()) {
+        // update the generation state if needed
+        size_t idx = result->get_index();
+        GGML_ASSERT(idx < rd_stream_->states.size());
+        result->update(rd_stream_->states[idx]);
     }
 
     GGML_ASSERT(dynamic_cast<server_task_result_cmpl_partial*>(result.get()) != nullptr ||
@@ -731,8 +733,8 @@ int completion_load_model(HANDLE h, std::string model_path) {
     p_params->warmup = false;
     p_params->hostname = "0.0.0.0";
     p_params->port = 7901;
-    p_params->verbosity = -888;
-    common_log_set_verbosity_thold(-888); // 负数用于同化llama.cpp日志
+    p_params->verbosity = -1;
+    common_log_set_verbosity_thold(-1);
 
     common_init();
 
@@ -768,7 +770,7 @@ int completion_load_model(HANDLE h, std::string model_path) {
 
     ctx_server->model_status = 0;
 
-    ctx_server->initialize();
+    ctx_server->init();
 
     LOG_DBG("%s: model loaded\n", __func__);
 
@@ -913,7 +915,7 @@ int completion_load_model_by_buffer(HANDLE h, uint8_t** buffers, size_t* bufferS
 
     ctx_server->model_status = 0;
     LOG_INF("%s", "++before call init_by_buffer\r\n");
-    ctx_server->initialize();
+    ctx_server->init();
     LOG_INF("%s", "++after call init_by_buffer\r\n");
 
     LOG_DBG("%s: model loaded\n", __func__);
