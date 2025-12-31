@@ -20,9 +20,6 @@ xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2025/12/29/2330/windows11/houmo-HLIESDCpp-xh2_1.1.0_windows11_x86_64.tar.gz"
 
-# libtorch 下载地址
-libtorch_url="http://10.10.1.53:8082/artifactory/thirdparty_local/libtorch/torch.zip"
-
 # 下载文件并检查是否成功
 download_file() {
     local url=$1
@@ -30,25 +27,6 @@ download_file() {
     echo "Downloading $url..."
     wget "$url" -O "$output" || { echo "Failed to download $url"; return 1; }
     echo "Download completed: $output"
-}
-
-deploy_torch() {
-    # 检查torch.zip是否存在
-    if [ ! -f "third_party/torch.zip" ]; then
-        echo "未找到torch.zip，开始下载..."
-        download_file "$libtorch_url" "third_party/torch.zip"
-    else
-        echo "找到torch.zip文件，跳过下载"
-    fi
-
-    # 检查目标目录是否存在，若存在则删除
-    if [ -d "third_party/libtorch" ]; then
-        echo "删除已存在的 third_party/libtorch 目录..."
-        rm -rf third_party/libtorch
-    fi
-
-    # 解压文件
-    unzip -o third_party/torch.zip -d third_party/
 }
 
 deploy_llama_sdk() {
@@ -141,7 +119,6 @@ main() {
             ;;
     esac
 
-    deploy_torch
     echo "Deployed Dadao SDK and System SDK for $PLATFORM/$ARCH."
 }
 # 执行主函数

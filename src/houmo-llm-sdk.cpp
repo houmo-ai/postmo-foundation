@@ -425,13 +425,6 @@ int LlamaServer::completion_stream_generate_next_token_str(std::string& result_s
     if (confirm) {
         SRV_INF("confirm: %d\n", confirm);
         result = queue_results.recv_aync_confirm(rd_stream_->id_tasks);
-        if (!rd_stream_->states.empty()) {
-            // update the generation state if needed
-            size_t idx = result->get_index();
-            GGML_ASSERT(idx < rd_stream_->states.size());
-            result->update(rd_stream_->states[idx]);
-        }
-
         SRV_INF("result confirm: %p\n", result.get());
     } else {
         SRV_INF("no confirm: %d\n", confirm);
