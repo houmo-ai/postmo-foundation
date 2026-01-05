@@ -83,6 +83,13 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         return -1;
     }
 
+    if (params.n_parallel == 1 && params.kv_unified == false && !params.has_speculative()) {
+        LOG_WARN("setting n_parallel = 1 and kv_unified = true (add -kvu to disable this)");
+
+        params.n_parallel = 1;
+        params.kv_unified = true;
+    }
+
     // 用于models请求，返回Qwen2.5-7B/Qwen3-8B ..
     params.model_alias = HlieUtil::extract_filename(params.model.path);
     if (!HlieUtil::has_model_params(params.model_alias)) {
@@ -99,6 +106,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         if (HlieUtil::is_relative_path(params.mmproj.path)) {
             params.mmproj.path = HlieUtil::join_paths(model_dir, params.mmproj.path);
         }
+        LOG_INFO("LLM mmproj path: {}", params.mmproj.path);
     }
 
     if (const auto& devices = model_info.get_devices();
@@ -147,6 +155,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         devices_.clear();
         return -1;
     }
+    LOG_INFO("LLM load model done");
 
     model_name_ = model_info.get_model_name();
     llama_server_->init();

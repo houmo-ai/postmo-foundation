@@ -25,42 +25,38 @@ namespace {
     const std::regex kCoreRegex(R"((\d+)\s*core)", std::regex::icase);
     const std::regex kVlFamilyRegex(R"(qwen2\.5-vl|qwen3-vl)", std::regex::icase);
     const std::regex kVlResRegex(R"(vit_(\d+)(?:[_x](\d+))?)", std::regex::icase);
-    const std::regex kBuildTimeRegex(R"((\d{14}))");
-
-    std::string parse_mmproj_vl_spec(const std::string& name) {
-        std::smatch m;
-        if (std::regex_search(name, m, kVlResRegex)) {
-            if (m[2].matched)
-                return "vit_" + m[1].str() + "_" + m[2].str();
-            return "vit_" + m[1].str();
-        }
-        return "unknown";
-    }
+    const std::regex kBuildTimeRegex(R"((\d{8}|\d{14}))");
 
     std::string build_vl_match_key(const std::string& name) {
         std::smatch m;
 
         if (!std::regex_search(name, m, kVlFamilyRegex))
             return {};
-
         const std::string vl_family = to_lower(m.str());
 
         if (!std::regex_search(name, m, kXhRegex))
             return {};
-
         const std::string xh = to_lower(m.str());
 
         if (!std::regex_search(name, m, kParamRegex))
             return {};
-
         const std::string param = to_lower(m.str());
 
         if (!std::regex_search(name, m, kVersionRegex))
             return {};
-
         const std::string version = to_lower(m.str());
 
-        // xh2_qwen2.5-vl_7b_v0.6.0
+        std::string build_time;
+        if (std::regex_search(name, m, kBuildTimeRegex)) {
+            build_time = m.str(); // 20251228 or 20251228103045
+        }
+
+        // xh2_qwen3-vl_4b_v0.7.0_20251228
+        if (!build_time.empty()) {
+            return xh + "_" + vl_family + "_" + param + "_" + version + "_" + build_time;
+        }
+
+        // 兼容老模型（没 build time）
         return xh + "_" + vl_family + "_" + param + "_" + version;
     }
 
@@ -216,6 +212,15 @@ int HLIEModelInfo::parse_from_gguf_filename(const std::string& file_path) {
     return 0;
 }
 
+std::string HLIEModelInfo::parse_mmproj_vl_spec(const std::string& name) {
+    std::smatch m;
+    if (std::regex_search(name, m, kVlResRegex)) {
+        if (m[2].matched)
+            return "vit_" + m[1].str() + "_" + m[2].str();
+        return "vit_" + m[1].str();
+    }
+    return "unknown";
+}
 
 void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, const std::string& dir) {
     if (!std::filesystem::exists(dir)) {
