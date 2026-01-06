@@ -100,6 +100,7 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
         } else {
             model_name_.clear();
         }
+        model_key_ = model_name_;
     } catch (const nlohmann::json::exception& ex) {
         LOG_ERROR("JSON Error: {}", ex.what());
         return -2;

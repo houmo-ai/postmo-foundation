@@ -90,11 +90,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         params.kv_unified = true;
     }
 
-    // 用于models请求，返回Qwen2.5-7B/Qwen3-8B ..
-    params.model_alias = HlieUtil::extract_filename(params.model.path);
-    if (!HlieUtil::has_model_params(params.model_alias)) {
-        params.model_alias += "-" + model_info.get_params();
-    }
+    params.model_alias = model_info.get_model_name();
 
     // 兼容绝对路径与相对路径
     if (HlieUtil::is_relative_path(params.model.path)) {
@@ -157,7 +153,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     }
     LOG_INFO("LLM load model done");
 
-    model_name_ = model_info.get_model_name();
+    model_key_ = model_info.model_key_;
     llama_server_->init();
     is_ready.store(true);
     LOG_DEBUG("LLM init done");

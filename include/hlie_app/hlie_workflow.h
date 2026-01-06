@@ -52,6 +52,7 @@ public:
 
     struct ModelInstance {
         int port;
+        std::string key;
         server_model_meta meta;
         HLIEModelInfo model_info;
     };
@@ -77,7 +78,7 @@ private:
     std::vector<server_model_meta> get_all_model_metas();
 
     std::optional<server_model_meta> get_model_meta(const std::string& name);
-    std::optional<ModelInstance> get_model_inst(const std::string& model_name);
+    std::optional<std::reference_wrapper<ModelInstance>> get_model_inst(const std::string& model_name);
 
     static int generate_instance_id() {
         static std::atomic counter{0};

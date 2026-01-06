@@ -213,19 +213,22 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
     // 主进程或者是负载均衡模式
     model_infos = load_model_info_files_from_directory(model_dir);
     HLIEModelInfo::ScanLocalModelsFromDir(model_infos, model_dir_);
-    for (const auto& model_info : model_infos) {
+    for (auto& model_info : model_infos) {
         ModelInstance model_instance;
         server_model_meta meta;
         meta.name = model_info.get_model_name();
         meta.path = model_info.get_model_path();
         meta.path_mmproj = model_info.get_mm_proj_path();
         model_instance.meta = std::move(meta);
-        model_instance.model_info = model_info;
 
         auto model_key = model_info.get_model_name();
         if (!model_info.get_mm_proj_path().empty()) {
             model_key += "_" + model_info.vl_spec_;
         }
+
+        model_info.model_key_ = model_key;
+        model_instance.key = model_key;
+        model_instance.model_info = model_info;
         model_instances_[model_key] = std::move(model_instance);
         LOG_INFO("Scanned Local Model: {}", model_key);
     }
@@ -369,7 +372,7 @@ void HLIEWorkflow::run() {
     if (llm_model_service_) {
         llm_model_service_->run();
 
-        model_instances_[llm_model_service_->get_model_name()].meta.status = SERVER_MODEL_STATUS_LOADED;
+        model_instances_[llm_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_LOADED;
 
         if (is_slave_) {
             common_params params;
@@ -377,7 +380,7 @@ void HLIEWorkflow::run() {
             const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
             std::thread([=] {
                 std::this_thread::sleep_for(std::chrono::minutes(1));
-                update_status(params, master_port, llm_model_service_->get_model_name(), port_);
+                update_status(params, master_port, llm_model_service_->get_model_key(), port_);
             }).detach();
         }
     }
@@ -530,6 +533,10 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         return res;
     }
 
+    if (model_name.empty() && model_type == SD) {
+        model_name = HLIEModelType::SD3;
+    }
+
     std::optional<server_model_meta> meta = std::nullopt;
     if (!model_name.empty()) { // 兼容LLAMA新方式， 检查模型是否存在
         meta = get_model_meta(model_name);
@@ -609,6 +616,8 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
                 if (!model_info_tmp.get_mm_proj_path().empty()) {
                     model_key += "_" + model_info_tmp.vl_spec_;
                 }
+                model_info_tmp.model_key_ = model_key;
+                model_instance.key = model_key;
                 model_instances_[model_key] = std::move(model_instance);
                 LOG_INFO("Service Starting Add Model: {} {}", model_key, model_info_tmp.get_mm_proj_path());
             }
@@ -619,7 +628,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
             return res;
         }
-        const auto& model_info = model_inst->model_info;
+        const auto& model_info = model_inst->get().model_info;
         if (model_info.model_version_.empty()) {
             res->error(format_error_response_ex("failed to parse build_version from model name", ERROR_TYPE_INVALID_REQUEST, 80007));
             return res;
@@ -630,7 +639,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             return res;
         }
 
-        model_inst->meta.status = SERVER_MODEL_STATUS_LOADING;
+        model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADING;
         if (!llm_model_service_) {
             llm_model_service_ = std::make_shared<LLModelService>();
             if (llm_model_service_->init(model_dir_, model_info) < 0) {
@@ -640,7 +649,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             }
 
             llm_model_service_->run();
-            model_inst->meta.status = SERVER_MODEL_STATUS_LOADED;
+            model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
         } else {
             // 子进程实例参数
             json_info_file = generate_meta_info(model_info, model_dir_, res);
@@ -855,7 +864,7 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
 void HLIEWorkflow::set_server_port(const int port) {
     port_ = port;
     if (llm_model_service_) {
-        model_instances_[llm_model_service_->get_model_name()].meta.port = port;
+        model_instances_[llm_model_service_->get_model_key()].meta.port = port;
     }
 #ifdef HOUMO_XH2
     if (sd_model_service_) {
@@ -883,7 +892,7 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
 
     if (instance_id == 0) {
         if (llm_model_service_) {
-            model_instances_[llm_model_service_->get_model_name()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
+            model_instances_[llm_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
             llm_model_service_->stop();
             llm_model_service_.reset();
         }
@@ -922,7 +931,7 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
     json processors = json::array();
     json models = json::array();
     if (llm_model_service_) {
-        models.push_back(llm_model_service_->get_model_name());
+        models.push_back(llm_model_service_->get_model_key());
     }
     if (sd_model_service_) {
         models.push_back(HLIEModelType::SD3);
@@ -955,22 +964,21 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
 
 server_http_res_ptr HLIEWorkflow::handle_post_status(const server_http_req& req) {
     auto res = std::make_unique<server_res_generator>();
-    json body = json::parse(req.body);
+    const json body = json::parse(req.body);
     std::string model = json_value(body, "model", std::string());
-    std::string value = json_value(body, "value", std::string());
-    // for now, we only allow updating to LOADED status
+    const std::string value = json_value(body, "value", std::string());
+    const int port = json_value(body, "port", 0);
+
     const auto status = server_model_status_from_string(value);
     if (status != SERVER_MODEL_STATUS_LOADED) {
         throw std::runtime_error("invalid status value");
     }
 
-    if (auto meta = get_model_meta(model); meta.has_value()) {
-        meta->status = status;
+    if (const auto inst = get_model_inst(model); inst.has_value()) {
         std::lock_guard lk(mutex_);
-        if (const auto it = model_instances_.find(model); it != model_instances_.end()) {
-            it->second.meta = meta.value();
-            LOG_INFO("Model[{}] loaded", model);
-        }
+        inst->get().meta.status = status;
+        inst->get().meta.port = port;
+        LOG_INFO("Model[{}] loaded, port: {}", model, port);
     }
 
     res->ok({{"success", true}});
@@ -1046,20 +1054,20 @@ std::optional<server_model_meta> HLIEWorkflow::get_model_meta(const std::string&
     return std::nullopt;
 }
 
-std::optional<HLIEWorkflow::ModelInstance> HLIEWorkflow::get_model_inst(const std::string& model_name) {
+std::optional<std::reference_wrapper<HLIEWorkflow::ModelInstance>> HLIEWorkflow::get_model_inst(const std::string& model_name) {
     std::unique_lock lk(mutex_);
 
     if (const auto it = model_instances_.find(model_name); it != model_instances_.end()) {
-        return it->second;
+        return std::ref(it->second);
     }
 
-    for (const auto& [name, inst] : model_instances_) {
+    for (auto& [name, inst] : model_instances_) {
         if (inst.meta.path_mmproj.empty()) {
             continue;
         }
 
         if (is_equal_before_vit(name, model_name)) {
-            return inst;
+            return std::ref(inst);
         }
     }
 

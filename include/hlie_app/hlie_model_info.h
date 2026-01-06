@@ -50,6 +50,7 @@ public:
     // ===== 模型类型 =====
     bool is_llm_ = true;
     bool is_multi_model_ = false; // VL = true
+    std::string model_key_;
 
     // ===== VL 相关 =====
     std::string mm_proj_path_;    // mmproj 路径

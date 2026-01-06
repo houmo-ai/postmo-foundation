@@ -51,8 +51,8 @@ public:
 
     server_http_res_ptr handle_props(const server_http_req& req) const;
 
-    [[nodiscard]] std::string get_model_name() const {
-        return model_name_;
+    [[nodiscard]] std::string get_model_key() const {
+        return model_key_;
     }
 
 private:
@@ -62,7 +62,7 @@ private:
     std::unique_ptr<std::thread> worker_thread_;  // 工作线程
     std::atomic<bool> should_stop_{false};  // 线程停止标志
     std::atomic<bool> is_ready = false;
-    std::string model_name_;
+    std::string model_key_;
     int batch_num_{1};
 };
 
