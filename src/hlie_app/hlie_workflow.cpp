@@ -22,14 +22,24 @@
 
 HLIE_NAMESPACE_BEGIN
 
-#define CHECK_MODEL_READY(service)                                                                                                         \
+#define CHECK_MODEL_READY_IMPL(service, check_name)                                                                                             \
     do {                                                                                                                                   \
         auto res = std::make_unique<server_res_generator>();                                                                               \
         if (!(service) || (service)->get_state() != SERVER_STATE_READY) {                                                                  \
             res->error(format_error_response("Model is not available for now.", ERROR_TYPE_UNAVAILABLE));                                  \
             return res;                                                                                                                    \
         }                                                                                                                                  \
+        if ((check_name)) {                                                                                                                \
+            const json body = json::parse(req.body);                                                                                       \
+            const std::string name = json_value(body, "model", std::string());                                                             \
+            if (!router_validate_model(name, res)) {                                                                                       \
+                return res;                                                                                                                \
+            }                                                                                                                              \
+        }                                                                                                                                  \
     } while (0)
+
+#define CHECK_MODEL_READY(service) CHECK_MODEL_READY_IMPL(service, true)
+#define CHECK_SERVICE(service) CHECK_MODEL_READY_IMPL(service, false)
 
 namespace {
     std::vector<HLIEModelInfo> load_model_info_files_from_directory(const std::string& directory_path) {
@@ -129,7 +139,8 @@ namespace {
         return json_info_file;
     }
 
-    void update_status(const common_params& base_params, const int router_port, const std::string& name, const int port) {
+    void update_status(const common_params& base_params, const int router_port, const std::string& name, const int port,
+        const server_model_status status = SERVER_MODEL_STATUS_LOADED) {
         // send a notification to the router server that a model instance is ready
         httplib::Client cli(base_params.hostname, router_port);
         cli.set_connection_timeout(0, 200000); // 200 milliseconds
@@ -145,7 +156,7 @@ namespace {
         json body;
         body["model"] = name;
         body["port"] = port;
-        body["value"] = server_model_status_to_string(SERVER_MODEL_STATUS_LOADED);
+        body["value"] = server_model_status_to_string(status);
         req.body = body.dump();
 
         SRV_INF("notifying router server (port=%d) that model %s is ready\n", router_port, name.c_str());
@@ -405,11 +416,23 @@ void HLIEWorkflow::run() {
 void HLIEWorkflow::stop() const {
 #ifdef HOUMO_XH2
     if (sd_model_service_) {
+        if (is_slave_) {
+            common_params params;
+            params.hostname = "127.0.0.1";
+            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
+            update_status(params, master_port, HLIEModelType::SD3, port_, SERVER_MODEL_STATUS_UNLOADED);
+        }
         sd_model_service_->stop();
     }
 #endif
 
     if (llm_model_service_) {
+        if (is_slave_) {
+            common_params params;
+            params.hostname = "127.0.0.1";
+            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
+            update_status(params, master_port, llm_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
+        }
         llm_model_service_->stop();
     }
 }
@@ -737,6 +760,26 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     return res;
 }
 
+bool HLIEWorkflow::router_validate_model(const std::string& name, const std::unique_ptr<server_res_generator>& res) {
+    if (name.empty()) {
+        res->error(format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
+        return false;
+    }
+
+    const auto meta = get_model_inst(name);
+    if (!meta.has_value()) {
+        res->error(format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
+        return false;
+    }
+
+    if (meta->get().meta.status != SERVER_MODEL_STATUS_LOADED) {
+        res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+        return false;
+    }
+
+    return true;
+}
+
 std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
     auto make_handler = [this](auto func) { return [this, func](const server_http_req& req) { return (this->*func)(req); }; };
     return {{
@@ -823,7 +866,7 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/props"},
                 GET,
                 [this](const server_http_req& req) -> server_http_res_ptr {
-                    CHECK_MODEL_READY(llm_model_service_);
+                    CHECK_SERVICE(llm_model_service_);
                     return llm_model_service_->handle_props(req);
                 },
                 true,
@@ -1005,11 +1048,13 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
 
     std::unique_lock lock(mutex_);
     if (model_type == LLM && llm_model_service_) {
+        model_instances_[llm_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
         llm_model_service_->stop();
         llm_model_service_.reset();
     }
 #ifdef HOUMO_XH2
     if (model_type == SD && sd_model_service_) {
+        model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_UNLOADED;
         sd_model_service_->stop();
         sd_model_service_.reset();
     }
