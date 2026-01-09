@@ -651,7 +651,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
             return res;
         }
-        const auto& model_info = model_inst->get().model_info;
+        auto& model_info = model_inst->get().model_info;
         if (model_info.model_version_.empty()) {
             res->error(format_error_response_ex("failed to parse build_version from model name", ERROR_TYPE_INVALID_REQUEST, 80007));
             return res;
@@ -661,6 +661,8 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             res->error(format_error_response_ex("build_version must be >= v0.7.0", ERROR_TYPE_INVALID_REQUEST, 80007));
             return res;
         }
+
+        model_info.set_devices(devices);
 
         model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADING;
         if (!llm_model_service_) {

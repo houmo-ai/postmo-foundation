@@ -27,7 +27,9 @@ public:
     void build_sd(const std::string& model_type, const std::string& vae_model, const std::string& t5_model, const std::string& clip_model,
                   const std::string& clip_l_model, const std::string& mmdit_model, const std::string& devices);
 
-    int to_json_file(const std::string& file_path) const;
+    void set_devices(const std::string& devices) { devices_ = devices; }
+
+    [[nodiscard]] int to_json_file(const std::string& file_path) const;
 
     [[nodiscard]] const std::string& get_model_name() const { return model_name_; }
     [[nodiscard]] const std::string& get_model_path() const { return model_path_; }
@@ -46,6 +48,7 @@ public:
     [[nodiscard]] const std::string& get_mmdit_model() const { return mmdit_model_; }
     [[nodiscard]] const std::string& get_vae_model() const { return vae_model_; }
     [[nodiscard]] const std::string& get_devices() const { return devices_; }
+    [[nodiscard]] int get_device_num() const { return device_num_; }
 
     // ===== 模型类型 =====
     bool is_llm_ = true;

@@ -97,6 +97,7 @@ POST http://localhost:7901/hlie/v1/start
 Content-Type: application/json
 
 {
+  "devices": "1",
   "model": "HiModel_xh2_qwen3-vl_4b_256_32k_b1_1chip_2cores_v0.7.0_20251220",
   "params": {
     "mm_proj_path": "mmproj_xh2_qwen3-vl_4b_2cores_vit_448x448_v0.7.0_20251220.gguf"
