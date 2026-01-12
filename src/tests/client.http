@@ -152,4 +152,13 @@ Content-Type: application/json
   }
 }
 
+### embed
+POST http://localhost:7901/v1/embeddings
+Content-Type: application/json
+
+{
+  "model": "HiModel_xh2_gte_1.5b_256_1chip_2cores_v0.7.0_20251228",
+  "input": "这是一段测试的文笔",
+  "n_tokens": 5
+}
 

@@ -50,6 +50,8 @@ public:
     [[nodiscard]] const std::string& get_devices() const { return devices_; }
     [[nodiscard]] int get_device_num() const { return device_num_; }
 
+    bool is_embedding_model() const;
+
     // ===== 模型类型 =====
     bool is_llm_ = true;
     bool is_multi_model_ = false; // VL = true

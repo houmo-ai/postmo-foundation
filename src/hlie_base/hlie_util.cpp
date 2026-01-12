@@ -182,9 +182,17 @@ std::tuple<int, int, int> HlieUtil::parse_version(const std::string& v) {
     return {major, minor, patch};
 }
 
-bool HlieUtil::version_ge(const std::string& v, const std::string& target)
-{
+bool HlieUtil::version_ge(const std::string& v, const std::string& target) {
     return parse_version(v) >= parse_version(target);
+}
+
+bool HlieUtil::contains_ignore_case(std::string s, const std::string& key) {
+    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+
+    std::string k = key;
+    std::transform(k.begin(), k.end(), k.begin(), ::tolower);
+
+    return s.find(k) != std::string::npos;
 }
 
 HLIE_NAMESPACE_END

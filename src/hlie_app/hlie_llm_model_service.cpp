@@ -90,6 +90,10 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         params.kv_unified = true;
     }
 
+    if (model_info.is_embedding_model()) {
+        params.embedding = true;
+    }
+
     params.model_alias = model_info.get_model_name();
 
     // 兼容绝对路径与相对路径
@@ -224,7 +228,7 @@ server_http_res_ptr LLModelService::handle_completions_oai(const server_http_req
 
 server_http_res_ptr LLModelService::handle_embeddings(const server_http_req& req, const task_response_type oaicompat) const {
     if (oaicompat == TASK_RESPONSE_TYPE_OAI_EMBD) {
-        auto res = llama_server_routes_->post_completions_oai(req);
+        auto res = llama_server_routes_->post_embeddings_oai(req);
         return res;
     }
 

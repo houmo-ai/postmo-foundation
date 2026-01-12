@@ -4,6 +4,7 @@
 #include <regex>
 
 #include "hlie_base/hlie_logger.h"
+#include "hlie_base/hlie_util.h"
 #include "json.hpp"
 #include "log.h"
 
@@ -221,6 +222,11 @@ std::string HLIEModelInfo::parse_mmproj_vl_spec(const std::string& name) {
         return "vit_" + m[1].str();
     }
     return "unknown";
+}
+
+bool HLIEModelInfo::is_embedding_model() const {
+    return HlieUtil::contains_ignore_case(model_name_, "bge") ||
+           HlieUtil::contains_ignore_case(model_name_, "gte");
 }
 
 void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, const std::string& dir) {
