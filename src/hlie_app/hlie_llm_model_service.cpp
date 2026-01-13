@@ -109,8 +109,12 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         LOG_INFO("LLM mmproj path: {}", params.mmproj.path);
     }
 
-    if (const auto& devices = model_info.get_devices();
-        !devices.empty() && Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1) == 1) {
+    auto devices = model_info.get_devices();
+    if (model_info.get_device_num() == 4) { // 4 chips 目前特殊处理
+        devices = "0,1,2,3";
+    }
+
+    if (!devices.empty() && Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1) == 1) {
         // 单实例模式可以定制Model Devices
         if (!HlieUtil::is_valid_devices(devices)) {
             LOG_ERROR("LLM cannot acquire model specific device \"{}\"", devices);

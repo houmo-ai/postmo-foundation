@@ -80,7 +80,7 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
         context_size_ = config.value("ContextSize", 0);
         cores_ = config.value("Cores", 0);
         batch_num_ = config.value("BatchNum", 1);
-        xh_version_ = config.value("XHVersion", 1);
+        xh_version_ = config.value("XHVersion", 2);
         is_multi_model_ = config.value("IsMM", false);
         params_ = config.value("Params", "");
         mm_proj_path_ = config.value("MMProj", "");
@@ -94,7 +94,16 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
         is_llm_ = true;
         if (!model_path_.empty()) {
             const std::filesystem::path p(model_path_);
-            model_name_ = p.stem().string();   // 去掉扩展名
+            model_name_ = p.stem().string(); // 去掉扩展名
+            // ===== device =====
+            std::smatch m;
+            // 1chip / 2chips
+            if (const std::regex chip_regex(R"((\d+)\s*chips?)", std::regex::icase); std::regex_search(model_name_, m, chip_regex)) {
+                device_num_ = std::stoi(m[1].str());
+            } else if (const std::regex device_regex(R"((\d+)d)", std::regex::icase); std::regex_search(model_name_, m, device_regex)) {
+                // 兼容旧格式：如 2d
+                device_num_ = std::stoi(m[1].str());
+            }
         } else if (!clip_model_.empty()) {
             model_name_ = "sd3";
             is_llm_ = false;
@@ -167,9 +176,12 @@ int HLIEModelInfo::parse_from_gguf_filename(const std::string& file_path) {
     else
         cores_ = 2;
 
-    // ===== device=====
-    device_num_ = 1;
-    if (const std::regex device_regex(R"((\d+)d)", std::regex::icase); std::regex_search(name, m, device_regex)) {
+    // ===== device =====
+    // 1chip / 2chips
+    if (const std::regex chip_regex(R"((\d+)\s*chips?)", std::regex::icase); std::regex_search(name, m, chip_regex)) {
+        device_num_ = std::stoi(m[1].str());
+    } else if (const std::regex device_regex(R"((\d+)d)", std::regex::icase); std::regex_search(name, m, device_regex)) {
+        // 兼容旧格式：如 2d
         device_num_ = std::stoi(m[1].str());
     }
 
@@ -179,9 +191,8 @@ int HLIEModelInfo::parse_from_gguf_filename(const std::string& file_path) {
         is_multi_model_ = true;
     } else {
         // 非 VL：尽量提 family
-        auto pos = name.find("qwen");
-        if (pos != std::string::npos) {
-            auto end = name.find_first_of("-_", pos);
+        if (const auto pos = name.find("qwen"); pos != std::string::npos) {
+            const auto end = name.find_first_of("-_", pos);
             model_type_ = name.substr(pos, end - pos);
         } else {
             model_type_.clear();
@@ -225,8 +236,7 @@ std::string HLIEModelInfo::parse_mmproj_vl_spec(const std::string& name) {
 }
 
 bool HLIEModelInfo::is_embedding_model() const {
-    return HlieUtil::contains_ignore_case(model_name_, "bge") ||
-           HlieUtil::contains_ignore_case(model_name_, "gte");
+    return HlieUtil::contains_ignore_case(model_name_, "bge") || HlieUtil::contains_ignore_case(model_name_, "gte");
 }
 
 void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, const std::string& dir) {
@@ -270,8 +280,14 @@ void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, c
         const std::string filename = p.filename().string();
         const std::string key = build_vl_match_key(filename);
 
-        if (key.empty())
+        if (key.empty()) { // 名称不规范，直接用最简陋的方式构建info
+            LOG_WARN("{} parse info failed, use basic path only ",filename);
+            HLIEModelInfo base;
+            base.is_multi_model_ = true;
+            base.model_path_ = filename;
+            result.push_back(base);
             continue;
+        }
 
         auto it = mmproj_index.find(key);
         if (it == mmproj_index.end())
@@ -298,6 +314,16 @@ void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, c
             model.mm_proj_path_.clear();
             model.vl_spec_.clear();
             result.push_back(model);
+        } else {
+            LOG_WARN("{} parse info failed, use basic path only ",p.string());
+            HLIEModelInfo base;
+            base.is_multi_model_ = true;
+            base.model_path_ = p.string();
+            base.model_name_ = p.stem().string();
+            model.is_multi_model_ = false;
+            model.mm_proj_path_.clear();
+            model.vl_spec_.clear();
+            result.push_back(base);
         }
     }
 }

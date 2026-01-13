@@ -633,13 +633,12 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
                 model_meta.path = model_info_tmp.get_model_path();
                 model_meta.path_mmproj = model_info_tmp.get_mm_proj_path();
                 model_instance.meta = std::move(model_meta);
-                model_instance.model_info = model_info_tmp;
-
                 auto model_key = model_info_tmp.get_model_name();
                 if (!model_info_tmp.get_mm_proj_path().empty()) {
                     model_key += "_" + model_info_tmp.vl_spec_;
                 }
                 model_info_tmp.model_key_ = model_key;
+                model_instance.model_info = model_info_tmp;
                 model_instance.key = model_key;
                 model_instances_[model_key] = std::move(model_instance);
                 LOG_INFO("Service Starting Add Model: {} {}", model_key, model_info_tmp.get_mm_proj_path());
