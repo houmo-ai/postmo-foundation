@@ -86,8 +86,8 @@ inline json format_error_response_ex(const std::string& message, const error_typ
 }
 
 // generator-like API for HTTP response generation
-struct server_res_generator : server_http_res {
-    server_res_generator() = default;
+struct server_res_generator_light : server_http_res {
+    server_res_generator_light() = default;
     json response_data_saved;
     void ok(const json & response_data) {
         status = 200;

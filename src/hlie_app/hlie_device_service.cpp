@@ -92,7 +92,7 @@ server_http_res_ptr HLIEDeviceService::handle_devices(const server_http_req& req
     }
 
     const json resp = {{"code", 0}, {"devices", devices}};
-    auto res = std::make_unique<server_res_generator>();
+    auto res = std::make_unique<server_res_generator_light>();
     res->ok(resp);
     return res;
 }

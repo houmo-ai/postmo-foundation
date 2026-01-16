@@ -356,7 +356,7 @@ server_http_res_ptr SDModelService::handle_image_generations(const server_http_r
                 std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
             response["data"] = nlohmann::json::array({{{"b64_json", b64_json}}});
             response["timings"] = nlohmann::json::object({{"predicted_ms", predicted_ms}});
-            auto res = std::make_unique<server_res_generator>();
+            auto res = std::make_unique<server_res_generator_light>();
             res->ok(response);
             return res;
         }

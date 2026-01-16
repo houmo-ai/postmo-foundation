@@ -24,7 +24,7 @@ HLIE_NAMESPACE_BEGIN
 
 #define CHECK_MODEL_READY_IMPL(service, check_name)                                                                                             \
     do {                                                                                                                                   \
-        auto res = std::make_unique<server_res_generator>();                                                                               \
+        auto res = std::make_unique<server_res_generator_light>();                                                                               \
         if (!(service) || (service)->get_state() != SERVER_STATE_READY) {                                                                  \
             res->error(format_error_response("Model is not available for now.", ERROR_TYPE_UNAVAILABLE));                                  \
             return res;                                                                                                                    \
@@ -82,7 +82,7 @@ namespace {
         return model_infos;
     }
 
-    HLIEModelInfo parse_and_build_sd_model(const json& params, const std::unique_ptr<server_res_generator>& res,
+    HLIEModelInfo parse_and_build_sd_model(const json& params, const std::unique_ptr<server_res_generator_light>& res,
                                            const std::string& model_type, const std::string& devices) {
         // SD 模型必须字段检查
         const char* required_fields[] = {"vae_model", "t5_model", "clip_model", "clip_l_model", "mmdit_model"};
@@ -110,7 +110,7 @@ namespace {
     }
 
     std::string generate_meta_info(const HLIEModelInfo& model_info, const std::string& model_dir,
-                                   const std::unique_ptr<server_res_generator>& res) {
+                                   const std::unique_ptr<server_res_generator_light>& res) {
         using namespace std::chrono;
         const auto now = system_clock::now();
         const auto t = system_clock::to_time_t(now);
@@ -501,7 +501,7 @@ server_http_res_ptr HLIEWorkflow::handle_health(const server_http_req& req) cons
 }
 
 server_http_res_ptr HLIEWorkflow::handle_models(const server_http_req& req) {
-    auto res = std::make_unique<server_res_generator>();
+    auto res = std::make_unique<server_res_generator_light>();
     json models_json = json::array();
     const auto all_models = get_all_model_metas();
     std::time_t t = std::time(nullptr);
@@ -535,7 +535,7 @@ server_http_res_ptr HLIEWorkflow::handle_models(const server_http_req& req) {
 
 server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
-    auto res = std::make_unique<server_res_generator>();
+    auto res = std::make_unique<server_res_generator_light>();
     if (config_services->get_int("server", "replicas", 1) > 1) {
         // 集群|多实例模式下，不允许外部调用启动模型实例
         res->error(
@@ -716,13 +716,16 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
         if (!sd_model_service_) {
             sd_model_service_ = std::make_shared<SDModelService>();
+            model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADING;
             if (sd_model_service_->init(model_dir_, model_info) < 0) {
                 LOG_ERROR("failed to init the SD model service");
+                model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_UNLOADED;
                 res->error(format_error_response_ex("failed to init the SD model service", ERROR_TYPE_SERVER, 80001));
                 return res;
             }
 
             sd_model_service_->run();
+            model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADED;
         } else {
             // 子进程实例参数
             json_info_file = generate_meta_info(model_info, model_dir_, res);
@@ -761,7 +764,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     return res;
 }
 
-bool HLIEWorkflow::router_validate_model(const std::string& name, const std::unique_ptr<server_res_generator>& res) {
+bool HLIEWorkflow::router_validate_model(const std::string& name, const std::unique_ptr<server_res_generator_light>& res) {
     if (name.empty()) {
         res->error(format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
         return false;
@@ -919,7 +922,7 @@ void HLIEWorkflow::set_server_port(const int port) {
 
 server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
-    auto res = std::make_unique<server_res_generator>();
+    auto res = std::make_unique<server_res_generator_light>();
     if (config_services->get_int("server", "replicas", 1) > 1) {
         // 集群|多实例模式下，不允许外部调用启动模型实例
         res->error(
@@ -1001,13 +1004,13 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
     }
 
     const json resp = {{"code", 0}, {"processor", processors}};
-    auto res = std::make_unique<server_res_generator>();
+    auto res = std::make_unique<server_res_generator_light>();
     res->ok(resp);
     return res;
 }
 
 server_http_res_ptr HLIEWorkflow::handle_post_status(const server_http_req& req) {
-    auto res = std::make_unique<server_res_generator>();
+    auto res = std::make_unique<server_res_generator_light>();
     const json body = json::parse(req.body);
     std::string model = json_value(body, "model", std::string());
     const std::string value = json_value(body, "value", std::string());
@@ -1031,7 +1034,7 @@ server_http_res_ptr HLIEWorkflow::handle_post_status(const server_http_req& req)
 
 server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req) {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
-    auto res = std::make_unique<server_res_generator>();
+    auto res = std::make_unique<server_res_generator_light>();
     if (config_services->get_int("server", "replicas", 1) > 1) {
         // 集群|多实例模式下，不允许外部调用启动模型实例
         res->error(

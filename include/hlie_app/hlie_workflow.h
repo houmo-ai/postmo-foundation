@@ -70,7 +70,7 @@ private:
     [[nodiscard]] server_http_res_ptr handle_health(const server_http_req& req) const;
     server_http_res_ptr handle_models(const server_http_req& req);
     server_http_res_ptr start_service(const server_http_req& req);
-    bool router_validate_model(const std::string& name, const std::unique_ptr<server_res_generator>& res);
+    bool router_validate_model(const std::string& name, const std::unique_ptr<server_res_generator_light>& res);
     server_http_res_ptr stop_service(const server_http_req& req);
     [[nodiscard]] server_http_res_ptr handle_get_status(const server_http_req& req) const;
     [[nodiscard]] server_http_res_ptr handle_post_status(const server_http_req& req);
