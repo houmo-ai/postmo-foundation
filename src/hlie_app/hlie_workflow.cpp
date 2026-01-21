@@ -480,23 +480,12 @@ std::vector<std::string> HLIEWorkflow::get_api_keys() const {
 }
 
 server_http_res_ptr HLIEWorkflow::handle_health(const server_http_req& req) const {
-    json resp = {
-        {"status", "ok"},
-    };
-
-    server_http_res_ptr res = nullptr;
     if (llm_model_service_) {
-        res = llm_model_service_->handle_health(req);
+        return llm_model_service_->handle_health(req);
     }
 
-#ifdef HOUMO_XH2
-    if (sd_model_service_) {
-        if (sd_model_service_->handle_health(resp) < 0) {
-            throw CommonException(4, "sd model service health check failed");
-        }
-    }
-#endif
-
+    auto res = std::make_unique<server_res_generator_light>();
+    res->ok({{"status", "ok"}});
     return res;
 }
 
