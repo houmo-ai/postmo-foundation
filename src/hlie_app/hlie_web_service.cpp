@@ -265,7 +265,7 @@ void HLIEWebService::post(const std::string& path, const server_http_context::ha
     web_server_->Post(path, [handler](const httplib::Request& req, httplib::Response& res) {
         if (const std::string request_id = res.has_header("X-Request-ID") ? res.get_header_value("X-Request-ID") : "";
             !request_id.empty()) {
-            LOG_DEBUG("[Request-{}] start to generate", request_id);
+            LOG_DEBUG("[Request-{}] come in", request_id);
         }
         server_http_res_ptr response =
             handler(server_http_req{get_params(req), get_headers(req), req.path, req.body, req.is_connection_closed});

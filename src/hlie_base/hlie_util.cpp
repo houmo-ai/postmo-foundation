@@ -195,4 +195,26 @@ bool HlieUtil::contains_ignore_case(std::string s, const std::string& key) {
     return s.find(k) != std::string::npos;
 }
 
+int HlieUtil::parse_device(const std::string& devices, std::vector<int>& acquiring_devices) {
+
+    try {
+        std::stringstream ss(devices);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            // 去掉可能的空格
+            token.erase(0, token.find_first_not_of(' '));
+            token.erase(token.find_last_not_of(' ') + 1);
+
+            if (!token.empty()) {
+                acquiring_devices.push_back(std::stoi(token));
+            }
+        }
+    } catch (const std::exception& ex) {
+        LOG_ERROR("failed to parse acquiring devices \"{}\", ex: {}", devices, ex.what());
+        return -1;
+    }
+
+    return 0;
+}
+
 HLIE_NAMESPACE_END

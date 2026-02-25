@@ -185,6 +185,14 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         return -1;
     }
 
+#ifdef HOUMO_XH2
+    device_service_ = std::make_shared<HLIEDeviceService>();
+    if (device_service_->init() < 0) {
+        LOG_ERROR("failed to init the HLIE device service");
+        return -1;
+    }
+#endif
+
     const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
     std::vector<HLIEModelInfo> model_infos;
     if (args.find("--json_info") != args.end()) { // 是否为外部接口调用启动服务
@@ -196,7 +204,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
             LOG_INFO("Initializing LLModelService");
             if (model_info.is_llm_) {
                 llm_model_service_ = std::make_shared<LLModelService>();
-                if (llm_model_service_->init(model_dir, model_info) < 0) {
+                if (llm_model_service_->init(model_dir, model_info, device_service_) < 0) {
                     LOG_ERROR("failed to init the LLM model service");
                     return -1;
                 }
@@ -204,13 +212,11 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
 #ifdef HOUMO_XH2
             else {
                 sd_model_service_ = std::make_shared<SDModelService>();
-                if (sd_model_service_->init(model_dir, model_info) < 0) {
+                if (sd_model_service_->init(model_dir, model_info, device_service_) < 0) {
                     LOG_ERROR("failed to init the SD model service");
                     return -1;
                 }
             }
-
-            device_service_ = std::make_shared<HLIEDeviceService>();
 #endif
             Singleton<HLIEDeviceHelper>::instance()->print_status();
             start_time_ = time(nullptr);
@@ -248,9 +254,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         LOG_WARN("No valid model info files found in directory: {}", model_dir);
         if (args.find("--instance_id") == args.end()) {
             // Master Process Start in Zero-Load Mode
-#ifdef HOUMO_XH2
-            device_service_ = std::make_shared<HLIEDeviceService>();
-#endif
             Singleton<HLIEDeviceHelper>::instance()->print_status();
             start_time_ = time(nullptr);
             return 8;
@@ -265,9 +268,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         LOG_WARN("No default model: {}", default_model);
         if (args.find("--instance_id") == args.end()) {
             // Master Process Start in Zero-Load Mode
-#ifdef HOUMO_XH2
-            device_service_ = std::make_shared<HLIEDeviceService>();
-#endif
             Singleton<HLIEDeviceHelper>::instance()->print_status();
             start_time_ = time(nullptr);
             return 8;
@@ -318,9 +318,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
     if (!found_llm && !found_sd3) {
         if (args.find("--instance_id") == args.end()) {
             // Master Process Start in Zero-Load Mode
-#ifdef HOUMO_XH2
-            device_service_ = std::make_shared<HLIEDeviceService>();
-#endif
             Singleton<HLIEDeviceHelper>::instance()->print_status();
             start_time_ = time(nullptr);
             return 8;
@@ -350,7 +347,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         }
 
         llm_model_service_ = std::make_shared<LLModelService>();
-        if (llm_model_service_->init(model_dir, default_model_info) < 0) {
+        if (llm_model_service_->init(model_dir, default_model_info, device_service_) < 0) {
             LOG_ERROR("failed to init the LLM model service");
             return -1;
         }
@@ -360,7 +357,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
 #ifdef HOUMO_XH2
         LOG_INFO("Initializing SDModelService");
         sd_model_service_ = std::make_shared<SDModelService>();
-        if (sd_model_service_->init(model_dir, sd3_model_info) < 0) {
+        if (sd_model_service_->init(model_dir, sd3_model_info, device_service_) < 0) {
             LOG_ERROR("failed to init the SD model service");
             return -1;
         }
@@ -369,10 +366,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         return -1;
 #endif
     }
-
-#ifdef HOUMO_XH2
-    device_service_ = std::make_shared<HLIEDeviceService>();
-#endif
 
     Singleton<HLIEDeviceHelper>::instance()->print_status();
     start_time_ = time(nullptr);
@@ -389,8 +382,11 @@ void HLIEWorkflow::run() {
             common_params params;
             params.hostname = "127.0.0.1";
             const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-            std::thread([=] {
+            std::thread([&] {
                 std::this_thread::sleep_for(std::chrono::minutes(1));
+                if (!llm_model_service_) {
+                    return;
+                }
                 update_status(params, master_port, llm_model_service_->get_model_key(), port_);
             }).detach();
         }
@@ -550,6 +546,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     }
 
     std::optional<server_model_meta> meta = std::nullopt;
+    int mem_est;
     if (!model_name.empty()) { // 兼容LLAMA新方式， 检查模型是否存在
         meta = get_model_meta(model_name);
         if (!meta.has_value()) {
@@ -561,25 +558,51 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             res->error(format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
+        mem_est = HLIEModelInfo::estimate_mem(model_name);
     } else if (model_path.empty()) {
         res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
         return res;
+    } else {
+        std::filesystem::path model_path_tmp(model_path);
+        if (std::error_code ec; !std::filesystem::exists(model_path_tmp, ec) || !std::filesystem::is_regular_file(model_path_tmp, ec)) {
+            res->error(format_error_response_ex("model_path file not exist.", ERROR_TYPE_INVALID_REQUEST, 80006));
+            return res;
+        }
+
+        model_name = model_path_tmp.filename().stem().string();
+        meta = get_model_meta(model_name);
+        if (!meta.has_value()) {
+            res->error(format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
+            return res;
+        }
+
+        if (meta->status == SERVER_MODEL_STATUS_LOADED) {
+            res->error(format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        mem_est = HLIEModelInfo::estimate_mem(model_path);
     }
 
     LOG_INFO("ready to acquire devices");
     {
         std::unique_lock lock(mutex_);
         if (devices == "undefined") {
-            const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(HlieUtil::uuid(), true);
-            if (!val) {
+            uint32_t device_id = 0;
+            if (device_service_->acquire_mem(mem_est, device_id, true) < 0) {
                 res->error(format_error_response_ex("The devices is not available.", ERROR_TYPE_UNAVAILABLE, 80004));
                 return res;
             }
-            devices = std::to_string(*val);
-        } else if (std::vector<int> devices_vec;
-                   !Singleton<HLIEDeviceHelper>::instance()->acquire_devices(HlieUtil::uuid(), devices, devices_vec, true)) {
-            res->error(format_error_response_ex("The devices is not available.", ERROR_TYPE_UNAVAILABLE, 80004));
-            return res;
+            devices = std::to_string(device_id);
+        } else {
+            std::vector<int> devices_vec;
+            if (HlieUtil::parse_device(devices, devices_vec) < 0) {
+                res->error(format_error_response_ex("The devices parsed failed.", ERROR_TYPE_UNAVAILABLE, 80004));
+                return res;
+            }
+            if (device_service_->acquire_mem_on_devices(devices_vec, mem_est, false, true) < 0) {
+                res->error(format_error_response_ex("The devices is not available.", ERROR_TYPE_UNAVAILABLE, 80004));
+                return res;
+            }
         }
     }
 
@@ -590,48 +613,37 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     ProcessID process_id = 0;
     if (model_type == LLM) {
         if (!meta) {
-            std::filesystem::path model_path_tmp(model_path);
-            if (std::error_code ec; !std::filesystem::exists(model_path_tmp, ec) || !std::filesystem::is_regular_file(model_path_tmp, ec)) {
-                res->error(format_error_response_ex("model_path file not exist.", ERROR_TYPE_INVALID_REQUEST, 80006));
-                return res;
-            }
-
-            model_name = model_path_tmp.filename().stem().string();
-            meta = get_model_meta(model_name);
-
-            if (!meta) {
-                HLIEModelInfo model_info_tmp;
-                model_info_tmp.parse_from_gguf_filename(model_path);
-                if (body.contains("params") && body["params"].is_object()) {
-                    auto& params = body["params"];
-                    if (std::string mm_proj_path = params.value("mm_proj_path", std::string{}); !mm_proj_path.empty()) {
-                        model_info_tmp.is_multi_model_ = true;
-                        model_info_tmp.mm_proj_path_ = mm_proj_path;
-                        model_info_tmp.vl_spec_ = HLIEModelInfo::parse_mmproj_vl_spec(mm_proj_path);
-                        if (std::error_code ec;
-                            !std::filesystem::exists(mm_proj_path, ec) || !std::filesystem::is_regular_file(mm_proj_path, ec)) {
-                            res->error(format_error_response_ex("mm_proj_path file not exist.", ERROR_TYPE_INVALID_REQUEST, 80006));
-                            return res;
-                        }
+            HLIEModelInfo model_info_tmp;
+            model_info_tmp.parse_from_gguf_filename(model_path);
+            if (body.contains("params") && body["params"].is_object()) {
+                auto& params = body["params"];
+                if (std::string mm_proj_path = params.value("mm_proj_path", std::string{}); !mm_proj_path.empty()) {
+                    model_info_tmp.is_multi_model_ = true;
+                    model_info_tmp.mm_proj_path_ = mm_proj_path;
+                    model_info_tmp.vl_spec_ = HLIEModelInfo::parse_mmproj_vl_spec(mm_proj_path);
+                    if (std::error_code ec;
+                        !std::filesystem::exists(mm_proj_path, ec) || !std::filesystem::is_regular_file(mm_proj_path, ec)) {
+                        res->error(format_error_response_ex("mm_proj_path file not exist.", ERROR_TYPE_INVALID_REQUEST, 80006));
+                        return res;
                     }
                 }
-
-                ModelInstance model_instance;
-                server_model_meta model_meta;
-                model_meta.name = model_info_tmp.get_model_name();
-                model_meta.path = model_info_tmp.get_model_path();
-                model_meta.path_mmproj = model_info_tmp.get_mm_proj_path();
-                model_instance.meta = std::move(model_meta);
-                auto model_key = model_info_tmp.get_model_name();
-                if (!model_info_tmp.get_mm_proj_path().empty()) {
-                    model_key += "_" + model_info_tmp.vl_spec_;
-                }
-                model_info_tmp.model_key_ = model_key;
-                model_instance.model_info = model_info_tmp;
-                model_instance.key = model_key;
-                model_instances_[model_key] = std::move(model_instance);
-                LOG_INFO("Service Starting Add Model: {} {}", model_key, model_info_tmp.get_mm_proj_path());
             }
+
+            ModelInstance model_instance;
+            server_model_meta model_meta;
+            model_meta.name = model_info_tmp.get_model_name();
+            model_meta.path = model_info_tmp.get_model_path();
+            model_meta.path_mmproj = model_info_tmp.get_mm_proj_path();
+            model_instance.meta = std::move(model_meta);
+            auto model_key = model_info_tmp.get_model_name();
+            if (!model_info_tmp.get_mm_proj_path().empty()) {
+                model_key += "_" + model_info_tmp.vl_spec_;
+            }
+            model_info_tmp.model_key_ = model_key;
+            model_instance.model_info = model_info_tmp;
+            model_instance.key = model_key;
+            model_instances_[model_key] = std::move(model_instance);
+            LOG_INFO("Service Starting Add Model: {} {}", model_key, model_info_tmp.get_mm_proj_path());
         }
 
         auto model_inst = get_model_inst(model_name);
@@ -639,6 +651,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
             return res;
         }
+
         auto& model_info = model_inst->get().model_info;
         if (model_info.model_version_.empty()) {
             res->error(format_error_response_ex("failed to parse build_version from model name", ERROR_TYPE_INVALID_REQUEST, 80007));
@@ -655,9 +668,11 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADING;
         if (!llm_model_service_) {
             llm_model_service_ = std::make_shared<LLModelService>();
-            if (llm_model_service_->init(model_dir_, model_info) < 0) {
+            if (llm_model_service_->init(model_dir_, model_info, device_service_) < 0) {
                 LOG_ERROR("failed to init the LLM model service");
                 res->error(format_error_response_ex("failed to init the LLM model service", ERROR_TYPE_SERVER, 80001));
+                llm_model_service_->stop();
+                llm_model_service_ = nullptr;
                 return res;
             }
 
@@ -706,10 +721,12 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         if (!sd_model_service_) {
             sd_model_service_ = std::make_shared<SDModelService>();
             model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADING;
-            if (sd_model_service_->init(model_dir_, model_info) < 0) {
+            if (sd_model_service_->init(model_dir_, model_info, device_service_) < 0) {
                 LOG_ERROR("failed to init the SD model service");
                 model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_UNLOADED;
                 res->error(format_error_response_ex("failed to init the SD model service", ERROR_TYPE_SERVER, 80001));
+                sd_model_service_->stop();
+                sd_model_service_ = nullptr;
                 return res;
             }
 
@@ -1006,15 +1023,16 @@ server_http_res_ptr HLIEWorkflow::handle_post_status(const server_http_req& req)
     const int port = json_value(body, "port", 0);
 
     const auto status = server_model_status_from_string(value);
-    if (status != SERVER_MODEL_STATUS_LOADED) {
-        throw std::runtime_error("invalid status value");
-    }
 
     if (const auto inst = get_model_inst(model); inst.has_value()) {
         std::lock_guard lk(mutex_);
         inst->get().meta.status = status;
         inst->get().meta.port = port;
         LOG_INFO("Model[{}] loaded, port: {}", model, port);
+
+        if (status == SERVER_MODEL_STATUS_UNLOADED) {
+            Singleton<HLIEProcessManager>::instance()->unload_model(model);
+        }
     }
 
     res->ok({{"success", true}});
@@ -1043,12 +1061,28 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
     if (model_type == LLM && llm_model_service_) {
         model_instances_[llm_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
         llm_model_service_->stop();
+
+        if (is_slave_) {
+            common_params params;
+            params.hostname = "127.0.0.1";
+            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
+            update_status(params, master_port, llm_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
+        }
+
         llm_model_service_.reset();
     }
 #ifdef HOUMO_XH2
     if (model_type == SD && sd_model_service_) {
         model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_UNLOADED;
         sd_model_service_->stop();
+
+        if (is_slave_) {
+            common_params params;
+            params.hostname = "127.0.0.1";
+            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
+            update_status(params, master_port, HLIEModelType::SD3, port_, SERVER_MODEL_STATUS_UNLOADED);
+        }
+
         sd_model_service_.reset();
     }
 #endif

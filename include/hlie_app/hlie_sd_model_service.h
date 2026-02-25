@@ -130,7 +130,7 @@ public:
     /**
      * 初始化并传递参数给SDCtx
      */
-    int init(const std::string& model_dir, const HLIEModelInfo& model_info) override;
+    int init(const std::string& model_dir, const HLIEModelInfo& model_info, const std::shared_ptr<HLIEDeviceService>& device_service) override;
 
     /**
      * 执行模型推理进行生图

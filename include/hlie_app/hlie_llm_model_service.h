@@ -20,12 +20,14 @@ using server_http_res_ptr = std::unique_ptr<server_http_res>;
 
 HLIE_NAMESPACE_BEGIN
 
+class HLIEDeviceService;
+
 class LLModelService final : public IHLIEModelService {
 public:
     LLModelService() = default;
     ~LLModelService() override = default;
 
-    int init(const std::string& model_dir, const HLIEModelInfo& model_info) override;
+    int init(const std::string& model_dir, const HLIEModelInfo& model_info, const std::shared_ptr<HLIEDeviceService>& device_service) override;
 
     void run() override;
 

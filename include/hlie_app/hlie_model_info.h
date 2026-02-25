@@ -17,9 +17,15 @@ HLIE_NAMESPACE_BEGIN
 class HLIE_API HLIEModelInfo {
 public:
     int parse_from_file(const std::string& file_path = "info.json");
+
     int parse_from_gguf_filename(const std::string& file_path);
+
     static std::string parse_mmproj_vl_spec(const std::string& name);
+
     static void ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, const std::string& dir);
+
+    static int estimate_mem(const std::string& model_name);
+
 
     void build_llm(const std::string& model_path, const std::string& model_type, int context_size, int cores, int batch_num, int xh_version,
                    bool is_multi_model, const std::string& params, const std::string& mm_proj_path, const std::string& devices);

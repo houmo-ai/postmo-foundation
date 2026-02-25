@@ -233,6 +233,37 @@ std::vector<HLIEProcessManager::ProcessInfo> HLIEProcessManager::get_running_pro
     return result;
 }
 
+void HLIEProcessManager::unload_model(const std::string& model_name) {
+    monitor_processes(); // 更新状态后再返回
+
+    std::lock_guard lock(mutex_);
+
+    for (auto& [pid, process] : processes_) {
+        if (!process.is_running) {
+            continue;
+        }
+
+        auto it = std::find(process.model_names.begin(),
+                            process.model_names.end(),
+                            model_name);
+
+        if (it == process.model_names.end()) {
+            continue;
+        }
+
+        process.model_names.erase(it);
+
+        LOG_INFO("model {} removed from process {}", model_name, pid);
+
+        // Todo:: 如果进程已经没有模型了，可以考虑关闭
+        if (process.model_names.empty()) {
+            LOG_INFO("process {} has no models, consider terminating", pid);
+        }
+
+        break;
+    }
+}
+
 void HLIEProcessManager::monitor_processes() {
     std::lock_guard lock(mutex_);
 

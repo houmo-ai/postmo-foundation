@@ -33,7 +33,6 @@ namespace {
     int initialize_ex(const std::string& program_path) {
         const auto& config_services = Singleton<HLIEConfigService>::instance();
         auto devices = config_services->get_string("server", "devices", "0", true);
-        const auto& device_helper = Singleton<HLIEDeviceHelper>::instance();
         const auto& args = config_services->get_args();
         if (args.find("--device_id") != args.end()) {
             devices = args.at("--device_id");
@@ -43,12 +42,13 @@ namespace {
             }
         }
 
-        device_helper->init(devices);
-
         // 多实例场景
         const auto replicas = config_services->get_int("server", "replicas", 1);
         if (args.find("--instance_id") == args.end()) {
             if (replicas > 1) {
+                const auto& device_helper = Singleton<HLIEDeviceHelper>::instance();
+                // 主要用于多实例工作场景，单模型独占单IPU
+                device_helper->init(devices);
                 const int device_count = device_helper->get_device_count();
                 if (replicas > device_count) {
                     LOG_ERROR("Copies[{}] is bigger than devices count[]", replicas, device_count);

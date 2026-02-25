@@ -40,6 +40,7 @@ public:
     static std::tuple<int, int, int> parse_version(const std::string& v);
     static bool version_ge(const std::string& v, const std::string& target);
     static bool contains_ignore_case(std::string s, const std::string& key);
+    static int parse_device(const std::string& devices, std::vector<int>& acquiring_devices);
 };
 
 HLIE_NAMESPACE_END

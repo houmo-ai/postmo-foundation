@@ -6,6 +6,7 @@
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_logger.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "hlie_app/hlie_device_service.h"
 #include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_exception.h"
 #include "hlie_base/hlie_util.h"
@@ -41,7 +42,7 @@ namespace {
 } // namespace
 
 
-int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& model_info) {
+int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& model_info, const std::shared_ptr<HLIEDeviceService>& device_service) {
     blocking_queue_ = std::make_shared<HLIEBlockingQueue<QueueItem>>();
 
     params_ = std::make_shared<SDParams>();
@@ -67,30 +68,46 @@ int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         params_->houmo_vae_path = HlieUtil::join_paths(model_dir, params_->houmo_vae_path);
     }
 
-    if (const auto& devices = model_info.get_devices();
-        !devices.empty() && Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1) == 1) {
-        // 单实例模式可以定制Model Devices
-        const auto device_id = HlieUtil::parse_natural_num(devices);
-        if (device_id < 0) {
-            LOG_ERROR("SD cannot acquire model specific device \"{}\"", devices);
-            return -1;
-        }
+    device_service_ = device_service;
+    auto devices = model_info.get_devices();
 
-        const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(SD, device_id);
-        if (!val) {
+    if (const int replicas = Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1); replicas > 1) {
+        is_multi_instance_ = true;
+        if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(SD); !val) {
+            LOG_ERROR("SD cannot acquire available device");
             return -1;
+        } else {
+            params_->hm_sd_device = val.value();
+            devices_.push_back(*val);
+            LOG_INFO("SD using device: {}", val.value());
         }
+    } else { // 单实例模式可以定制Model Devices
+        if (!devices.empty()) {
+            if (!HlieUtil::is_valid_devices(devices)) {
+                LOG_ERROR("SD cannot acquire model specific device \"{}\"", devices);
+                return -1;
+            }
 
-        params_->hm_sd_device = val.value();
-        devices_.push_back(*val);
-        LOG_INFO("LLM using model specific device: {}", device_id);
-    } else if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(SD); !val) {
-        LOG_ERROR("SD cannot acquire available device");
-        return -1;
-    } else {
-        params_->hm_sd_device = val.value();
-        devices_.push_back(*val);
-        LOG_INFO("SD using device: {}", val.value());
+            if (HlieUtil::parse_device(devices, devices_) < 0) {
+                LOG_ERROR("SD parse_device specific device \"{}\" failed", devices);
+                return -1;
+            }
+
+            if (device_service_->acquire_mem_on_devices(devices_, 11000) < 0) {
+                return -1;
+            }
+
+            params_->hm_sd_device = devices_.at(0);
+            LOG_INFO("SD using model specific device: {}", params_->hm_sd_device);
+        } else {
+            uint32_t device;
+            if (device_service_->acquire_mem(11000, device) < 0) {
+                return -1;
+            }
+            devices_.push_back(device);
+            params_->hm_sd_device = device;
+            LOG_INFO("SD using model specific device: {}", device);
+        }
     }
 
     sd_set_log_callback(sd_log_cb, params_.get());
@@ -251,7 +268,11 @@ void SDModelService::stop() {
     worker_thread_.reset();
     sd_ctx_t_.reset();
 
-    Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+    if (is_multi_instance_) {
+        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+    } else {
+        device_service_->release_mem_on_devices(devices_, 11000);
+    }
     devices_.clear();
 }
 

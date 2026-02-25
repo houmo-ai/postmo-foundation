@@ -1,9 +1,9 @@
 ###
-POST http://127.0.0.1:7901/v1/chat/completions
+POST http://127.0.0.1:7903/v1/chat/completions
 Content-Type: application/json
 
 {
-  "model": "Qwen3-8B-16k",
+  "model": "HiModel_xh2_qwen3-vl_4b_256_32k_b1_1chip_2cores_v0.7.0_20251228",
   "messages": [
     {
       "role": "system",
@@ -153,7 +153,7 @@ Content-Type: application/json
 }
 
 ### embed
-POST http://localhost:7901/v1/embeddings
+POST http://localhost:7902/v1/embeddings
 Content-Type: application/json
 
 {

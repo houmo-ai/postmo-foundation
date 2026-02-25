@@ -8,6 +8,8 @@
 
 HLIE_NAMESPACE_BEGIN
 
+class HLIEDeviceService;
+
 
 const std::string LLM = "llm";
 const std::string SD = "sd";
@@ -30,7 +32,7 @@ public:
     IHLIEModelService() = default;
     virtual ~IHLIEModelService() = default;
 
-    virtual int init(const std::string& model_path, const HLIEModelInfo& model_info) = 0;
+    virtual int init(const std::string& model_dir, const HLIEModelInfo& model_info, const std::shared_ptr<HLIEDeviceService>& device_service) = 0;
 
     virtual void run() = 0;
 
@@ -44,6 +46,8 @@ protected:
     std::string model_path_;
     std::atomic<int> state_;
     std::vector<int> devices_;
+    bool is_multi_instance_ {false};
+    std::shared_ptr<HLIEDeviceService> device_service_;
 };
 
 HLIE_NAMESPACE_END

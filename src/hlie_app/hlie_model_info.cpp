@@ -328,6 +328,32 @@ void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, c
     }
 }
 
+int HLIEModelInfo::estimate_mem(const std::string& model_name) {
+    if (model_name.empty()) {
+        return 0;
+    }
+
+    const std::string name = to_lower(model_name);
+
+    if (name.find("qwen2.5") != std::string::npos) {
+        return 8192;
+    }
+
+    if (name.find("qwen3") != std::string::npos) {
+        return 10240;
+    }
+
+    if (name.find("gte") != std::string::npos || name.find("bge") != std::string::npos) {
+        return 1536;
+    }
+
+    if (name.find("whisper") != std::string::npos) {
+        return 2048;
+    }
+
+    return 4096;
+}
+
 void HLIEModelInfo::build_llm(const std::string& model_path, const std::string& model_type, const int context_size, const int cores,
                               const int batch_num, const int xh_version, const bool is_multi_model, const std::string& params,
                               const std::string& mm_proj_path, const std::string& devices) {
