@@ -2,6 +2,8 @@
 
 #include <unordered_set>
 
+#include "hm_sys.h"
+
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"

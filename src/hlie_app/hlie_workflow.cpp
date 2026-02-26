@@ -586,6 +586,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     LOG_INFO("ready to acquire devices");
     {
         std::unique_lock lock(mutex_);
+#ifdef HOUMO_XH2
         if (devices == "undefined") {
             uint32_t device_id = 0;
             if (device_service_->acquire_mem(mem_est, device_id, true) < 0) {
@@ -604,6 +605,20 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
                 return res;
             }
         }
+#else
+        if (devices == "undefined") {
+            const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(HlieUtil::uuid(), true);
+            if (!val) {
+                res->error(format_error_response_ex("The devices is not available.", ERROR_TYPE_UNAVAILABLE, 80004));
+                return res;
+            }
+            devices = std::to_string(*val);
+        } else if (std::vector<int> devices_vec;
+                   !Singleton<HLIEDeviceHelper>::instance()->acquire_devices(HlieUtil::uuid(), devices, devices_vec, true)) {
+            res->error(format_error_response_ex("The devices is not available.", ERROR_TYPE_UNAVAILABLE, 80004));
+            return res;
+        }
+#endif
     }
 
     LOG_INFO("acquire devices successfully with {}", devices);
@@ -658,8 +673,8 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             return res;
         }
 
-        if (!HlieUtil::version_ge(model_info.model_version_, "v0.7.0")) {
-            res->error(format_error_response_ex("build_version must be >= v0.7.0", ERROR_TYPE_INVALID_REQUEST, 80007));
+        if (!HlieUtil::version_ge(model_info.model_version_, "v1.0.0")) {
+            res->error(format_error_response_ex("build_version must be >= v1.0.0", ERROR_TYPE_INVALID_REQUEST, 80007));
             return res;
         }
 

@@ -7,7 +7,7 @@ third_party/llama.cpp_houmo
 third_party/sd.cpp
 third_party/houmo
 third_party/*torch*
-third_party/boost
+third_party/whisper.cpp
 src/houmo-tcim-runtime
 release
 src/libtorch

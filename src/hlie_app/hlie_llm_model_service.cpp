@@ -130,6 +130,16 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
             LOG_INFO("LLM using device: {}", val.value());
         }
     } else { // 单实例模式可以定制Model Devices
+#ifndef HOUMO_XH2
+        if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(LLM); !val) {
+            LOG_ERROR("LLM cannot acquire available device");
+            return -1;
+        } else {
+            HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(val.value()));
+            devices_.push_back(*val);
+            LOG_INFO("LLM using device: {}", val.value());
+        }
+#else
         const auto mem_est = HLIEModelInfo::estimate_mem(model_info.get_model_name());
         if (!devices.empty()) {
             if (!HlieUtil::is_valid_devices(devices)) {
@@ -158,6 +168,8 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
             HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(device));
             LOG_INFO("LLM acquire_mem using model specific device: {}", device);
         }
+
+#endif
     }
 
     if (const auto log_level = config_service->get_string("log", "level", "debug"); log_level == "debug") {
@@ -223,8 +235,12 @@ void LLModelService::stop() {
     if (is_multi_instance_) {
         Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
     } else {
+#ifdef HOUMO_XH2
         const auto mem_est = HLIEModelInfo::estimate_mem(model_key_);
         device_service_->release_mem_on_devices(devices_, mem_est);
+#else
+        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+#endif
     }
     devices_.clear();
     llama_memory_breakdown_print(llama_server_->get_llama_context());

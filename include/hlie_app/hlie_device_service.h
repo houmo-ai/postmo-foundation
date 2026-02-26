@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "hlie_base/hlie_base.h"
-#include "hm_sys.h"
 
 HLIE_NAMESPACE_BEGIN
 
