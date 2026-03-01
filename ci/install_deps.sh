@@ -42,10 +42,11 @@ xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2
 xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/02/05/1408/ubuntu1804/houmo-drv-xh2_v1.0.0_linux_x86_64.run"
 xh2_sw_sdk_url_aarch64="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/02/05/1408/ubuntu2004/houmo-drv-xh2_v1.0.0_linux_aarch64.run"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/02/25/2330/linux/houmo-HLIELLama-xh1_1.4.0_linux_${ARCH}.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/02/25/2330/linux/houmo-HLIELLama-xh2_1.4.0_linux_${ARCH}.tar.gz"
+xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh1_1.4.0_linux_${ARCH}.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh2_1.4.0_linux_${ARCH}.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.1.0_linux_${ARCH}.tar.gz"
+xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.0.0_linux_${ARCH}.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {
@@ -78,6 +79,17 @@ deploy_sd_cpp_sdk() {
     rm sd.cpp.tar.gz
 }
 
+deploy_whisper_cpp_sdk() {
+    local whisper_cpp_sdk_url=$1
+    mkdir -p third_party/whisper.cpp
+    rm -rf third_party/whisper.cpp/*
+
+
+    download_file "$whisper_cpp_sdk_url" "whisper.cpp.tar.gz"
+    tar -xzf whisper.cpp.tar.gz -C third_party/whisper.cpp --strip-components=1
+    rm whisper.cpp.tar.gz
+}
+
 # 部署 Dadao SDK
 deploy_dadao_sdk() {
     local dadao_url=$1
@@ -99,11 +111,10 @@ deploy_dadao_sdk() {
 
         cp third_party/houmo-sdk/hal/lib/*.so* third_party/houmo/lib/
         cp third_party/houmo-sdk/hal/export/include/*.h third_party/houmo/include/
-        rm -rf third_party/houmo-sdk third_party/sw_sdk.run third_party/houmo_drv*
     fi
 
     # 清理临时文件
-    rm -rf third_party/houmo-sdk third_party/sw_sdk.run third_party/houmo_drv*
+    rm -rf third_party/houmo-sdk third_party/sw_sdk.run third_party/houmo_drv* third_party/houmo-drv*
 }
 
 
@@ -123,6 +134,7 @@ main() {
             fi
             deploy_llama_sdk "$xh2_llama_sdk_url"
             deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
+            deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"
             ;;
     esac
 

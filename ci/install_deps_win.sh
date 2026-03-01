@@ -15,10 +15,11 @@ xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2
 xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2025/12/20/0742/windows11/houmo_drv_xh1_v2.6.0_windows11_x86_64.zip"
 xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/18/1632/windows11/houmo_drv_xh2_v0.7.0_windows11_x86_64.zip"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/02/25/2330/windows11/houmo-HLIELLama-xh1_1.4.0_windows11_x86_64.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/02/25/2330/windows11/houmo-HLIELLama-xh2_1.4.0_windows11_x86_64.tar.gz"
+xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh1_1.4.0_windows11_x86_64.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh2_1.4.0_windows11_x86_64.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.1.0_windows11_x86_64.tar.gz"
+xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.0.0_windows11_x86_64.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {
@@ -49,6 +50,17 @@ deploy_sd_cpp_sdk() {
     download_file "$sd_cpp_sdk_url" "sd.cpp.tar.gz"
     tar -xzf sd.cpp.tar.gz -C third_party/sd.cpp --strip-components=1
     rm sd.cpp.tar.gz
+}
+
+deploy_whisper_cpp_sdk() {
+    local whisper_cpp_sdk_url=$1
+    mkdir -p third_party/whisper.cpp
+    rm -rf third_party/whisper.cpp/*
+
+
+    download_file "$whisper_cpp_sdk_url" "whisper.cpp.tar.gz"
+    tar -xzf whisper.cpp.tar.gz -C third_party/whisper.cpp --strip-components=1
+    rm whisper.cpp.tar.gz
 }
 
 # 部署 Dadao SDK
@@ -116,6 +128,7 @@ main() {
             deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url"
             deploy_llama_sdk "$xh2_llama_sdk_url"
             deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
+            deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"
             ;;
     esac
 

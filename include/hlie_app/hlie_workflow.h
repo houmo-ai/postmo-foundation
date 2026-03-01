@@ -2,8 +2,8 @@
 #define HLIE_WORKFLOW_H
 
 #include <memory>
-#include <vector>
 #include <server/server-models.h>
+#include <vector>
 
 
 #include "hlie_base/hlie_base.h"
@@ -17,11 +17,12 @@ HLIE_NAMESPACE_BEGIN
 class HLIEDeviceService;
 class LLModelService;
 class SDModelService;
+class WhisperModelService;
 class HLIEConfigService;
 
 class HLIEWorkflow {
 public:
-     HLIEWorkflow() = default;
+    HLIEWorkflow() = default;
 
     ~HLIEWorkflow() = default;
 
@@ -43,11 +44,11 @@ public:
     // 路由配置结构
     struct RouteConfig {
         std::vector<std::string> paths;
-        HttpType method;  // "GET" or "POST"
-        // RequestHandler handler;
-        std::function<server_http_res_ptr(const server_http_req& req)> handler;
-        bool require_model = false;  // 是否需要特定模型服务
-        std::string model_type = LLM;  // 需要的模型类型
+        HttpType method; // "GET" or "POST"
+        std::function<server_http_res_ptr(const server_http_req& req)> handler = nullptr;
+        bool require_model = false; // 是否需要特定模型服务
+        std::string model_type = LLM; // 需要的模型类型
+        RequestHandler ori_handler = nullptr;
     };
 
     struct ModelInstance {
@@ -70,6 +71,8 @@ private:
     [[nodiscard]] server_http_res_ptr handle_health(const server_http_req& req) const;
     server_http_res_ptr handle_models(const server_http_req& req);
     server_http_res_ptr start_service(const server_http_req& req);
+    int start_whisper(std::optional<server_model_meta>& meta, std::unique_ptr<server_res_generator_light>& res, const server_http_req& req,
+                       const std::string& model_name, const std::string& model_path, const std::string& devices);
     bool router_validate_model(const std::string& name, const std::unique_ptr<server_res_generator_light>& res);
     server_http_res_ptr stop_service(const server_http_req& req);
     [[nodiscard]] server_http_res_ptr handle_get_status(const server_http_req& req) const;
@@ -88,6 +91,7 @@ private:
 
     std::shared_ptr<LLModelService> llm_model_service_;
     std::shared_ptr<SDModelService> sd_model_service_;
+    std::shared_ptr<WhisperModelService> whisper_model_service_;
     std::map<std::string, ModelInstance> model_instances_;
 
     std::shared_ptr<HLIEDeviceService> device_service_;
@@ -104,4 +108,4 @@ private:
 
 HLIE_NAMESPACE_END
 
-#endif //HLIE_WORKFLOW_H
+#endif // HLIE_WORKFLOW_H

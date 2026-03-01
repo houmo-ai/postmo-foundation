@@ -315,7 +315,7 @@ void HLIEWebService::register_routers() const {
 
     const auto& routes = workflow_->get_route_configs();
 
-    for (const auto& [paths, method, handler, require_model, model_type] : routes) {
+    for (const auto& [paths, method, handler, require_model, model_type, ori_handler] : routes) {
         // 检查是否需要特定模型服务
         if (require_model) {
             if (const auto model_service = workflow_->get_model_service(model_type); !model_service) {
@@ -332,6 +332,14 @@ void HLIEWebService::register_routers() const {
                 get(path, ex_wrapper(handler));
             }
         } else if (method == POST) {
+            if (ori_handler) {
+                for (const auto& path : paths) {
+                    LOG_INFO("Registered POST ORI route: {}", path);
+                    web_server_->Post(path, ori_handler);
+                }
+                continue;
+            }
+
             for (const auto& path : paths) {
                 LOG_INFO("Registered POST route: {}", path);
                 post(path, ex_wrapper(handler));

@@ -13,10 +13,12 @@ class HLIEDeviceService;
 
 const std::string LLM = "llm";
 const std::string SD = "sd";
+const std::string WHISPER = "whisper";
 
 struct HLIEModelType {
     static constexpr auto LLM = "llm";
     static constexpr auto SD = "sd";
+    static constexpr auto WHISPER = "whisper";
 
     // model real instance type
     static constexpr auto Qwen25 = "qwen2.5";

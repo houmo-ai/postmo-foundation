@@ -42,13 +42,19 @@ namespace {
             }
         }
 
+#ifndef HOUMO_XH2
+        Singleton<HLIEDeviceHelper>::instance()->init(devices);
+#endif
+
         // 多实例场景
         const auto replicas = config_services->get_int("server", "replicas", 1);
         if (args.find("--instance_id") == args.end()) {
             if (replicas > 1) {
                 const auto& device_helper = Singleton<HLIEDeviceHelper>::instance();
                 // 主要用于多实例工作场景，单模型独占单IPU
+#ifdef HOUMO_XH2
                 device_helper->init(devices);
+#endif
                 const int device_count = device_helper->get_device_count();
                 if (replicas > device_count) {
                     LOG_ERROR("Copies[{}] is bigger than devices count[]", replicas, device_count);

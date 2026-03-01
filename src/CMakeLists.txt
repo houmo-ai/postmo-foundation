@@ -31,7 +31,7 @@ if (HOUMO_XH2)
     message("HMSYS_LIBRARY=${HMSYS_LIBRARY}")
 
     set(WHISPER_CPP_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/whisper.cpp")
-    find_library(WHISPER_CPP NAMES whisper PATHS ${WHISPER_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH)
+    find_library(WHISPER_CPP NAMES whisper PATHS ${WHISPER_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
     message("WHISPER_CPP_LIBRARY=${WHISPER_CPP}")
 endif ()
 
@@ -49,7 +49,7 @@ include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include/nl
 include_directories(${PROJECT_SOURCE_DIR}/third_party/cpp-httplib)
 
 include_directories(${PROJECT_SOURCE_DIR}/third_party/sd.cpp/include)
-#include_directories(${PROJECT_SOURCE_DIR}/third_party/whisper.cpp/include)
+include_directories(${PROJECT_SOURCE_DIR}/third_party/whisper.cpp/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/houmo/include)
 
 include_directories(${PROJECT_SOURCE_DIR}/third_party/inih/include)

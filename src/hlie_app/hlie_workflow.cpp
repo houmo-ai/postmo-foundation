@@ -18,6 +18,7 @@
 #ifdef HOUMO_XH2
 #include "hlie_app/hlie_device_service.h"
 #include "hlie_app/hlie_sd_model_service.h"
+#include "hlie_app/hlie_whisper_model_service.h"
 #endif
 
 HLIE_NAMESPACE_BEGIN
@@ -536,7 +537,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     const std::string model_path = body.value("model_path", std::string());
     LOG_DEBUG("start_service devices: {}, model_type: {}, model_name: {}", devices, model_type, model_name);
 
-    if (model_type != LLM && model_type != SD) {
+    if (model_type != LLM && model_type != SD && model_type != WHISPER) {
         res->error(format_error_response_ex("Invalid model type.", ERROR_TYPE_INVALID_REQUEST, 80006));
         return res;
     }
@@ -767,8 +768,19 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             }
         }
 #else
-        res->error(format_error_response_ex("The sd is not available.", ERROR_TYPE_UNAVAILABLE, 80009));
+        res->error(format_error_response_ex("The sd is not available for xh1.", ERROR_TYPE_UNAVAILABLE, 80009));
         return res;
+#endif
+    } else if (model_type == WHISPER) {
+#ifdef HOUMO_XH2
+        if (start_whisper(meta, res, req, model_name, model_path, devices) < 0) {
+            LOG_ERROR("failed to start the whisper model");
+            return res;
+        }
+
+#else
+res->error(format_error_response_ex("The whisper is not available for xh1.", ERROR_TYPE_UNAVAILABLE, 80009));
+return res;
 #endif
     }
 
@@ -783,6 +795,91 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
     res->ok(resp);
     return res;
+}
+
+int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::unique_ptr<server_res_generator_light>& res,
+    const server_http_req& req, const std::string& model_name, const std::string& model_path, const std::string& devices) {
+#ifdef HOUMO_XH2
+    if (!meta) {
+        auto body = json::parse(req.body);
+        HLIEModelInfo model_info_tmp;
+        model_info_tmp.parse_from_gguf_filename(model_path);
+
+        ModelInstance model_instance;
+        server_model_meta model_meta;
+        model_meta.name = model_info_tmp.get_model_name();
+        model_meta.path = model_info_tmp.get_model_path();
+        model_instance.meta = std::move(model_meta);
+        auto model_key = model_info_tmp.get_model_name();
+        model_info_tmp.model_key_ = model_key;
+        model_instance.model_info = model_info_tmp;
+        model_instance.key = model_key;
+        model_instances_[model_key] = std::move(model_instance);
+        LOG_INFO("Service Starting Add WHISPER Model: {}", model_key);
+    }
+
+    auto model_inst = get_model_inst(model_name);
+    if (!model_inst) {
+        res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
+        return -1;
+    }
+
+    auto& model_info = model_inst->get().model_info;
+    if (model_info.model_version_.empty()) {
+        res->error(format_error_response_ex("failed to parse build_version from model name", ERROR_TYPE_INVALID_REQUEST, 80007));
+        return -1;
+    }
+
+    if (!HlieUtil::version_ge(model_info.model_version_, "v1.0.0")) {
+        res->error(format_error_response_ex("build_version must be >= v1.0.0", ERROR_TYPE_INVALID_REQUEST, 80007));
+        return -1;
+    }
+
+    model_info.set_devices(devices);
+
+    model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADING;
+    if (!whisper_model_service_) {
+        whisper_model_service_ = std::make_shared<WhisperModelService>();
+        if (whisper_model_service_->init(model_dir_, model_info, device_service_) < 0) {
+            LOG_ERROR("failed to init the Whisper model service");
+            res->error(format_error_response_ex("failed to init the Whisper model service", ERROR_TYPE_SERVER, 80001));
+            whisper_model_service_->stop();
+            whisper_model_service_ = nullptr;
+            return -1;
+        }
+
+        whisper_model_service_->run();
+        model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
+    } else {
+        // 子进程实例参数
+        std::string json_info_file = generate_meta_info(model_info, model_dir_, res);
+        if (json_info_file.empty()) {
+            return -1;
+        }
+
+        auto instance_id = generate_instance_id();
+        std::vector args_for_sub_process = {std::string("--instance_id"), std::to_string(instance_id),
+                                            std::string("--device_id"),   devices,
+                                            std::string("--json_info"),   json_info_file};
+        const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
+
+        // Copy llama-params
+        for (const auto& [key, val] : args) {
+            args_for_sub_process.push_back(key);
+            args_for_sub_process.push_back(val);
+        }
+
+        if (auto pid =
+                Singleton<HLIEProcessManager>::instance()->create_process(program_path_, args_for_sub_process, {model_name}, instance_id);
+            pid == 0 || pid == -1) {
+            LOG_ERROR("Failed to start process for instance_id[{}]", instance_id);
+        } else {
+            LOG_INFO("Started process PID[{}] instance_id[{}]", pid, instance_id);
+        }
+    }
+#endif
+
+    return 0;
 }
 
 bool HLIEWorkflow::router_validate_model(const std::string& name, const std::unique_ptr<server_res_generator_light>& res) {
@@ -839,6 +936,16 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 },
                 true,
                 SD // 生图模型类型
+            },
+            {
+                {"/v1/audio/transcriptions"},
+                POST,
+                nullptr,
+                true,
+                WHISPER, // 生图模型类型
+                [this](const httplib::Request& req, httplib::Response& res) {
+                    whisper_model_service_->handle_transcriptions(req, res);
+                },
             },
             {
                 {"/hlie/v1/devices"},

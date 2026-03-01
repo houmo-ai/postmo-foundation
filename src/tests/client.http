@@ -31,7 +31,7 @@ POST http://localhost:7901/v1/chat/completions
 Content-Type: application/json
 
 {
-  "model": "DeepSeek-R1-Distill-Qwen-7B",
+  "model": "1.0.0%2FHiModel_xh2_qwen3-vl_8b_256_32k_b1_1chip_2cores_v1.0.0_20260205",
   "messages": [
     {
       "role": "system",
@@ -40,17 +40,9 @@ Content-Type: application/json
     {
       "role": "user",
       "content": "你知道上海吗？"
-    },
-    {
-      "role": "assistant",
-      "content": "<think>\n嗯，用户问我是否了解上海，我当然没问题。上海是中国的经济中心，有很多著名的景点，比如外滩、东方明珠，还有南京路的购物街。我应该先介绍一下这些地方，让用户觉得上海值得一游。\n\n然后，我需要询问用户是否有特别的兴趣，比如美食、现代都市体验或者历史探索。这样可以根据他们的偏好来规划行程。比如，喜欢美食的话，可以推荐一些特色餐厅，或者喜欢历史的话，可以提到一些历史文化景点。\n\n另外，考虑到交通便利性和休息时间，我应该提醒用户交通的问题，比如地铁和公交的便利，住宿的位置是否方便游览主要景点。同时，提醒用户注意上海的天气情况，提醒他们防晒和穿着舒适的衣服。\n\n最后，我可以邀请用户提供更多信息，比如他们的预算、旅行时间，这样我可以更好地帮助他们制定一个个性化的行程。总之，我要保持友好、耐心和专业的态度，让用户感到被关心和支持，同时提供有价值的信息，帮助他们规划一次愉快的旅行。\n</think>\n\n当然，我非常了解上海！上海是中国的国际金融中心，拥有丰富的历史文化和现代化景观。无论是充满活力的城市景象，还是历史悠久的文化遗址，上海都能给人一种耳目一新的体验。\n\n如果您对上海感兴趣，我可以为您规划一系列特色行程，例如游览外滩的标志性建筑，参观东方明珠塔俯瞰城市全景，漫步南京路感受时尚与文化的交融，或者探访南京路的众多购物中心。此外，上海还有很多美食景点，您可以品尝到各种国内外风味的美食，比如定胜糕、葱油拌面和生煎包等。\n\n为了让您的旅程更加顺畅，我需要了解一下您的偏好和需求。请问您是否有特定的兴趣爱好，或者希望突出哪些特色呢？例如，是想体验上海的现代都市风情，还是更倾向于历史文化的沉淀？或者您有特别的时间安排或预算限制？告诉我更多细节，我会为您定制一份完美的旅行方案！"
-    },
-    {
-      "role": "user",
-      "content": "我要去那里旅游，可以推荐一些景点吗，大概花三天时间。请以表格形式输出、"
     }
   ],
-  "stream": false
+  "stream": true
 }
 
 ###
@@ -119,6 +111,16 @@ Content-Type: application/json
   }
 }
 
+
+### start WHISPER
+POST http://localhost:7901/hlie/v1/start
+Content-Type: application/json
+
+{
+  "model_type": "whisper",
+  "model": "HiModel_xh2_whisper-medium_1.5b_256_1chip_2cores_v1.0.0_20260228"
+}
+
 ### stop
 POST http://localhost:7901/hlie/v1/stop
 Content-Type: application/json
@@ -161,4 +163,29 @@ Content-Type: application/json
   "input": "这是一段测试的文笔",
   "n_tokens": 5
 }
+
+### embed
+POST http://127.0.0.1:7901//v1/audio/transcriptions
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="jfk.wav"
+
+< D:/workspace/wtt/houmo/whisper.cpp/samples/jfk.wav
+--WebAppBoundary--
+
+Content-Disposition: form-data; name="temperature"
+
+0.0
+
+--WebAppBoundary
+Content-Disposition: form-data; name="temperature_inc"
+
+0.2
+
+
+
+--WebAppBoundary--
+
+###
 

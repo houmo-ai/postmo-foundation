@@ -286,8 +286,26 @@ server_http_res_ptr LLModelService::handle_embeddings(const server_http_req& req
 }
 
 server_http_res_ptr LLModelService::handle_props(const server_http_req& req) const {
-    auto res = llama_server_routes_->get_props(req);
-    return res;
+    std::string name = req.get_param("model");
+    if (name.empty()) {
+        // main instance
+        auto res = std::make_unique<server_res_generator_light>();
+        res->ok({
+            // TODO: add support for this on web UI
+            {"role",          "router"},
+            {"max_instances", 4}, // dummy value for testing
+            // this is a dummy response to make sure webui doesn't break
+            {"model_alias", "llama-server"},
+            {"model_path",  "none"},
+            {"default_generation_settings", {
+                {"params", json{}},
+                {"n_ctx",  0},
+            }},
+        });
+        return res;
+    }
+
+    return llama_server_routes_->get_props(req);
 }
 
 int LLModelService::get_state() {
