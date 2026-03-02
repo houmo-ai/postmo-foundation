@@ -466,6 +466,10 @@ int HLIEWorkflow::get_model_service_state() const {
     if (sd_model_service_) {
         return sd_model_service_->get_state();
     }
+
+    if (whisper_model_service_) {
+        return whisper_model_service_->get_state();
+    }
 #endif
 
     LOG_WARN("model service not initialized");
@@ -1110,6 +1114,9 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
     }
     if (sd_model_service_) {
         models.push_back(HLIEModelType::SD3);
+    }
+    if (whisper_model_service_) {
+        models.push_back(HLIEModelType::WHISPER);
     }
     processors.push_back({{"params", ""},
                           {"instance_id", 0},
