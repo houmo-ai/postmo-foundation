@@ -15,6 +15,7 @@ SOURCE_DIR="$(pwd)"
 
 chmod +x "$SOURCE_DIR/scripts/preinstall.sh"
 chmod +x "$SOURCE_DIR/scripts/postinstall.sh"
+chmod +x "$SOURCE_DIR/scripts/uninstall.sh"
 
 # 创建临时构建目录
 mkdir -p "$BUILD_DIR"/{bin,lib,etc,demo,config}

@@ -42,6 +42,9 @@ else
 fi
 
 sudo chmod 777 /etc/systemd/system/${SERVICE_NAME}.service
+sudo chmod 777 -R ${INSTALL_DIR}/${SERVICE_NAME}/config
+sudo mkdir -p /opt/houmo/models
+sudo chmod 777 -R /opt/houmo/models
 
 check_os() {
     # 方法1: 检查/etc/os-release
