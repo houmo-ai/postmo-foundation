@@ -49,7 +49,9 @@ public:
 
     server_http_res_ptr handle_completions_oai(const server_http_req& req) const;
 
-    server_http_res_ptr handle_embeddings(const server_http_req& req, task_response_type oaicompat) const;
+    server_http_res_ptr handle_embeddings_oai(const server_http_req& req) const;
+
+    server_http_res_ptr handle_embeddings(const server_http_req& req) const;
 
     server_http_res_ptr handle_props(const server_http_req& req) const;
 

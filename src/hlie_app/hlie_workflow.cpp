@@ -8,10 +8,10 @@
 #include "hlie_app/hlie_llm_model_service.h"
 #include "hlie_app/hlie_model_service.h"
 #include "hlie_app/hlie_process_manager.h"
+#include "hlie_app/hlie_server_http_proxy.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_device_helper.h"
-#include "hlie_base/hlie_exception.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
 
@@ -142,29 +142,32 @@ namespace {
 
     void update_status(const common_params& base_params, const int router_port, const std::string& name, const int port,
         const server_model_status status = SERVER_MODEL_STATUS_LOADED) {
+        LOG_INFO("llm run the1 update_status {}", router_port);
         // send a notification to the router server that a model instance is ready
         httplib::Client cli(base_params.hostname, router_port);
         cli.set_connection_timeout(0, 200000); // 200 milliseconds
-
+        LOG_INFO("llm run the2 update_status {}", router_port);
         httplib::Request req;
         req.method = "POST";
         req.path = "/models/status";
         req.set_header("Content-Type", "application/json");
+        LOG_INFO("llm run the3 update_status {}", router_port);
         if (!base_params.api_keys.empty()) {
             req.set_header("Authorization", "Bearer " + base_params.api_keys[0]);
         }
-
+        LOG_INFO("llm run the4 update_status {}", router_port);
         json body;
         body["model"] = name;
         body["port"] = port;
         body["value"] = server_model_status_to_string(status);
         req.body = body.dump();
 
-        SRV_INF("notifying router server (port=%d) that model %s is ready\n", router_port, name.c_str());
+        LOG_INFO("notifying router server (port={}) that model {} is ready", router_port, name.c_str());
         if (const auto result = cli.send(req); result.error() != httplib::Error::Success) {
             const auto err_str = httplib::to_string(result.error());
-            SRV_ERR("failed to notify router server: %s\n", err_str.c_str());
-            exit(1); // force exit
+            LOG_ERR("failed to notify router server: %s\n", err_str.c_str());
+            printf("failed xxxxxxx \n");
+            // exit(1); // force exit
         }
     }
 
@@ -329,28 +332,44 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
     }
 
     if (found_llm) {
-        LOG_INFO("Initializing LLModelService");
-        if (const std::string default_mmproj = Singleton<HLIEConfigService>::instance()->get_string("model", "default_mmproj");
-            !default_mmproj.empty()) {
-            auto mmproj_path = default_mmproj + ".gguf";
-            if (HlieUtil::is_relative_path(mmproj_path)) {
-                mmproj_path = HlieUtil::join_paths(model_dir, mmproj_path);
-            }
-
-            std::filesystem::path mmproj_path_tmp(mmproj_path);
-            if (std::error_code ec;
-                !std::filesystem::exists(mmproj_path_tmp, ec) || !std::filesystem::is_regular_file(mmproj_path_tmp, ec)) {
-                LOG_ERROR("default_mmproj file does not exist");
+        if (HlieUtil::contains_ignore_case(default_model_info.get_model_name(), WHISPER)) {
+#ifdef HOUMO_XH2
+            LOG_INFO("Initializing WhisperModelService");
+            whisper_model_service_ = std::make_shared<WhisperModelService>();
+            if (whisper_model_service_->init(model_dir, default_model_info, device_service_) < 0) {
+                LOG_ERROR("failed to init the whisper model service");
+                whisper_model_service_.reset();
                 return -1;
             }
-
-            default_model_info.mm_proj_path_ = mmproj_path;
-        }
-
-        llm_model_service_ = std::make_shared<LLModelService>();
-        if (llm_model_service_->init(model_dir, default_model_info, device_service_) < 0) {
-            LOG_ERROR("failed to init the LLM model service");
+#else
+            LOG_ERROR("failed to init the whisper model service, ONLY for XH2");
             return -1;
+#endif
+        } else {
+            LOG_INFO("Initializing LLModelService");
+            if (const std::string default_mmproj = Singleton<HLIEConfigService>::instance()->get_string("model", "default_mmproj");
+                !default_mmproj.empty()) {
+                auto mmproj_path = default_mmproj + ".gguf";
+                if (HlieUtil::is_relative_path(mmproj_path)) {
+                    mmproj_path = HlieUtil::join_paths(model_dir, mmproj_path);
+                }
+
+                std::filesystem::path mmproj_path_tmp(mmproj_path);
+                if (std::error_code ec;
+                    !std::filesystem::exists(mmproj_path_tmp, ec) || !std::filesystem::is_regular_file(mmproj_path_tmp, ec)) {
+                    LOG_ERROR("default_mmproj file does not exist");
+                    return -1;
+                }
+
+                default_model_info.mm_proj_path_ = mmproj_path;
+            }
+
+            llm_model_service_ = std::make_shared<LLModelService>();
+            if (llm_model_service_->init(model_dir, default_model_info, device_service_) < 0) {
+                LOG_ERROR("failed to init the LLM model service");
+                llm_model_service_.reset();
+                return -1;
+            }
         }
     }
 
@@ -360,6 +379,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         sd_model_service_ = std::make_shared<SDModelService>();
         if (sd_model_service_->init(model_dir, sd3_model_info, device_service_) < 0) {
             LOG_ERROR("failed to init the SD model service");
+            sd_model_service_.reset();
             return -1;
         }
 #else
@@ -380,14 +400,17 @@ void HLIEWorkflow::run() {
         model_instances_[llm_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_LOADED;
 
         if (is_slave_) {
-            common_params params;
-            params.hostname = "127.0.0.1";
-            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
             std::thread([&] {
-                std::this_thread::sleep_for(std::chrono::minutes(1));
+                common_params params;
+                params.hostname = "127.0.0.1";
+                const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
+                LOG_INFO("llm run the3 {}", llm_model_service_->get_model_key());
+                std::this_thread::sleep_for(std::chrono::seconds(20));
                 if (!llm_model_service_) {
+                    LOG_INFO("llm run the4 {}", llm_model_service_->get_model_key());
                     return;
                 }
+                LOG_INFO("llm run the5 {}", llm_model_service_->get_model_key());
                 update_status(params, master_port, llm_model_service_->get_model_key(), port_);
             }).detach();
         }
@@ -576,16 +599,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
         model_name = model_path_tmp.filename().stem().string();
         meta = get_model_meta(model_name);
-        if (!meta.has_value()) {
-            res->error(format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
-            return res;
-        }
-
-        if (meta->status == SERVER_MODEL_STATUS_LOADED) {
-            res->error(format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
-            return res;
-        }
-        mem_est = HLIEModelInfo::estimate_mem(model_path);
+        mem_est = HLIEModelInfo::estimate_mem(model_name);
     }
 
     LOG_INFO("ready to acquire devices");
@@ -906,6 +920,83 @@ bool HLIEWorkflow::router_validate_model(const std::string& name, const std::uni
     return true;
 }
 
+server_http_res_ptr HLIEWorkflow::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, int port) {
+    // if (update_last_used) {
+    //     std::unique_lock<std::mutex> lk(mutex);
+    //     mapping[name].meta.last_used = ggml_time_ms();
+    // }
+    LOG_INFO("proxying request to model {} on port {}", name.c_str(), port);
+    auto proxy = std::make_unique<ServerHttpProxy>(
+            method,
+            "127.0.0.1",
+            port,
+            req.path,
+            req.headers,
+            req.body,
+            req.should_stop);
+    return proxy;
+}
+
+server_http_res_ptr HLIEWorkflow::route_llm_request(const server_http_req& req, const RequestHandler& handler) {
+    auto res = std::make_unique<server_res_generator_light>();
+    const json body = json::parse(req.body);
+    const std::string name = json_value(body, "model", std::string());
+    if (name.empty()) {
+        res->error(format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    const auto inst = get_model_inst(name);
+    if (!inst.has_value()) {
+        res->error(format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
+    if (inst->get().meta.port == master_port || master_port != port_) {
+        return handler(req);
+    }
+
+    const bool auto_load = Singleton<HLIEConfigService>::instance()->get_bool("server", "auto_load", true, true);
+    // 如果模型未加载，尝试加载模型，
+    if (inst->get().meta.status == SERVER_MODEL_STATUS_UNLOADED) {
+        if (auto_load) {
+            std::lock_guard lk(slave_mutex_);
+            inst->get().meta.status = SERVER_MODEL_STATUS_LOADING;
+            auto rest_res = start_service(req);
+            if (rest_res.get()->status != 200) {
+                // 加载失败
+                return rest_res;
+            }
+        } else {
+            res->error(format_error_response("model not loaded", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+    }
+
+    const auto inst1 = get_model_inst(name);
+    if (inst1 && inst1->get().meta.status == SERVER_MODEL_STATUS_LOADING) {
+        std::unique_lock<std::mutex> lk(slave_mutex_);
+        slave_cv_.wait(lk, [this, &name]() {
+            const auto inst_inner = get_model_inst(name);
+            if (inst_inner) {
+                return inst_inner->get().meta.status != SERVER_MODEL_STATUS_LOADING;
+            }
+
+            return false;
+        });
+    }
+
+    if (inst1->get().meta.status == SERVER_MODEL_STATUS_UNLOADED) {
+        // 加载失败
+        res->error("failed to load model: " + name);
+        return res;
+    }
+
+    // 如果已加载则直接调用
+    return proxy_request(req, "POST", name, inst->get().meta.port);
+}
+
 std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
     auto make_handler = [this](auto func) { return [this, func](const server_http_req& req) { return (this->*func)(req); }; };
     return {{
@@ -924,8 +1015,9 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/v1/chat/completions", "/chat/completions", "/api/chat"},
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr {
-                    CHECK_MODEL_READY(llm_model_service_);
-                    return llm_model_service_->handle_chat_completions(req);
+                    CHECK_SERVICE(llm_model_service_);
+                    return route_llm_request(
+                        req, std::bind(&LLModelService::handle_chat_completions, llm_model_service_, std::placeholders::_1));
                 },
                 true, // 需要模型Running
                 LLM // LLM模型类型
@@ -962,8 +1054,9 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/v1/completions"},
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr {
-                    CHECK_MODEL_READY(llm_model_service_);
-                    return llm_model_service_->handle_completions_oai(req);
+                    CHECK_SERVICE(llm_model_service_);
+                    return route_llm_request(
+                        req, std::bind(&LLModelService::handle_completions_oai, llm_model_service_, std::placeholders::_1));
                 },
                 true,
                 LLM // LLM模型类型
@@ -972,8 +1065,9 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/completion", "/completions"},
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr {
-                    CHECK_MODEL_READY(llm_model_service_);
-                    return llm_model_service_->handle_completions(req);
+                    CHECK_SERVICE(llm_model_service_);
+                    return route_llm_request(
+                        req, std::bind(&LLModelService::handle_completions, llm_model_service_, std::placeholders::_1));
                 },
                 true,
                 LLM // LLM模型类型
@@ -982,8 +1076,9 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/embedding", "/embeddings"},
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr {
-                    CHECK_MODEL_READY(llm_model_service_);
-                    return llm_model_service_->handle_embeddings(req, TASK_RESPONSE_TYPE_NONE);
+                    CHECK_SERVICE(llm_model_service_);
+                    return route_llm_request(
+                        req, std::bind(&LLModelService::handle_embeddings, llm_model_service_, std::placeholders::_1));
                 },
                 true,
                 LLM // LLM模型类型
@@ -992,8 +1087,9 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/v1/embeddings"},
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr {
-                    CHECK_MODEL_READY(llm_model_service_);
-                    return llm_model_service_->handle_embeddings(req, TASK_RESPONSE_TYPE_OAI_EMBD);
+                    CHECK_SERVICE(llm_model_service_);
+                    return route_llm_request(
+                        req, std::bind(&LLModelService::handle_embeddings_oai, llm_model_service_, std::placeholders::_1));
                 },
                 true,
                 LLM // LLM模型类型
@@ -1157,9 +1253,11 @@ server_http_res_ptr HLIEWorkflow::handle_post_status(const server_http_req& req)
         std::lock_guard lk(mutex_);
         inst->get().meta.status = status;
         inst->get().meta.port = port;
-        LOG_INFO("Model[{}] loaded, port: {}", model, port);
+        LOG_INFO("Model[{}] status updated to {}, port: {}", static_cast<int>(status), model, port);
 
-        if (status == SERVER_MODEL_STATUS_UNLOADED) {
+        slave_cv_.notify_all();
+
+        if (status == SERVER_MODEL_STATUS_UNLOADED) { // 更新进程管理中的信息状态
             Singleton<HLIEProcessManager>::instance()->unload_model(model);
         }
     }
@@ -1181,7 +1279,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
 
     const auto body = json::parse(req.body);
     const std::string model_type = body.value("model_type", LLM);
-    if (model_type != LLM && model_type != SD) {
+    if (model_type != LLM && model_type != SD && model_type != WHISPER) {
         res->error(format_error_response_ex("Invalid model type.", ERROR_TYPE_INVALID_REQUEST, 80006));
         return res;
     }
@@ -1214,6 +1312,21 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
 
         sd_model_service_.reset();
     }
+
+    if (model_type == WHISPER && whisper_model_service_) {
+        model_instances_[whisper_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
+        whisper_model_service_->stop();
+
+        if (is_slave_) {
+            common_params params;
+            params.hostname = "127.0.0.1";
+            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
+            update_status(params, master_port, whisper_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
+        }
+
+        whisper_model_service_.reset();
+    }
+
 #endif
     LOG_INFO("Succeed to uninstall model");
 

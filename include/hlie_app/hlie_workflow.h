@@ -39,7 +39,8 @@ public:
     [[nodiscard]] std::vector<std::string> get_api_keys() const;
 
     // 定义处理函数类型
-    using RequestHandler = std::function<void(const httplib::Request&, httplib::Response&)>;
+    using OriRequestHandler = std::function<void(const httplib::Request&, httplib::Response&)>;
+    using RequestHandler = std::function<server_http_res_ptr(const server_http_req& req)>;
 
     // 路由配置结构
     struct RouteConfig {
@@ -48,7 +49,7 @@ public:
         std::function<server_http_res_ptr(const server_http_req& req)> handler = nullptr;
         bool require_model = false; // 是否需要特定模型服务
         std::string model_type = LLM; // 需要的模型类型
-        RequestHandler ori_handler = nullptr;
+        OriRequestHandler ori_handler = nullptr;
     };
 
     struct ModelInstance {
@@ -69,14 +70,26 @@ public:
 
 private:
     [[nodiscard]] server_http_res_ptr handle_health(const server_http_req& req) const;
+
     server_http_res_ptr handle_models(const server_http_req& req);
+
     server_http_res_ptr start_service(const server_http_req& req);
+
     int start_whisper(std::optional<server_model_meta>& meta, std::unique_ptr<server_res_generator_light>& res, const server_http_req& req,
                        const std::string& model_name, const std::string& model_path, const std::string& devices);
+
     bool router_validate_model(const std::string& name, const std::unique_ptr<server_res_generator_light>& res);
+
+    static server_http_res_ptr proxy_request(const server_http_req& req, const std::string& method, const std::string& name, int port);
+
+    server_http_res_ptr route_llm_request(const server_http_req& req, const RequestHandler& handler);
+
     server_http_res_ptr stop_service(const server_http_req& req);
+
     [[nodiscard]] server_http_res_ptr handle_get_status(const server_http_req& req) const;
+
     [[nodiscard]] server_http_res_ptr handle_post_status(const server_http_req& req);
+
     server_http_res_ptr handle_unload_model(const server_http_req& req);
 
     std::vector<server_model_meta> get_all_model_metas();
@@ -104,6 +117,9 @@ private:
     time_t start_time_;
 
     std::mutex mutex_;
+
+    std::condition_variable slave_cv_;
+    std::mutex slave_mutex_;
 };
 
 HLIE_NAMESPACE_END

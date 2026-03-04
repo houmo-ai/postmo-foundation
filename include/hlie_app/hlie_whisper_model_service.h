@@ -134,6 +134,10 @@ public:
 
     void handle_transcriptions(const httplib::Request& req, httplib::Response& res);
 
+    [[nodiscard]] std::string get_model_key() const {
+        return model_key_;
+    }
+
 private:
     std::future<WhisperResult> transcription_async(const WhisperRequest& request) const;
     WhisperResult transcription_sync(const WhisperRequest& request) const;
@@ -142,6 +146,8 @@ private:
 
     whisper_params params_;
     whisper_params default_params_;
+
+    std::string model_key_;
 
     whisper_context* whisper_ctx_{nullptr};
 

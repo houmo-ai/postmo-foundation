@@ -384,7 +384,7 @@ int WhisperModelService::init(const std::string& model_dir, const HLIEModelInfo&
     }
 
     default_params_ = params_;
-
+    model_key_ = model_info.model_key_;
     return 0;
 }
 

@@ -1,9 +1,9 @@
 ###
-POST http://127.0.0.1:7903/v1/chat/completions
+POST http://127.0.0.1:7901/v1/chat/completions
 Content-Type: application/json
 
 {
-  "model": "HiModel_xh2_qwen3-vl_4b_256_32k_b1_1chip_2cores_v0.7.0_20251228",
+  "model": "HiModel_xh2_qwen3_8b_256_32k_b1_1chip_2cores_v1.0.0_20260205",
   "messages": [
     {
       "role": "system",
@@ -17,7 +17,7 @@ Content-Type: application/json
   "top_k": 30,
   "temperature": 0,
   "top_p": 0.88,
-  "stream": false
+  "stream": true
 }
 
 ###
@@ -155,11 +155,11 @@ Content-Type: application/json
 }
 
 ### embed
-POST http://localhost:7902/v1/embeddings
+POST http://localhost:7901/v1/embeddings
 Content-Type: application/json
 
 {
-  "model": "HiModel_xh2_gte_1.5b_256_1chip_2cores_v0.7.0_20251228",
+  "model": "HiModel_xh2_bge_0.5b_0.5k_b10_1chip_2cores_v1.0.0_20260211",
   "input": "这是一段测试的文笔",
   "n_tokens": 5
 }
