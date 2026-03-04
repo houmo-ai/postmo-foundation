@@ -182,6 +182,11 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         common_log_set_verbosity_thold(-4);
     }
 
+    if (config_service->get_bool("model", "llm_lazy_mode", false)) {
+        LOG_INFO("LLAMA_ENABLE_LAZY_MODE = 1");
+        HlieUtil::set_env("LLAMA_ENABLE_LAZY_MODE", "1");
+    }
+
     common_init();
 
     llama_server_ = std::make_unique<server_context>();

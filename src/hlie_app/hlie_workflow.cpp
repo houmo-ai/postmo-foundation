@@ -957,7 +957,7 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(const server_http_req& req, 
         return handler(req);
     }
 
-    const bool auto_load = Singleton<HLIEConfigService>::instance()->get_bool("server", "auto_load", true, true);
+    const bool auto_load = Singleton<HLIEConfigService>::instance()->get_bool("model", "auto_load", true, true);
     // 如果模型未加载，尝试加载模型，
     if (inst->get().meta.status == SERVER_MODEL_STATUS_UNLOADED) {
         if (auto_load) {

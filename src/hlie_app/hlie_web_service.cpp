@@ -175,9 +175,9 @@ void HLIEWebService::init(int n_threads_http) {
     web_server_ = std::make_shared<httplib::Server>();
     web_server_->set_default_headers({{"Server", "HLIECpp"}});
 
-    web_server_->Get("/hi", [](const httplib::Request&, httplib::Response& res) {
-        LOG_INFO("Got a request /hi"); // For touch
-        res.set_content("Hello World!", "text/plain");
+    web_server_->Get("/version", [](const httplib::Request&, httplib::Response& res) {
+        const std::string json_response = R"({"Version": "v1.7.0"})";
+        res.set_content(json_response, "application/json");
     });
 
     web_server_->set_logger(log_server_request);
