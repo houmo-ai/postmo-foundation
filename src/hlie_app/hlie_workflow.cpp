@@ -140,25 +140,23 @@ namespace {
         return json_info_file;
     }
 
-    void update_status(const common_params& base_params, const int router_port, const std::string& name, const int port,
-        const server_model_status status = SERVER_MODEL_STATUS_LOADED) {
+    void update_status(const int router_port, const std::string& name, const int port,
+                       const server_model_status status = SERVER_MODEL_STATUS_LOADED) {
         // send a notification to the router server that a model instance is ready
-        httplib::Client cli(base_params.hostname, router_port);
+        httplib::Client cli("127.0.0.1", router_port);
         cli.set_connection_timeout(0, 200000); // 200 milliseconds
         httplib::Request req;
         req.method = "POST";
         req.path = "/models/status";
         req.set_header("Content-Type", "application/json");
-        if (!base_params.api_keys.empty()) {
-            req.set_header("Authorization", "Bearer " + base_params.api_keys[0]);
-        }
+
         json body;
         body["model"] = name;
         body["port"] = port;
         body["value"] = server_model_status_to_string(status);
         req.body = body.dump();
 
-        LOG_INFO("notifying router server (port={}) that model {} is ready", router_port, name.c_str());
+        LOG_INFO("notifying router server (port={}) that model {} at [{}] is ready", router_port, name.c_str(), port);
         if (const auto result = cli.send(req); result.error() != httplib::Error::Success) {
             const auto err_str = httplib::to_string(result.error());
             LOG_ERR("failed to notify router server: %s\n", err_str.c_str());
@@ -194,6 +192,8 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
 #endif
 
     const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
+    replicas_mode_ =  Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1) > 1;
+    master_port_ = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
     std::vector<HLIEModelInfo> model_infos;
     if (args.find("--json_info") != args.end()) { // 是否为外部接口调用启动服务
         std::string json_path = args.at("--json_info");
@@ -395,17 +395,10 @@ void HLIEWorkflow::run() {
 
         model_instances_[llm_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_LOADED;
 
-        if (is_slave_) {
+        if (is_slave_ && !replicas_mode_) {
             std::thread([&] {
-                common_params params;
-                params.hostname = "127.0.0.1";
-                const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-                std::this_thread::sleep_for(std::chrono::seconds(15));
-                if (!llm_model_service_) {
-                    LOG_ERROR("llm_model_service_ is nullptr");
-                    return;
-                }
-                update_status(params, master_port, llm_model_service_->get_model_key(), port_);
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                update_status(master_port_, llm_model_service_->get_model_key(), port_);
             }).detach();
         }
     }
@@ -414,17 +407,10 @@ void HLIEWorkflow::run() {
     if (sd_model_service_) {
         sd_model_service_->run();
         model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADED;
-        if (is_slave_) {
+        if (is_slave_ && !replicas_mode_) {
             std::thread([&] {
-                common_params params;
-                params.hostname = "127.0.0.1";
-                const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-                std::this_thread::sleep_for(std::chrono::seconds(15));
-                if (!sd_model_service_) {
-                    LOG_ERROR("sd_model_service_ is nullptr");
-                    return;
-                }
-                update_status(params, master_port, HLIEModelType::SD3, port_);
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                update_status(master_port_, HLIEModelType::SD3, port_);
             }).detach();
         }
     }
@@ -432,17 +418,10 @@ void HLIEWorkflow::run() {
     if (whisper_model_service_) {
         whisper_model_service_->run();
         model_instances_[whisper_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_LOADED;
-        if (is_slave_) {
+        if (is_slave_ && !replicas_mode_) {
             std::thread([&] {
-                common_params params;
-                params.hostname = "127.0.0.1";
-                const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-                std::this_thread::sleep_for(std::chrono::seconds(15));
-                if (!whisper_model_service_) {
-                    LOG_ERROR("whisper_model_service_ is nullptr");
-                    return;
-                }
-                update_status(params, master_port, whisper_model_service_->get_model_key(), port_);
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                update_status(master_port_, whisper_model_service_->get_model_key(), port_);
             }).detach();
         }
     }
@@ -453,10 +432,7 @@ void HLIEWorkflow::stop() {
 #ifdef HOUMO_XH2
     if (sd_model_service_) {
         if (is_slave_) {
-            common_params params;
-            params.hostname = "127.0.0.1";
-            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-            update_status(params, master_port, HLIEModelType::SD3, port_, SERVER_MODEL_STATUS_UNLOADED);
+            update_status(master_port_, HLIEModelType::SD3, port_, SERVER_MODEL_STATUS_UNLOADED);
         }
         sd_model_service_->stop();
         sd_model_service_.reset();
@@ -464,10 +440,7 @@ void HLIEWorkflow::stop() {
 
     if (whisper_model_service_) {
         if (is_slave_) {
-            common_params params;
-            params.hostname = "127.0.0.1";
-            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-            update_status(params, master_port, whisper_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
+            update_status(master_port_, whisper_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
         }
         whisper_model_service_->stop();
         whisper_model_service_.reset();
@@ -476,10 +449,7 @@ void HLIEWorkflow::stop() {
 
     if (llm_model_service_) {
         if (is_slave_) {
-            common_params params;
-            params.hostname = "127.0.0.1";
-            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-            update_status(params, master_port, llm_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
+            update_status(master_port_, llm_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
         }
         llm_model_service_->stop();
     }
@@ -577,7 +547,7 @@ server_http_res_ptr HLIEWorkflow::handle_models(const server_http_req& req) {
 server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
     auto res = std::make_unique<server_res_generator_light>();
-    if (config_services->get_int("server", "replicas", 1) > 1) {
+    if (replicas_mode_) {
         // 集群|多实例模式下，不允许外部调用启动模型实例
         res->error(
             format_error_response_ex("In the cluster or multi-instance mode, external calls to start model instances are not allowed.",
@@ -673,7 +643,6 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     }
 
     LOG_INFO("acquire devices successfully with {}", devices);
-    const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
     auto instance_id = 0;
     std::string json_info_file;
     ProcessID process_id = 0;
@@ -744,13 +713,11 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
             llm_model_service_->run();
             model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
-            if (port_ != master_port) {
-                common_params status_params;
-                status_params.hostname = "127.0.0.1";
-                update_status(status_params, master_port, llm_model_service_->get_model_key(), port_);
+            if (port_ != master_port_) {
+                update_status(master_port_, llm_model_service_->get_model_key(), port_);
             }
         } else {
-            if (port_ != master_port) {
+            if (port_ != master_port_) {
                 LOG_ERROR("slave cannot start new slave");
                 res->error(format_error_response_ex("slave cannot start new slave", ERROR_TYPE_SERVER, 80001));
                 return res;
@@ -809,13 +776,11 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
             sd_model_service_->run();
             model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADED;
-            if (port_ != master_port) {
-                common_params status_params;
-                status_params.hostname = "127.0.0.1";
-                update_status(status_params, master_port, HLIEModelType::SD3, port_);
+            if (port_ != master_port_) {
+                update_status(master_port_, HLIEModelType::SD3, port_);
             }
         } else {
-            if (port_ != master_port) {
+            if (port_ != master_port_) {
                 LOG_ERROR("slave cannot start new slave");
                 res->error(format_error_response_ex("slave cannot start new slave", ERROR_TYPE_SERVER, 80001));
                 return res;
@@ -925,9 +890,7 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
 
         if (port_ != master_port) {
-            common_params status_params;
-            status_params.hostname = "127.0.0.1";
-            update_status(status_params, master_port, whisper_model_service_->get_model_key(), port_);
+            update_status(master_port_, whisper_model_service_->get_model_key(), port_);
         }
     } else {
         if (port_ != master_port) {
@@ -1020,7 +983,7 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(const server_http_req& req, 
     }
 
     const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-    if (inst->get().meta.port == 0 || master_port != port_) {
+    if (inst->get().meta.status == SERVER_MODEL_STATUS_LOADED && (inst->get().meta.port == 0 || master_port != port_)) {
         return handler(req);
     }
 
@@ -1238,9 +1201,8 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
     const auto instance_id = body.at("instance_id").get<int>();
     const auto process_id = body.at("process_id").get<int>();
 
-    std::unique_lock lock(mutex_);
-
     if (instance_id == 0) {
+        std::unique_lock lock(mutex_);
         if (llm_model_service_) {
             model_instances_[llm_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
             llm_model_service_->stop();
@@ -1255,9 +1217,19 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
 #endif
         LOG_INFO("Succeed to stop service process for instance_id[{}][{}]", instance_id, process_id);
     } else if (process_id != 0) {
-        if (!Singleton<HLIEProcessManager>::instance()->terminate_process(process_id)) {
-            LOG_ERROR("Failed to terminate process for instance_id[{}][{}]", instance_id, process_id);
-            const json resp = {{"ret", 80001}, "Failed to terminate process for instance_id."};
+        const auto& process_manager = Singleton<HLIEProcessManager>::instance();
+        const auto& models = process_manager->get_working_models(instance_id);
+
+        for (const auto& model : models) {
+            auto model_inst = get_model_inst(model);
+            if (model_inst) {
+                model_inst->get().meta.status = SERVER_MODEL_STATUS_UNLOADED;
+            }
+        }
+
+        if (!process_manager->terminate_process(process_id)) {
+            LOG_ERROR("Failed to terminate process for instance_id[{}][{}], maybe has been killed or something", instance_id, process_id);
+            const json resp = {{"ret", 80001}, "Failed to terminate process for instance_id, maybe has been killed or something"};
             res->error(resp);
             return res;
         }
@@ -1335,7 +1307,7 @@ server_http_res_ptr HLIEWorkflow::handle_post_status(const server_http_req& req)
         slave_cv_.notify_all();
 
         if (status == SERVER_MODEL_STATUS_UNLOADED) { // 更新进程管理中的信息状态
-            Singleton<HLIEProcessManager>::instance()->unload_model(model);
+            Singleton<HLIEProcessManager>::instance()->erase_model(model);
         } else if (status == SERVER_MODEL_STATUS_LOADED) {
             const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
             const int instance_id = port - master_port;
@@ -1371,10 +1343,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         llm_model_service_->stop();
 
         if (is_slave_) {
-            common_params params;
-            params.hostname = "127.0.0.1";
-            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-            update_status(params, master_port, llm_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
+            update_status(master_port_, llm_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
         }
 
         llm_model_service_.reset();
@@ -1385,10 +1354,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         sd_model_service_->stop();
 
         if (is_slave_) {
-            common_params params;
-            params.hostname = "127.0.0.1";
-            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-            update_status(params, master_port, HLIEModelType::SD3, port_, SERVER_MODEL_STATUS_UNLOADED);
+            update_status(master_port_, HLIEModelType::SD3, port_, SERVER_MODEL_STATUS_UNLOADED);
         }
 
         sd_model_service_.reset();
@@ -1399,10 +1365,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         whisper_model_service_->stop();
 
         if (is_slave_) {
-            common_params params;
-            params.hostname = "127.0.0.1";
-            const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-            update_status(params, master_port, whisper_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
+            update_status(master_port_, whisper_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
         }
 
         whisper_model_service_.reset();

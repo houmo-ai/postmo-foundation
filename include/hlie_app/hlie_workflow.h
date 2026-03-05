@@ -114,6 +114,8 @@ private:
     std::string model_dir_;
     int port_;
     bool is_slave_{false};
+    bool replicas_mode_{false};
+    int master_port_;
     time_t start_time_;
 
     std::mutex mutex_;

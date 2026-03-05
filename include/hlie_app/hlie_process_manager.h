@@ -51,7 +51,8 @@ public:
     bool terminate_process(ProcessID pid);
     bool terminate_all();
     std::vector<ProcessInfo> get_running_processes();
-    void unload_model(const std::string& model_name);
+    void erase_model(const std::string& model_name);
+    std::vector<std::string> get_working_models(int instance_id);
     void add_model(const std::string& model_name, int instance_id);
     void monitor_processes();
 

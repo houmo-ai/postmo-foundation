@@ -233,7 +233,7 @@ std::vector<HLIEProcessManager::ProcessInfo> HLIEProcessManager::get_running_pro
     return result;
 }
 
-void HLIEProcessManager::unload_model(const std::string& model_name) {
+void HLIEProcessManager::erase_model(const std::string& model_name) {
     monitor_processes(); // 更新状态后再返回
 
     std::lock_guard lock(mutex_);
@@ -262,6 +262,25 @@ void HLIEProcessManager::unload_model(const std::string& model_name) {
 
         break;
     }
+}
+
+std::vector<std::string> HLIEProcessManager::get_working_models(const int instance_id) {
+    monitor_processes();
+
+    std::lock_guard lock(mutex_);
+
+    for (const auto& [pid, process] : processes_) {
+        if (!process.is_running || process.instance_id != instance_id) {
+            continue;
+        }
+
+        return std::vector(
+            process.model_names.begin(),
+            process.model_names.end()
+        );
+    }
+
+    return {};
 }
 
 void HLIEProcessManager::add_model(const std::string& model_name, const int instance_id) {
