@@ -1020,7 +1020,7 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(const server_http_req& req, 
     }
 
     const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-    if (inst->get().meta.port == master_port || master_port != port_) {
+    if (inst->get().meta.port == 0 || master_port != port_) {
         return handler(req);
     }
 
