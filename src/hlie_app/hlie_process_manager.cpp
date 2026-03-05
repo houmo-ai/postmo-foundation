@@ -264,6 +264,32 @@ void HLIEProcessManager::unload_model(const std::string& model_name) {
     }
 }
 
+void HLIEProcessManager::add_model(const std::string& model_name, const int instance_id) {
+    monitor_processes(); // 更新状态后再返回
+
+    std::lock_guard lock(mutex_);
+
+    for (auto& [pid, process] : processes_) {
+        if (!process.is_running && process.instance_id != instance_id) {
+            continue;
+        }
+
+        auto it = std::find(process.model_names.begin(),
+                            process.model_names.end(),
+                            model_name);
+
+        if (it != process.model_names.end()) {
+            continue;
+        }
+
+        process.model_names.push_back(model_name);
+
+        LOG_INFO("model {} add into process {}", model_name, pid);
+
+        break;
+    }
+}
+
 void HLIEProcessManager::monitor_processes() {
     std::lock_guard lock(mutex_);
 

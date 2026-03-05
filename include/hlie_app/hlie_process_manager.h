@@ -52,6 +52,7 @@ public:
     bool terminate_all();
     std::vector<ProcessInfo> get_running_processes();
     void unload_model(const std::string& model_name);
+    void add_model(const std::string& model_name, int instance_id);
     void monitor_processes();
 
 private:

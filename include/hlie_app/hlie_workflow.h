@@ -30,7 +30,7 @@ public:
 
     void run();
 
-    void stop() const;
+    void stop();
 
     [[nodiscard]] std::shared_ptr<IHLIEModelService> get_model_service(const std::string& type) const;
 
