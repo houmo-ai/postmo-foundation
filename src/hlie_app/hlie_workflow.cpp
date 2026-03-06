@@ -397,6 +397,7 @@ void HLIEWorkflow::run() {
 
         if (is_slave_ && !replicas_mode_) {
             std::thread([&] {
+                model_instances_[llm_model_service_->get_model_key()].meta.port = port_;
                 std::this_thread::sleep_for(std::chrono::seconds(3));
                 update_status(master_port_, llm_model_service_->get_model_key(), port_);
             }).detach();
@@ -409,6 +410,7 @@ void HLIEWorkflow::run() {
         model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADED;
         if (is_slave_ && !replicas_mode_) {
             std::thread([&] {
+                model_instances_[HLIEModelType::SD3].meta.port = port_;
                 std::this_thread::sleep_for(std::chrono::seconds(3));
                 update_status(master_port_, HLIEModelType::SD3, port_);
             }).detach();
@@ -420,6 +422,7 @@ void HLIEWorkflow::run() {
         model_instances_[whisper_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_LOADED;
         if (is_slave_ && !replicas_mode_) {
             std::thread([&] {
+                model_instances_[whisper_model_service_->get_model_key()].meta.port = port_;
                 std::this_thread::sleep_for(std::chrono::seconds(3));
                 update_status(master_port_, whisper_model_service_->get_model_key(), port_);
             }).detach();
@@ -983,7 +986,8 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(const server_http_req& req, 
     }
 
     const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-    if (inst->get().meta.status == SERVER_MODEL_STATUS_LOADED && (inst->get().meta.port == 0 || master_port != port_)) {
+    LOG_INFO("LLM Request route info, model [{}] status [{}] port [{}]" , name, static_cast<int>(inst->get().meta.status), inst->get().meta.port);
+    if (inst->get().meta.status == SERVER_MODEL_STATUS_LOADED && (inst->get().meta.port == master_port || master_port != port_)) {
         return handler(req);
     }
 
