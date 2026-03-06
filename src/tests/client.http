@@ -165,13 +165,13 @@ Content-Type: application/json
 }
 
 ### embed
-POST http://127.0.0.1:7901//v1/audio/transcriptions
+POST http://127.0.0.1:7901/v1/audio/transcriptions
 Content-Type: multipart/form-data; boundary=WebAppBoundary
 
 --WebAppBoundary
 Content-Disposition: form-data; name="file"; filename="jfk.wav"
 
-< D:/workspace/wtt/houmo/whisper.cpp/samples/jfk.wav
+< E:/test_data/audio/chinese_man.wav
 --WebAppBoundary--
 
 Content-Disposition: form-data; name="temperature"

@@ -66,6 +66,7 @@ private:
     std::unique_ptr<std::thread> worker_thread_;  // 工作线程
     std::atomic<bool> should_stop_{false};  // 线程停止标志
     std::atomic<bool> is_ready = false;
+    bool is_embedding_ = false;
     std::string model_key_;
     int batch_num_{1};
 };

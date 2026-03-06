@@ -95,6 +95,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
 
     if (model_info.is_embedding_model()) {
         params.embedding = true;
+        is_embedding_ = true;
     }
 
     params.model_alias = model_info.get_model_name();
@@ -248,6 +249,9 @@ void LLModelService::stop() {
 #endif
     }
     devices_.clear();
+    if (is_embedding_) {
+        return;
+    }
     llama_memory_breakdown_print(llama_server_->get_llama_context());
 }
 

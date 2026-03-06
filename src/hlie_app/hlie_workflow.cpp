@@ -716,6 +716,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
             llm_model_service_->run();
             model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
+            model_inst->get().meta.port = port_;
             if (port_ != master_port_) {
                 update_status(master_port_, llm_model_service_->get_model_key(), port_);
             }
@@ -779,6 +780,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
             sd_model_service_->run();
             model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADED;
+            model_instances_[HLIEModelType::SD3].meta.port = port_;
             if (port_ != master_port_) {
                 update_status(master_port_, HLIEModelType::SD3, port_);
             }
@@ -891,7 +893,7 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
 
         whisper_model_service_->run();
         model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
-
+        model_inst->get().meta.port = port_;
         if (port_ != master_port) {
             update_status(master_port_, whisper_model_service_->get_model_key(), port_);
         }
