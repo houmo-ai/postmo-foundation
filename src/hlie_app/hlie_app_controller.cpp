@@ -46,7 +46,7 @@ namespace {
         Singleton<HLIEDeviceHelper>::instance()->init(devices);
 #endif
 
-        // 多实例场景
+        // 多实例负载均衡场景判断与初始化
         const auto replicas = config_services->get_int("server", "replicas", 1);
         if (args.find("--instance_id") == args.end()) {
             if (replicas > 1) {
@@ -116,6 +116,9 @@ namespace {
                 }
             }
         } else {
+#ifdef HOUMO_XH2
+            Singleton<HLIEDeviceHelper>::instance()->init(devices);
+#endif
             if (args.find("--device_id") == args.end()) {
                 LOG_ERROR("Instance Replica must specify all the --instance_id and --device_id params");
                 return -1;

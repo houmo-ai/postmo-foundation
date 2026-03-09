@@ -434,7 +434,7 @@ void HLIEWorkflow::run() {
 void HLIEWorkflow::stop() {
 #ifdef HOUMO_XH2
     if (sd_model_service_) {
-        if (is_slave_) {
+        if (is_slave_ && !replicas_mode_) {
             update_status(master_port_, HLIEModelType::SD3, port_, SERVER_MODEL_STATUS_UNLOADED);
         }
         sd_model_service_->stop();
@@ -442,7 +442,7 @@ void HLIEWorkflow::stop() {
     }
 
     if (whisper_model_service_) {
-        if (is_slave_) {
+        if (is_slave_ && !replicas_mode_) {
             update_status(master_port_, whisper_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
         }
         whisper_model_service_->stop();
@@ -451,7 +451,7 @@ void HLIEWorkflow::stop() {
 #endif
 
     if (llm_model_service_) {
-        if (is_slave_) {
+        if (is_slave_ && !replicas_mode_) {
             update_status(master_port_, llm_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
         }
         llm_model_service_->stop();
@@ -717,7 +717,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             llm_model_service_->run();
             model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
             model_inst->get().meta.port = port_;
-            if (port_ != master_port_) {
+            if (port_ != master_port_ && !replicas_mode_) {
                 update_status(master_port_, llm_model_service_->get_model_key(), port_);
             }
         } else {
@@ -781,7 +781,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             sd_model_service_->run();
             model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADED;
             model_instances_[HLIEModelType::SD3].meta.port = port_;
-            if (port_ != master_port_) {
+            if (port_ != master_port_ && !replicas_mode_) {
                 update_status(master_port_, HLIEModelType::SD3, port_);
             }
         } else {
@@ -894,7 +894,7 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         whisper_model_service_->run();
         model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
         model_inst->get().meta.port = port_;
-        if (port_ != master_port) {
+        if (port_ != master_port && !replicas_mode_) {
             update_status(master_port_, whisper_model_service_->get_model_key(), port_);
         }
     } else {
@@ -1348,7 +1348,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         model_instances_[llm_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
         llm_model_service_->stop();
 
-        if (is_slave_) {
+        if (is_slave_ && !replicas_mode_) {
             update_status(master_port_, llm_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
         }
 
@@ -1359,7 +1359,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_UNLOADED;
         sd_model_service_->stop();
 
-        if (is_slave_) {
+        if (is_slave_ && !replicas_mode_) {
             update_status(master_port_, HLIEModelType::SD3, port_, SERVER_MODEL_STATUS_UNLOADED);
         }
 
@@ -1370,7 +1370,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         model_instances_[whisper_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
         whisper_model_service_->stop();
 
-        if (is_slave_) {
+        if (is_slave_ && !replicas_mode_) {
             update_status(master_port_, whisper_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
         }
 
