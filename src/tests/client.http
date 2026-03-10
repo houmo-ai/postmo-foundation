@@ -171,7 +171,7 @@ Content-Type: multipart/form-data; boundary=WebAppBoundary
 --WebAppBoundary
 Content-Disposition: form-data; name="file"; filename="jfk.wav"
 
-< E:/test_data/audio/chinese_man.wav
+< E:/test_data/audio/long_2.wav
 --WebAppBoundary--
 
 Content-Disposition: form-data; name="temperature"
