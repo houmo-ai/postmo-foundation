@@ -71,6 +71,41 @@ std::optional<int> HLIEDeviceHelper::acquire_device(const std::string& applicant
     return std::nullopt;
 }
 
+bool HLIEDeviceHelper::acquire_devices(const std::string& applicant, int device_num, std::vector<int>& acquiring_devices,
+                                       const bool dry_run) {
+    if (applicant.empty()) {
+        LOG_ERROR("applicant cannot be empty");
+        return false;
+    }
+
+    std::lock_guard lock(mutex_);
+
+    acquiring_devices.clear();
+    std::vector<int> tmp;;
+    for (const auto& [fst, snd] : devices_) {
+        if (snd.empty()) {
+            tmp.push_back(fst);
+            if (tmp.size() == device_num) {
+                break;
+            }
+        }
+    }
+
+    if (tmp.size() < device_num) {
+        LOG_ERROR("cannot acquire specified device num {} in global devices pool with {}, see the sys.cfg to check it", device_num);
+        return false;
+    }
+
+    for (const auto& device : tmp) {
+        if (!dry_run) {
+            devices_.at(device) = applicant;
+        }
+        acquiring_devices.push_back(device);
+    }
+
+    return true;
+}
+
 bool HLIEDeviceHelper::acquire_devices(const std::string& applicant, const std::string& devices, std::vector<int>& acquiring_devices, const bool dry_run) {
     if (applicant.empty()) {
         LOG_ERROR("applicant cannot be empty");

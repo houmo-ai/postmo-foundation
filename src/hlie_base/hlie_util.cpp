@@ -217,4 +217,17 @@ int HlieUtil::parse_device(const std::string& devices, std::vector<int>& acquiri
     return 0;
 }
 
+std::string HlieUtil::join_devices(const std::vector<int>& devices) {
+    std::ostringstream oss;
+
+    for (size_t i = 0; i < devices.size(); ++i) {
+        if (i > 0) {
+            oss << ",";
+        }
+        oss << devices[i];
+    }
+
+    return oss.str();
+}
+
 HLIE_NAMESPACE_END

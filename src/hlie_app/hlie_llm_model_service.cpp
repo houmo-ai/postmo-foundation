@@ -122,13 +122,24 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
 
     if (const int replicas = Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1); replicas > 1) {
         is_multi_instance_ = true;
-        if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(LLM); !val) {
-            LOG_ERROR("LLM cannot acquire available device");
-            return -1;
+        if (model_info.get_device_num() > 1) {
+            if (!Singleton<HLIEDeviceHelper>::instance()->acquire_devices(LLM, model_info.get_device_num(), devices_)) {
+                LOG_ERROR("LLM cannot acquire available {} devices", model_info.get_device_num());
+                return -1;
+            }
+
+            devices = HlieUtil::join_devices(devices_);
+            HlieUtil::set_env("HOUMO_DEVICE_ID", devices);
+            LOG_INFO("LLM using multi devices: {}", devices);
         } else {
-            HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(val.value()));
-            devices_.push_back(*val);
-            LOG_INFO("LLM using device: {}", val.value());
+            if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(LLM); !val) {
+                LOG_ERROR("LLM cannot acquire available device");
+                return -1;
+            } else {
+                HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(val.value()));
+                devices_.push_back(*val);
+                LOG_INFO("LLM using device: {}", val.value());
+            }
         }
     } else { // 单实例模式可以定制Model Devices
 #ifndef HOUMO_XH2

@@ -20,6 +20,7 @@ public:
      * 申请设备ID（返回optional明确表示可能失败）
      *
      * @param applicant
+     * @param dry_run
      * @return
      */
     std::optional<int> acquire_device(const std::string& applicant, bool dry_run = false);
@@ -29,9 +30,21 @@ public:
      *
      * @param applicant
      * @param device_id
+     * @param dry_run
      * @return
      */
     std::optional<int> acquire_device(const std::string& applicant, int device_id, bool dry_run = false);
+
+    /**
+     * 尝试获取指定的设备
+     *
+     * @param applicant
+     * @param device_num - 设备数量
+     * @param acquiring_devices - 获取到的设备ID列表
+     * @param dry_run - 尝试获取设备，不修改设备状态
+     * @return
+     */
+    bool acquire_devices(const std::string& applicant, int device_num, std::vector<int>& acquiring_devices, bool dry_run = false);
 
     /**
      * 尝试获取指定的设备
