@@ -47,6 +47,8 @@ xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/relea
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.2.0_linux_${ARCH}.tar.gz"
 xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.0.0_linux_${ARCH}.tar.gz"
+xh2_uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-linux_${ARCH}.tar.gz"
+
 
 # 下载文件并检查是否成功
 download_file() {
@@ -89,6 +91,17 @@ deploy_whisper_cpp_sdk() {
     tar -xzf whisper.cpp.tar.gz -C third_party/whisper.cpp --strip-components=1
     rm whisper.cpp.tar.gz
 }
+
+deploy_uwebsockets() {
+    local uwebsockets_url=$1
+    mkdir -p third_party/uwebsockets
+    rm -rf third_party/uwebsockets/*
+
+    download_file "$uwebsockets_url" "uwebsockets.tar.gz"
+    tar -xzf uwebsockets.tar.gz -C third_party/uwebsockets --strip-components=1
+    rm uwebsockets.tar.gz
+}
+
 # 部署 Dadao SDK
 deploy_dadao_sdk() {
     local dadao_url=$1
@@ -188,6 +201,7 @@ package_service() {
     if [ $PLATFORM == "xh2" ]; then
         cp third_party/sd.cpp/lib/libstable-diffusion.so "$release_dir/lib/" || true
         cp third_party/whisper.cpp/lib/libwhisper.so "$release_dir/lib/" || true
+        cp third_party/uwebsockets/bin/libuv.so "$release_dir/lib/" || true
         cp third_party/houmo/lib/libhal_xh2a.so.1.0 "$release_dir/lib/" || true
     fi
 
@@ -233,6 +247,7 @@ main() {
             deploy_llama_sdk "$xh2_llama_sdk_url"
             deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
             deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"
+            deploy_uwebsockets "$xh2_uwebsockets_url"
             ;;
     esac
 

@@ -8,10 +8,10 @@
 
 #include "hlie_base/hlie_blocking_queue.h"
 #include "hlie_model_service.h"
+#include "hlie_ws_service.h"
 #include "httplib.h"
 #include "json.hpp"
 #include "whisper.h"
-
 
 
 // output formats
@@ -132,6 +132,10 @@ public:
 
     void handle_models(nlohmann::ordered_json& resp) const;
 
+    void fill_params(whisper_full_params& wparams) const;
+
+    std::string handle_stream(const WhisperStreamRequest& request) const;
+
     void handle_transcriptions(const httplib::Request& req, httplib::Response& res);
 
     [[nodiscard]] std::string get_model_key() const {
@@ -157,6 +161,8 @@ private:
     };
 
     std::shared_ptr<HLIEBlockingQueue<QueueItem>> blocking_queue_;
+
+    std::unique_ptr<HLIEWebSocketService> websocket_service_;
 
     std::unique_ptr<std::thread> worker_thread_; // 工作线程
     std::atomic<bool> should_stop_{false}; // 线程停止标志

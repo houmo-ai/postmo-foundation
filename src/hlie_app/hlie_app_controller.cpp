@@ -177,6 +177,10 @@ void HLIEAppController::stop() {
         workflow_->stop();
     }
 
+    if (web_service_) {
+        web_service_->stop();
+    }
+
     Singleton<HLIEProcessManager>::instance()->terminate_all();
     is_running_.store(false);
     cv_.notify_one();

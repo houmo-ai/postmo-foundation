@@ -20,6 +20,7 @@ xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/relea
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.2.0_windows11_x86_64.tar.gz"
 xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.0.0_windows11_x86_64.tar.gz"
+xh2_uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-win_x64.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {
@@ -61,6 +62,16 @@ deploy_whisper_cpp_sdk() {
     download_file "$whisper_cpp_sdk_url" "whisper.cpp.tar.gz"
     tar -xzf whisper.cpp.tar.gz -C third_party/whisper.cpp --strip-components=1
     rm whisper.cpp.tar.gz
+}
+
+deploy_uwebsockets() {
+    local uwebsockets_url=$1
+    mkdir -p third_party/uwebsockets
+    rm -rf third_party/uwebsockets/*
+
+    download_file "$uwebsockets_url" "uwebsockets.tar.gz"
+    tar -xzf uwebsockets.tar.gz -C third_party/uwebsockets --strip-components=1
+    rm uwebsockets.tar.gz
 }
 
 # 部署 Dadao SDK
@@ -129,6 +140,7 @@ main() {
             deploy_llama_sdk "$xh2_llama_sdk_url"
             deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
             deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"
+            deploy_uwebsockets "$xh2_uwebsockets_url"
             ;;
     esac
 

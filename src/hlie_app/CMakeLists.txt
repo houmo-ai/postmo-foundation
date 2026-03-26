@@ -12,13 +12,14 @@ if(NOT HOUMO_XH2)
     list(REMOVE_ITEM SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_sd_model_service.cpp")
     list(REMOVE_ITEM SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_whisper_model_service.cpp")
     list(REMOVE_ITEM SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_device_service.cpp")
+    list(REMOVE_ITEM SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_ws_service.cpp")
 endif ()
 
 add_library(${TARGET} ${SOURCES})
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 
 if(HOUMO_XH2)
-    target_link_libraries(${TARGET} PUBLIC ${STABLE_DIFFUSION} ${WHISPER_CPP})
+    target_link_libraries(${TARGET} PUBLIC ${STABLE_DIFFUSION} ${WHISPER_CPP} ${UWEBSOCKET_LIBRARY} ${UV_LIBRARY})
 endif()
 
 target_link_libraries(${TARGET} PRIVATE ${LLAMA_CPP_LIBRARY_SERVER} PUBLIC hlie-base cpp-httplib ${HMSYS_LIBRARY} ${TCIM_LIBRARY}  ${INIH_LIBRARY_CPP} ${INIH_LIBRARY}

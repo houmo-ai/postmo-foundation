@@ -385,6 +385,10 @@ int WhisperModelService::init(const std::string& model_dir, const HLIEModelInfo&
 
     default_params_ = params_;
     model_key_ = model_info.model_key_;
+    websocket_service_ = std::make_unique<HLIEWebSocketService>();
+
+    websocket_service_->init();
+
     return 0;
 }
 
@@ -393,6 +397,9 @@ void WhisperModelService::run() {
         LOG_WARN("WhisperModelService thread is already running.");
         return;
     }
+
+    // Todo 判断配置是否支持WS
+    websocket_service_->run([this](const WhisperStreamRequest& req) { return this->handle_stream(req); });
 
     state_.store(SERVER_STATE_READY);
     should_stop_ = false;
@@ -450,10 +457,14 @@ void WhisperModelService::stop() {
     worker_thread_.reset();
     whisper_free(whisper_ctx_);
 
+    if (websocket_service_) {
+        websocket_service_->stop();
+    }
+
     if (is_multi_instance_) {
         Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
     } else {
-        device_service_->release_mem_on_devices(devices_, 11000);
+        device_service_->release_mem_on_devices(devices_, 2000);
     }
     devices_.clear();
 }
@@ -467,7 +478,6 @@ int WhisperModelService::handle_health(nlohmann::ordered_json& resp) {
 }
 
 void WhisperModelService::handle_models(nlohmann::ordered_json& resp) const {
-    // 添加SD3模型信息
     resp["models"].push_back({
         {"name", "Whisper"},
         {"model", "whisper"},
@@ -479,6 +489,76 @@ void WhisperModelService::handle_models(nlohmann::ordered_json& resp) const {
         {"created", std::time(0)},
         {"owned_by", "HLIECpp"},
     });
+}
+
+void WhisperModelService::fill_params(whisper_full_params& wparams) const {
+    wparams.strategy = params_.beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY;
+
+    wparams.print_realtime = false;
+    wparams.print_progress = params_.print_progress;
+    wparams.print_timestamps = !params_.no_timestamps;
+    wparams.print_special = params_.print_special;
+    wparams.translate = params_.translate;
+    wparams.language = params_.language.c_str();
+    wparams.detect_language = params_.detect_language;
+    wparams.n_threads = params_.n_threads;
+    wparams.n_max_text_ctx = params_.max_context >= 0 ? params_.max_context : wparams.n_max_text_ctx;
+    wparams.offset_ms = params_.offset_t_ms;
+    wparams.duration_ms = params_.duration_ms;
+
+    wparams.thold_pt = params_.word_thold;
+    wparams.max_len = params_.max_len == 0 ? 60 : params_.max_len;
+    wparams.split_on_word = params_.split_on_word;
+    wparams.audio_ctx = params_.audio_ctx;
+
+    wparams.debug_mode = params_.debug_mode;
+
+    wparams.tdrz_enable = params_.tinydiarize; // [TDRZ]
+
+    wparams.initial_prompt = params_.prompt.c_str();
+
+    wparams.greedy.best_of = params_.best_of;
+    wparams.beam_search.beam_size = params_.beam_size;
+
+    wparams.temperature = params_.temperature;
+    wparams.no_speech_thold = params_.no_speech_thold;
+    wparams.temperature_inc = params_.temperature_inc;
+    wparams.entropy_thold = params_.entropy_thold;
+    wparams.logprob_thold = params_.logprob_thold;
+
+    wparams.no_timestamps = params_.no_timestamps;
+    wparams.token_timestamps = !params_.no_timestamps && params_.response_format == vjson_format;
+    wparams.no_context = params_.no_context;
+
+    wparams.suppress_nst = params_.suppress_nst;
+
+    wparams.vad = params_.vad;
+    wparams.vad_model_path = params_.vad_model.c_str();
+
+    wparams.vad_params.threshold = params_.vad_threshold;
+    wparams.vad_params.min_speech_duration_ms = params_.vad_min_speech_duration_ms;
+    wparams.vad_params.min_silence_duration_ms = params_.vad_min_silence_duration_ms;
+    wparams.vad_params.max_speech_duration_s = params_.vad_max_speech_duration_s;
+    wparams.vad_params.speech_pad_ms = params_.vad_speech_pad_ms;
+    wparams.vad_params.samples_overlap = params_.vad_samples_overlap;
+}
+
+std::string WhisperModelService::handle_stream(const WhisperStreamRequest& request) const {
+    whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    fill_params(wparams);
+
+    WhisperRequest req;
+    req.filename = "stream";
+    req.params = wparams;
+    req.pcmf32 = request.pcmf32;
+    req.n_processors = 1;
+
+    const auto start = std::chrono::steady_clock::now();
+    auto transcription_result = transcription(req);
+    const auto end = std::chrono::steady_clock::now();
+    auto predicted_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    LOG_INFO("transcription time: {} ms", predicted_ms);
+    return transcription_result;
 }
 
 std::future<WhisperResult> WhisperModelService::transcription_async(const WhisperRequest& request) const {
@@ -506,8 +586,7 @@ std::string WhisperModelService::transcription(const WhisperRequest& request) co
     std::string results;
     try {
         LOG_INFO("whisper.cpp full parallel ready to run {}", request.filename);
-        if (whisper_full_parallel(whisper_ctx_, request.params, request.pcmf32.data(), request.pcmf32.size(), request.n_processors) !=
-            0) {
+        if (whisper_full_parallel(whisper_ctx_, request.params, request.pcmf32.data(), request.pcmf32.size(), request.n_processors) != 0) {
             return "HLIECpp-FAILED-888";
         }
 
@@ -526,7 +605,7 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
         auto file_it = req.form.files.find("file");
         if (file_it == req.form.files.end()) {
             fprintf(stderr, "error: no 'file' field in the request\n");
-            const std::string error_resp = "{\"error\":\"no 'file' field in the request\"}";
+            const std::string error_resp = R"({"error":"no 'file' field in the request"})";
             res.set_content(error_resp, "application/json");
             return;
         }
@@ -581,56 +660,7 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
         {
             LOG_INFO("Running whisper.cpp inference on {}", filename);
             whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-
-            wparams.strategy = params_.beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY;
-
-            wparams.print_realtime = false;
-            wparams.print_progress = params_.print_progress;
-            wparams.print_timestamps = !params_.no_timestamps;
-            wparams.print_special = params_.print_special;
-            wparams.translate = params_.translate;
-            wparams.language = params_.language.c_str();
-            wparams.detect_language = params_.detect_language;
-            wparams.n_threads = params_.n_threads;
-            wparams.n_max_text_ctx = params_.max_context >= 0 ? params_.max_context : wparams.n_max_text_ctx;
-            wparams.offset_ms = params_.offset_t_ms;
-            wparams.duration_ms = params_.duration_ms;
-
-            wparams.thold_pt = params_.word_thold;
-            wparams.max_len = params_.max_len == 0 ? 60 : params_.max_len;
-            wparams.split_on_word = params_.split_on_word;
-            wparams.audio_ctx = params_.audio_ctx;
-
-            wparams.debug_mode = params_.debug_mode;
-
-            wparams.tdrz_enable = params_.tinydiarize; // [TDRZ]
-
-            wparams.initial_prompt = params_.prompt.c_str();
-
-            wparams.greedy.best_of = params_.best_of;
-            wparams.beam_search.beam_size = params_.beam_size;
-
-            wparams.temperature = params_.temperature;
-            wparams.no_speech_thold = params_.no_speech_thold;
-            wparams.temperature_inc = params_.temperature_inc;
-            wparams.entropy_thold = params_.entropy_thold;
-            wparams.logprob_thold = params_.logprob_thold;
-
-            wparams.no_timestamps = params_.no_timestamps;
-            wparams.token_timestamps = !params_.no_timestamps && params_.response_format == vjson_format;
-            wparams.no_context = params_.no_context;
-
-            wparams.suppress_nst = params_.suppress_nst;
-
-            wparams.vad = params_.vad;
-            wparams.vad_model_path = params_.vad_model.c_str();
-
-            wparams.vad_params.threshold = params_.vad_threshold;
-            wparams.vad_params.min_speech_duration_ms = params_.vad_min_speech_duration_ms;
-            wparams.vad_params.min_silence_duration_ms = params_.vad_min_silence_duration_ms;
-            wparams.vad_params.max_speech_duration_s = params_.vad_max_speech_duration_s;
-            wparams.vad_params.speech_pad_ms = params_.vad_speech_pad_ms;
-            wparams.vad_params.samples_overlap = params_.vad_samples_overlap;
+            fill_params(wparams);
 
             /*
             whisper_print_user_data user_data = {&params_, &pcmf32s, 0};
@@ -668,16 +698,16 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
                     // log client disconnect
                     fprintf(stderr, "client disconnected, aborted processing\n");
                     res.status = 499; // Client Closed Request (nginx convention)
-                    res.set_content("{\"error\":\"client disconnected\"}", "application/json");
+                    res.set_content(R"({"error":"client disconnected"})", "application/json");
                     return;
                 }
                 LOG_ERROR("failed to process audio");
                 res.status = 500; // Internal Server Error
-                const std::string error_resp = "{\"error\":\"failed to process audio\"}";
+                const std::string error_resp = R"({"error":"failed to process audio"})";
                 res.set_content(error_resp, "application/json");
                 return;
             } else {
-                json jres = json{{"text", results}};
+                auto jres = json{{"text", results}};
                 res.set_content(jres.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
             }
         }

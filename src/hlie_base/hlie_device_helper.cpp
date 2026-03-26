@@ -92,7 +92,7 @@ bool HLIEDeviceHelper::acquire_devices(const std::string& applicant, int device_
     }
 
     if (tmp.size() < device_num) {
-        LOG_ERROR("cannot acquire specified device num {} in global devices pool with {}, see the sys.cfg to check it", device_num);
+        LOG_ERROR("cannot acquire specified device num {} in global devices pool with {}, see the sys.cfg to check it", device_num, applicant);
         return false;
     }
 

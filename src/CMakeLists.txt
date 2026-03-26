@@ -4,6 +4,7 @@ set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 set(TCIM_RUNTIME_PATH ${CMAKE_SOURCE_DIR}/third_party/houmo)
 set(LLAMA_CPP_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo")
+set(UWEBSOCKET_PATH "${PROJECT_SOURCE_DIR}/third_party/uwebsockets")
 set(INIH_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/inih")
 
 find_library(TCIM_LIBRARY NAMES tcim_runtime_lite ai_core hdplrt riscv PATHS ${TCIM_RUNTIME_PATH}/lib NO_DEFAULT_PATH REQUIRED)
@@ -33,6 +34,11 @@ if (HOUMO_XH2)
     set(WHISPER_CPP_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/whisper.cpp")
     find_library(WHISPER_CPP NAMES whisper PATHS ${WHISPER_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
     message("WHISPER_CPP_LIBRARY=${WHISPER_CPP}")
+
+    find_library(UWEBSOCKET_LIBRARY NAMES uSockets.a uSockets PATHS ${UWEBSOCKET_PATH}/lib NO_DEFAULT_PATH REQUIRED)
+    find_library(UV_LIBRARY NAMES uv PATHS ${UWEBSOCKET_PATH}/lib NO_DEFAULT_PATH REQUIRED)
+    message("UWEBSOCKET_LIBRARY=${UWEBSOCKET_LIBRARY}")
+    include_directories(${UWEBSOCKET_PATH}/include)
 endif ()
 
 
@@ -71,10 +77,11 @@ if (WINSERVICE_MODE)
 endif ()
 
 if (MSVC)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /std:c++17")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /std:c++20")
 else ()
     add_definitions(-w)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -g -rdynamic")
+    add_definitions(-std=c++2a)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++2a -g -rdynamic")
 endif ()
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})

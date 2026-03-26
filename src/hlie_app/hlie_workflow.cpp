@@ -467,6 +467,10 @@ std::shared_ptr<IHLIEModelService> HLIEWorkflow::get_model_service(const std::st
     if (HLIEModelType::SD == type) {
         return sd_model_service_;
     }
+
+    if (HLIEModelType::WHISPER == type) {
+        return whisper_model_service_;
+    }
 #endif
 
     return nullptr;
