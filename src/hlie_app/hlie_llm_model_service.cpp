@@ -16,6 +16,29 @@
 #include "hlie_base/hlie_util.h"
 #include "spdlog/fmt/bundled/base.h"
 
+namespace {
+    void llama_log_cb(ggml_log_level level, const char * log, void * /*user_data*/) {
+        spdlog::level::level_enum log_level;
+        switch (level) {
+        case GGML_LOG_LEVEL_INFO:
+            log_level = spdlog::level::level_enum::info;
+            break;
+        case GGML_LOG_LEVEL_WARN:
+            log_level = spdlog::level::level_enum::warn;
+            break;
+        case GGML_LOG_LEVEL_ERROR:
+            log_level = spdlog::level::level_enum::err;
+            break;
+        case GGML_LOG_LEVEL_DEBUG:
+        default:
+            log_level = spdlog::level::level_enum::debug;
+            break;
+        }
+
+        spdlog::log(log_level, log);
+    }
+}
+
 HLIE_NAMESPACE_BEGIN
 
 int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& model_info, const std::shared_ptr<HLIEDeviceService>& device_service) {
@@ -73,44 +96,52 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     // 转换为char**数组
     char** argv = argv_vector.data();
     const int argc = static_cast<int>(argv_vector.size() - 1); // 不包括终止符nullptr
-    common_params params;
     // 解析llama-server参数，如果有外部相同配置会覆盖上面的Sampling参数
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
+    if (!common_params_parse(argc, argv, params_, LLAMA_EXAMPLE_SERVER)) {
         LOG_ERROR("Failed to merge llama-server params, try to abandon it.");
     } else {
         LOG_INFO("Successfully merged llama-server params");
     }
 
-    if (params.model.path.empty()) {
+    if (params_.model.path.empty()) {
         LOG_ERROR("LLM model path cannot be empty from args");
         return -1;
     }
 
-    if (params.n_parallel == 1 && params.kv_unified == false && !params.has_speculative()) {
-        LOG_WARN("setting n_parallel = 1 and kv_unified = true (add -kvu to disable this)");
+    if (params_.embedding && params_.n_batch > params_.n_ubatch) {
+        LOG_WRN("%s: embeddings enabled with n_batch (%d) > n_ubatch (%d)\n", __func__, params_.n_batch, params_.n_ubatch);
+        LOG_WRN("%s: setting n_batch = n_ubatch = %d to avoid assertion failure\n", __func__, params_.n_ubatch);
+        params_.n_batch = params_.n_ubatch;
+    }
 
-        params.n_parallel = 1;
-        params.kv_unified = true;
+    if (params_.n_parallel < 0) {
+        LOG_INF("%s: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n", __func__);
+
+        params_.n_parallel = 1;
+        params_.kv_unified = true;
     }
 
     if (model_info.is_embedding_model()) {
-        params.embedding = true;
+        params_.embedding = true;
         is_embedding_ = true;
     }
 
-    params.model_alias = model_info.get_model_name();
+    // for consistency between server router mode and single-model mode, we set the same model name as alias
+    if (params_.model_alias.empty() && !params_.model.name.empty()) {
+        params_.model_alias.insert(params_.model.name);
+    }
 
     // 兼容绝对路径与相对路径
-    if (HlieUtil::is_relative_path(params.model.path)) {
-        params.model.path = HlieUtil::join_paths(model_dir, params.model.path);
+    if (HlieUtil::is_relative_path(params_.model.path)) {
+        params_.model.path = HlieUtil::join_paths(model_dir, params_.model.path);
     }
 
     if (model_info.get_is_multi_model() && !model_info.get_mm_proj_path().empty()) {
-        params.mmproj.path = model_info.get_mm_proj_path();
-        if (HlieUtil::is_relative_path(params.mmproj.path)) {
-            params.mmproj.path = HlieUtil::join_paths(model_dir, params.mmproj.path);
+        params_.mmproj.path = model_info.get_mm_proj_path();
+        if (HlieUtil::is_relative_path(params_.mmproj.path)) {
+            params_.mmproj.path = HlieUtil::join_paths(model_dir, params_.mmproj.path);
         }
-        LOG_INFO("LLM mmproj path: {}", params.mmproj.path);
+        LOG_INFO("LLM mmproj path: {}", params_.mmproj.path);
     }
 
     auto devices = model_info.get_devices();
@@ -142,16 +173,6 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
             }
         }
     } else { // 单实例模式可以定制Model Devices
-#ifndef HOUMO_XH2
-        if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(LLM); !val) {
-            LOG_ERROR("LLM cannot acquire available device");
-            return -1;
-        } else {
-            HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(val.value()));
-            devices_.push_back(*val);
-            LOG_INFO("LLM using device: {}", val.value());
-        }
-#else
         const auto mem_est = HLIEModelInfo::estimate_mem(model_info.get_model_name());
         if (!devices.empty()) {
             if (!HlieUtil::is_valid_devices(devices)) {
@@ -180,18 +201,16 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
             HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(device));
             LOG_INFO("LLM acquire_mem using model specific device: {}", device);
         }
-
-#endif
     }
 
     if (const auto log_level = config_service->get_string("log", "level", "debug"); log_level == "debug") {
-        common_log_set_verbosity_thold(-1);
+        common_log_set_verbosity_thold(4);
     } else if (log_level == "info") {
-        common_log_set_verbosity_thold(-2);
+        common_log_set_verbosity_thold(3);
     } else if (log_level == "warn") {
-        common_log_set_verbosity_thold(-3);
+        common_log_set_verbosity_thold(2);
     } else if (log_level == "error") {
-        common_log_set_verbosity_thold(-4);
+        common_log_set_verbosity_thold(1);
     }
 
     if (config_service->get_bool("model", "llm_lazy_mode", false)) {
@@ -200,23 +219,26 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     }
 
     common_init();
+    llama_log_set(llama_log_cb, nullptr);
+    common_set_log_callback(llama_log_cb, nullptr);
 
     llama_server_ = std::make_unique<server_context>();
 
     llama_backend_init();
-    llama_numa_init(params.numa);
+    llama_numa_init(params_.numa);
 
-    llama_server_routes_ = std::make_shared<server_routes>(params, *llama_server_, [&] { return is_ready.load(); });
+    llama_server_routes_ = std::make_shared<server_routes>(params_, *llama_server_);
     LOG_INFO("LLM start to load model");
-    if (!llama_server_->load_model(params)) {
+    if (!llama_server_->load_model(params_)) {
         Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
         devices_.clear();
         return -1;
     }
+
     LOG_INFO("LLM load model done");
 
     model_key_ = model_info.model_key_;
-    llama_server_->init();
+    llama_server_routes_->update_meta(*llama_server_);
     is_ready.store(true);
     LOG_DEBUG("LLM init done");
     return 0;
@@ -252,12 +274,8 @@ void LLModelService::stop() {
     if (is_multi_instance_) {
         Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
     } else {
-#ifdef HOUMO_XH2
         const auto mem_est = HLIEModelInfo::estimate_mem(model_key_);
         device_service_->release_mem_on_devices(devices_, mem_est);
-#else
-        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
-#endif
     }
     devices_.clear();
     if (is_embedding_) {

@@ -129,16 +129,28 @@ namespace {
         return headers;
     }
 
-    void process_handler_response(server_http_res_ptr& response, httplib::Response& res) {
+    std::string build_query_string(const httplib::Request & req) {
+        std::string qs;
+        for (const auto & [key, value] : req.params) {
+            if (!qs.empty()) {
+                qs += '&';
+            }
+            qs += httplib::encode_query_component(key) + "=" + httplib::encode_query_component(value);
+        }
+        return qs;
+    }
+
+    void process_handler_response(std::unique_ptr<server_http_req>&& request, server_http_res_ptr & response, httplib::Response & res) {
         if (response->is_stream()) {
             res.status = response->status;
             set_headers(res, response->headers);
             std::string content_type = response->content_type;
             // convert to shared_ptr as both chunked_content_provider() and on_complete() need to use it
-            std::shared_ptr<server_http_res> r_ptr = std::move(response);
-            const auto chunked_content_provider = [response = r_ptr](size_t, httplib::DataSink& sink) -> bool {
+            std::shared_ptr q_ptr = std::move(request);
+            std::shared_ptr r_ptr = std::move(response);
+            const auto chunked_content_provider = [response = r_ptr](size_t, httplib::DataSink & sink) -> bool {
                 std::string chunk;
-                const bool has_next = response->next(chunk);
+                bool has_next = response->next(chunk);
                 if (!chunk.empty()) {
                     // TODO: maybe handle sink.write unsuccessful? for now, we rely on is_connection_closed()
                     sink.write(chunk.data(), chunk.size());
@@ -150,8 +162,9 @@ namespace {
                 }
                 return has_next;
             };
-            const auto on_complete = [response = r_ptr](bool) mutable {
+            const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
                 response.reset(); // trigger the destruction of the response object
+                request.reset();  // trigger the destruction of the request object
             };
             res.set_chunked_content_provider(content_type, chunked_content_provider, on_complete);
         } else {
@@ -255,9 +268,17 @@ int HLIEWebService::run(const std::string& host_name, int port) {
 
 void HLIEWebService::get(const std::string& path, const server_http_context::handler_t& handler) const {
     web_server_->Get(path, [handler](const httplib::Request& req, httplib::Response& res) {
-        server_http_res_ptr response =
-            handler(server_http_req{get_params(req), get_headers(req), req.path, req.body, req.is_connection_closed});
-        process_handler_response(response, res);
+        auto request = std::make_unique<server_http_req>(server_http_req{
+            get_params(req),
+            get_headers(req),
+            req.path,
+            build_query_string(req),
+            req.body,
+            req.is_connection_closed
+        });
+        server_http_res_ptr response = handler(*request);
+        process_handler_response(std::move(request), response, res);
+
     });
 }
 
@@ -267,9 +288,17 @@ void HLIEWebService::post(const std::string& path, const server_http_context::ha
             !request_id.empty()) {
             LOG_DEBUG("[Request-{}] come in", request_id);
         }
-        server_http_res_ptr response =
-            handler(server_http_req{get_params(req), get_headers(req), req.path, req.body, req.is_connection_closed});
-        process_handler_response(response, res);
+
+        auto request = std::make_unique<server_http_req>(server_http_req{
+            get_params(req),
+            get_headers(req),
+            req.path,
+            build_query_string(req),
+            req.body,
+            req.is_connection_closed
+        });
+        server_http_res_ptr response = handler(*request);
+        process_handler_response(std::move(request), response, res);
     });
 }
 

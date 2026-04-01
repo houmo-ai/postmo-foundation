@@ -4,15 +4,17 @@ set -e  # 遇到错误立即退出
 set -u  # 使用未定义变量时退出
 set -o pipefail  # 管道命令中任何一个失败都算失败
 
-# 检查参数数量
-if [ $# -ne 2 ]; then
-    echo "Usage: $0 <xh1|xh2> <aarch64|x86_64>"
+if [ $# -eq 2 ]; then
+    ARCH=$2
+elif [ $# -eq 1 ]; then
+    ARCH=$1
+else
+    echo "❌ Error: Missing architecture parameter."
+    echo "Usage: $0 [to_remove] <aarch64|x86_64>  OR  $0 <aarch64|x86_64>"
     exit 1
 fi
 
-# 平台和架构参数
-PLATFORM=$1
-ARCH=$2
+ARCH=$(echo "$ARCH" | tr '[:upper:]' '[:lower:]')
 
 # 验证架构参数
 case "$ARCH" in
@@ -24,30 +26,18 @@ case "$ARCH" in
         ;;
 esac
 
-# 验证平台参数
-case "$PLATFORM" in
-    xh1|xh2)
-        ;;
-    *)
-        echo "Invalid platform: $PLATFORM"
-        exit 1
-        ;;
-esac
-
 # SDK URLs
-xh1_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2025/12/20/0742/ubuntu1804/houmo_tcim_runtime_xh1_ubuntu1804_x86_64-2.6.0.tar.gz"
-xh1_dadao_sdk_url_aarch64="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2025/12/20/0742/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_aarch64-2.6.0.tar.gz"
-xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/02/03/2019/ubuntu2004/houmo_tcim_runtime_xh2_linux_${ARCH}-1.0.0.tar.gz"
+xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/12/2005/ubuntu2004/houmo_tcim_runtime_xh2_linux_${ARCH}-1.1.0.tar.gz"
 
-xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/02/05/1408/ubuntu1804/houmo-drv-xh2_v1.0.0_linux_x86_64.run"
-xh2_sw_sdk_url_aarch64="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/02/05/1408/ubuntu2004/houmo-drv-xh2_v1.0.0_linux_aarch64.run"
+xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/12/2005/ubuntu1804/houmo-drv-xh2_v1.1.0_linux_x86_64.run"
+xh2_sw_sdk_url_aarch64="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/12/2005/ubuntu2004/houmo-drv-xh2_v1.1.0_linux_aarch64.run"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh1_1.4.0_linux_${ARCH}.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh2_1.4.0_linux_${ARCH}.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/04/03/1804/linux/houmo-HLIELLama-xh2_2.0.1_linux_${ARCH}.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.2.0_linux_${ARCH}.tar.gz"
 xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.0.0_linux_${ARCH}.tar.gz"
-xh2_uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-linux_${ARCH}.tar.gz"
+
+uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-linux_${ARCH}.tar.gz"
 
 
 # 下载文件并检查是否成功
@@ -115,15 +105,13 @@ deploy_dadao_sdk() {
     tar -xzf dadao_sdk.tar.gz -C third_party/houmo --strip-components=1
     rm dadao_sdk.tar.gz
 
-    if [[ $PLATFORM == "xh2" ]]; then
-        # 提取SDK
-        local sw_url=$2
-        download_file "$sw_url" "third_party/sw_sdk.run"
-        bash third_party/sw_sdk.run extract --path third_party/
+    # 提取SDK
+    local sw_url=$2
+    download_file "$sw_url" "third_party/sw_sdk.run"
+    bash third_party/sw_sdk.run extract --path third_party/
 
-        cp third_party/houmo-sdk/hal/lib/*.so* third_party/houmo/lib/
-        cp third_party/houmo-sdk/hal/export/include/*.h third_party/houmo/include/
-    fi
+    cp third_party/houmo-sdk/hal/lib/*.so* third_party/houmo/lib/
+    cp third_party/houmo-sdk/hal/export/include/*.h third_party/houmo/include/
 
     # 清理临时文件
     rm -rf third_party/houmo-sdk third_party/sw_sdk.run third_party/houmo_drv* third_party/houmo-drv*
@@ -150,17 +138,9 @@ build_service() {
 
     cd build
     if [ "$ARCH" == "aarch64" ]; then
-        if [ $PLATFORM == "xh2" ]; then
-            TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DHOUMO_XH2=True -DCMAKE_TOOLCHAIN_FILE=../ci/toolchain-aarch64.cmake
-        else
-            TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DCMAKE_TOOLCHAIN_FILE=../ci/toolchain-aarch64.cmake
-        fi
+        TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DCMAKE_TOOLCHAIN_FILE=../ci/toolchain-aarch64.cmake
     else
-        if [ $PLATFORM == "xh2" ]; then
-            TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake .. -DHOUMO_XH2=True
-        else
-            TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake ..
-        fi
+        TCIM_RUNTIME_PATH=$(pwd)/../third_party/houmo cmake ..
     fi
 
     if [ $? -ne 0 ]; then
@@ -184,8 +164,8 @@ build_service() {
 }
 
 package_service() {
-    local release_dir="release/$PLATFORM/$ARCH"
-    echo "Packaging HLIECPP.service for $PLATFORM/$ARCH..."
+    local release_dir="release/$ARCH"
+    echo "Packaging HLIECPP.service for $ARCH..."
 
     # 清理并创建目录结构
     rm -rf "$release_dir"/*
@@ -198,12 +178,10 @@ package_service() {
     cp build/bin/houmo-llm-hi-cpp-linux "$release_dir/bin/HLIECpp" || true
     cp config/linux/sys.cfg "$release_dir/config/sys.cfg" || true
 
-    if [ $PLATFORM == "xh2" ]; then
-        cp third_party/sd.cpp/lib/libstable-diffusion.so "$release_dir/lib/" || true
-        cp third_party/whisper.cpp/lib/libwhisper.so "$release_dir/lib/" || true
-        cp third_party/uwebsockets/bin/libuv.so "$release_dir/lib/" || true
-        cp third_party/houmo/lib/libhal_xh2a.so.1.0 "$release_dir/lib/" || true
-    fi
+    cp third_party/sd.cpp/lib/libstable-diffusion.so "$release_dir/lib/" || true
+    cp third_party/whisper.cpp/lib/libwhisper.so "$release_dir/lib/" || true
+    cp third_party/uwebsockets/bin/libuv.so "$release_dir/lib/" || true
+    cp third_party/houmo/lib/libhal_xh2a.so.1.0 "$release_dir/lib/" || true
 
     if [[ -f /lib/x86_64-linux-gnu/libstdc++.so.6 && "$ARCH" == "x86_64" ]]; then
         cp /lib/x86_64-linux-gnu/libstdc++.so.6 "$release_dir/lib/"
@@ -229,35 +207,24 @@ package_service() {
 # 主函数
 main() {
     # 确定使用的SDK URL
-    case "$PLATFORM" in
-        xh1)
-           if [ "$ARCH" == "aarch64" ]; then
-               deploy_dadao_sdk "$xh1_dadao_sdk_url_aarch64"
-           else
-               deploy_dadao_sdk "$xh1_dadao_sdk_url"
-           fi
-            deploy_llama_sdk "$xh1_llama_sdk_url"
-            ;;
-        xh2)
-            if [ "$ARCH" == "aarch64" ]; then
-                deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url_aarch64"
-            else
-                deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url"
-            fi
-            deploy_llama_sdk "$xh2_llama_sdk_url"
-            deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
-            deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"
-            deploy_uwebsockets "$xh2_uwebsockets_url"
-            ;;
-    esac
+    if [ "$ARCH" == "aarch64" ]; then
+        deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url_aarch64"
+    else
+        deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url"
+    fi
 
-    echo "Deployed Dadao SDK and System SDK for $PLATFORM/$ARCH."
+    deploy_llama_sdk "$xh2_llama_sdk_url"
+    deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
+    deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"
+    deploy_uwebsockets "$uwebsockets_url"
+
+    echo "Deployed Dadao SDK and System SDK for $ARCH."
 
     # 编译和打包
     build_service
     package_service
 
-    echo "HLIECpp build and packaging completed for $PLATFORM/$ARCH."
+    echo "HLIECpp build and packaging completed for $ARCH."
 }
 # 执行主函数
 main

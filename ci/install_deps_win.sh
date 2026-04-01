@@ -1,26 +1,19 @@
 #!/bin/bash
 
 # 检查参数数量
-if [ $# -ne 1 ]; then
-    echo "Usage: $0 <xh1|xh2>"
-    exit 1
-fi
-PLATFORM=$1
 ARCH=x86_64
 
 # SDK URLs
-xh1_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2025/12/20/0742/windows11/houmo_tcim_runtime_xh1_windows11_x86_64-2.6.0.tar.gz"
-xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/02/03/2019/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-1.0.0.tar.gz"
+xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/12/2005/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-1.1.0.tar.gz"
 
-xh1_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2025/12/20/0742/windows11/houmo_drv_xh1_v2.6.0_windows11_x86_64.zip"
 xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/18/1632/windows11/houmo_drv_xh2_v0.7.0_windows11_x86_64.zip"
 
-xh1_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh1_1.4.0_windows11_x86_64.tar.gz"
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh2_1.4.0_windows11_x86_64.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/04/03/1804/windows11/houmo-HLIELLama-xh2_2.0.1_windows11_x86_64.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.2.0_windows11_x86_64.tar.gz"
 xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.0.0_windows11_x86_64.tar.gz"
-xh2_uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-win_x64.tar.gz"
+
+uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-win_x64.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {
@@ -95,31 +88,13 @@ deploy_dadao_sdk() {
     # 提取SDK
     unzip -o third_party/sw_sdk.zip -d third_party
 
-    if [ $PLATFORM == "xh2" ]; then
-        cp third_party/houmo_drv_xh2/hal/lib/*.dll third_party/houmo/lib/
-        cp third_party/houmo_drv_xh2/hal/lib/*.dll.a third_party/houmo/lib/
-        cp third_party/houmo_drv_xh2/hal/export/include/*.h third_party/houmo/include/
-        cp third_party/houmo_drv_xh2/hal/include/*.h third_party/houmo/include/
-        mkdir -p third_party/houmo/lib/bin/
+    cp third_party/houmo_drv_xh2/hal/lib/*.dll third_party/houmo/lib/
+    cp third_party/houmo_drv_xh2/hal/lib/*.dll.a third_party/houmo/lib/
+    cp third_party/houmo_drv_xh2/hal/export/include/*.h third_party/houmo/include/
+    cp third_party/houmo_drv_xh2/hal/include/*.h third_party/houmo/include/
+    mkdir -p third_party/houmo/lib/bin/
 
-        rm -rf third_party/sw_sdk.zip third_party/houmo_drv*
-        # FIXME: 临时解决方案，等待SystemWare SDK更新
-        download_file "$xh1_sw_sdk_url" "third_party/sw_sdk.zip"
-        unzip third_party/sw_sdk.zip -d third_party/
-    fi
-
-    # 移动关键库文件
-    if [ -f third_party/houmo_drv_xh1/hal/lib/*hdplrt_asic.dll ]; then
-        cp third_party/houmo_drv_xh1/hal/lib/*hdplrt_asic.dll third_party/houmo/lib/
-    else
-        echo "Warning: libhdplrt_asic.dll not found in expected location"
-    fi
-
-    if [ -f third_party/houmo_drv_xh1/hal/lib/*hm800_hal.dll ]; then
-        cp third_party/houmo_drv_xh1/hal/lib/*hm800_hal.dll third_party/houmo/lib/
-    else
-        echo "Warning: libhm800_hal.dll not found in expected location"
-    fi
+    rm -rf third_party/sw_sdk.zip third_party/houmo_drv*
 
     cp third_party/houmo_drv_xh1/hal/lib/libwinpthread-1.dll third_party/houmo/lib/
 
@@ -130,21 +105,13 @@ deploy_dadao_sdk() {
 # 主函数
 main() {
     # 确定使用的SDK URL
-    case "$PLATFORM" in
-        xh1)
-            deploy_dadao_sdk "$xh1_dadao_sdk_url" "$xh1_sw_sdk_url"
-            deploy_llama_sdk "$xh1_llama_sdk_url"
-            ;;
-        xh2)
-            deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url"
-            deploy_llama_sdk "$xh2_llama_sdk_url"
-            deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
-            deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"
-            deploy_uwebsockets "$xh2_uwebsockets_url"
-            ;;
-    esac
+    deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url"
+    deploy_llama_sdk "$xh2_llama_sdk_url"
+    deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
+    deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"
+    deploy_uwebsockets "$uwebsockets_url"
 
-    echo "Deployed Dadao SDK and System SDK for $PLATFORM/$ARCH."
+    echo "Deployed Dadao SDK and System SDK for $ARCH."
 }
 # 执行主函数
 main

@@ -15,11 +15,9 @@
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
 
-#ifdef HOUMO_XH2
 #include "hlie_app/hlie_device_service.h"
 #include "hlie_app/hlie_sd_model_service.h"
 #include "hlie_app/hlie_whisper_model_service.h"
-#endif
 
 HLIE_NAMESPACE_BEGIN
 
@@ -183,13 +181,11 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         return -1;
     }
 
-#ifdef HOUMO_XH2
     device_service_ = std::make_shared<HLIEDeviceService>();
     if (device_service_->init() < 0) {
         LOG_ERROR("failed to init the HLIE device service");
         return -1;
     }
-#endif
 
     const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
     replicas_mode_ =  Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1) > 1;
@@ -209,7 +205,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                     return -1;
                 }
             }
-#ifdef HOUMO_XH2
             else {
                 sd_model_service_ = std::make_shared<SDModelService>();
                 if (sd_model_service_->init(model_dir, model_info, device_service_) < 0) {
@@ -217,7 +212,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                     return -1;
                 }
             }
-#endif
+
             Singleton<HLIEDeviceHelper>::instance()->print_status();
             start_time_ = time(nullptr);
             return 0;
@@ -234,8 +229,8 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         ModelInstance model_instance;
         server_model_meta meta;
         meta.name = model_info.get_model_name();
-        meta.path = model_info.get_model_path();
-        meta.path_mmproj = model_info.get_mm_proj_path();
+        model_instance.path = model_info.get_model_path();
+        model_instance.path_mmproj = model_info.get_mm_proj_path();
         model_instance.meta = std::move(meta);
 
         auto model_key = model_info.get_model_name();
@@ -287,22 +282,17 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                 LOG_INFO("default_model found: {}", default_model);
                 found_llm = true;
                 default_model_info = m;
-            }
-#ifdef HOUMO_XH2
-            else if (enable_sd3 && m.get_model_name() == HLIEModelType::SD3) {
+            } else if (enable_sd3 && m.get_model_name() == HLIEModelType::SD3) {
                 LOG_INFO("SD3 found");
                 found_sd3 = true;
                 sd3_model_info = m;
             }
-#endif
         }
 
         if (!found_llm) {
             LOG_ERROR("Default llm not found: {}, scanned models count: {}", default_model, model_infos.size());
         }
-    }
-#ifdef HOUMO_XH2
-    else if (enable_sd3) {
+    } else if (enable_sd3) {
         auto it = std::find_if(model_infos.begin(), model_infos.end(),
                                [&](const HLIEModelInfo& info) { return info.get_model_name() == HLIEModelType::SD3; });
         if (it == model_infos.end()) {
@@ -313,7 +303,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         found_sd3 = true;
         sd3_model_info = *it;
     }
-#endif
 
     if (!found_llm && !found_sd3) {
         if (args.find("--instance_id") == args.end()) {
@@ -329,7 +318,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
 
     if (found_llm) {
         if (HlieUtil::contains_ignore_case(default_model_info.get_model_name(), WHISPER)) {
-#ifdef HOUMO_XH2
             LOG_INFO("Initializing WhisperModelService");
             whisper_model_service_ = std::make_shared<WhisperModelService>();
             if (whisper_model_service_->init(model_dir, default_model_info, device_service_) < 0) {
@@ -337,10 +325,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                 whisper_model_service_.reset();
                 return -1;
             }
-#else
-            LOG_ERROR("failed to init the whisper model service, ONLY for XH2");
-            return -1;
-#endif
         } else {
             LOG_INFO("Initializing LLModelService");
             if (const std::string default_mmproj = Singleton<HLIEConfigService>::instance()->get_string("model", "default_mmproj");
@@ -370,7 +354,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
     }
 
     if (found_sd3) {
-#ifdef HOUMO_XH2
         LOG_INFO("Initializing SDModelService");
         sd_model_service_ = std::make_shared<SDModelService>();
         if (sd_model_service_->init(model_dir, sd3_model_info, device_service_) < 0) {
@@ -378,10 +361,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
             sd_model_service_.reset();
             return -1;
         }
-#else
-        LOG_ERROR("failed to init the SD model service, ONLY for XH2");
-        return -1;
-#endif
     }
 
     Singleton<HLIEDeviceHelper>::instance()->print_status();
@@ -404,7 +383,6 @@ void HLIEWorkflow::run() {
         }
     }
 
-#ifdef HOUMO_XH2
     if (sd_model_service_) {
         sd_model_service_->run();
         model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADED;
@@ -428,11 +406,9 @@ void HLIEWorkflow::run() {
             }).detach();
         }
     }
-#endif
 }
 
 void HLIEWorkflow::stop() {
-#ifdef HOUMO_XH2
     if (sd_model_service_) {
         if (is_slave_ && !replicas_mode_) {
             update_status(master_port_, HLIEModelType::SD3, port_, SERVER_MODEL_STATUS_UNLOADED);
@@ -448,7 +424,7 @@ void HLIEWorkflow::stop() {
         whisper_model_service_->stop();
         whisper_model_service_.reset();
     }
-#endif
+
 
     if (llm_model_service_) {
         if (is_slave_ && !replicas_mode_) {
@@ -463,7 +439,6 @@ std::shared_ptr<IHLIEModelService> HLIEWorkflow::get_model_service(const std::st
         return llm_model_service_;
     }
 
-#ifdef HOUMO_XH2
     if (HLIEModelType::SD == type) {
         return sd_model_service_;
     }
@@ -471,7 +446,6 @@ std::shared_ptr<IHLIEModelService> HLIEWorkflow::get_model_service(const std::st
     if (HLIEModelType::WHISPER == type) {
         return whisper_model_service_;
     }
-#endif
 
     return nullptr;
 }
@@ -490,7 +464,6 @@ int HLIEWorkflow::get_model_service_state() const {
         return llm_model_service_->get_state();
     }
 
-#ifdef HOUMO_XH2
     if (sd_model_service_) {
         return sd_model_service_->get_state();
     }
@@ -498,7 +471,6 @@ int HLIEWorkflow::get_model_service_state() const {
     if (whisper_model_service_) {
         return whisper_model_service_->get_state();
     }
-#endif
 
     LOG_WARN("model service not initialized");
     return -1;
@@ -534,11 +506,11 @@ server_http_res_ptr HLIEWorkflow::handle_models(const server_http_req& req) {
         }
         models_json.push_back(json{
             {"id", meta.name},
+            {"aliases", meta.aliases},
+            {"tags", meta.tags},
             {"object", "model"}, // for OAI-compat
             {"owned_by", "HLIECpp"}, // for OAI-compat
             {"created", t}, // for OAI-compat
-            {"in_cache", meta.in_cache},
-            {"path", meta.path},
             {"port", meta.port},
             {"status", status},
             // TODO: add other fields, may require reading GGUF metadata
@@ -614,7 +586,6 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     LOG_INFO("ready to acquire devices");
     {
         std::unique_lock lock(mutex_);
-#ifdef HOUMO_XH2
         if (devices == "undefined") {
             uint32_t device_id = 0;
             if (device_service_->acquire_mem(mem_est, device_id, true) < 0) {
@@ -633,20 +604,6 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
                 return res;
             }
         }
-#else
-        if (devices == "undefined") {
-            const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(HlieUtil::uuid(), true);
-            if (!val) {
-                res->error(format_error_response_ex("The devices is not available.", ERROR_TYPE_UNAVAILABLE, 80004));
-                return res;
-            }
-            devices = std::to_string(*val);
-        } else if (std::vector<int> devices_vec;
-                   !Singleton<HLIEDeviceHelper>::instance()->acquire_devices(HlieUtil::uuid(), devices, devices_vec, true)) {
-            res->error(format_error_response_ex("The devices is not available.", ERROR_TYPE_UNAVAILABLE, 80004));
-            return res;
-        }
-#endif
     }
 
     LOG_INFO("acquire devices successfully with {}", devices);
@@ -674,8 +631,8 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             ModelInstance model_instance;
             server_model_meta model_meta;
             model_meta.name = model_info_tmp.get_model_name();
-            model_meta.path = model_info_tmp.get_model_path();
-            model_meta.path_mmproj = model_info_tmp.get_mm_proj_path();
+            model_instance.path = model_info_tmp.get_model_path();
+            model_instance.path_mmproj = model_info_tmp.get_mm_proj_path();
             model_instance.meta = std::move(model_meta);
             auto model_key = model_info_tmp.get_model_name();
             if (!model_info_tmp.get_mm_proj_path().empty()) {
@@ -758,7 +715,6 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             }
         }
     } else if (model_type == SD) {
-#ifdef HOUMO_XH2
         if (!body.contains("params") || !body["params"].is_object()) {
             res->error(format_error_response_ex("params invalid for SD3", ERROR_TYPE_INVALID_REQUEST, 80007));
             return res;
@@ -813,21 +769,11 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
                 LOG_INFO("Started process PID[{}] instance_id[{}]", process_id, instance_id);
             }
         }
-#else
-        res->error(format_error_response_ex("The sd is not available for xh1.", ERROR_TYPE_UNAVAILABLE, 80009));
-        return res;
-#endif
     } else if (model_type == WHISPER) {
-#ifdef HOUMO_XH2
         if (start_whisper(meta, res, req, model_name, model_path, devices) < 0) {
             LOG_ERROR("failed to start the whisper model");
             return res;
         }
-
-#else
-res->error(format_error_response_ex("The whisper is not available for xh1.", ERROR_TYPE_UNAVAILABLE, 80009));
-return res;
-#endif
     }
 
     // TODO: 模型启动参数校验, device 是否可用
@@ -845,7 +791,7 @@ return res;
 
 int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::unique_ptr<server_res_generator_light>& res,
     const server_http_req& req, const std::string& model_name, const std::string& model_path, const std::string& devices) {
-#ifdef HOUMO_XH2
+
     if (!meta) {
         auto body = json::parse(req.body);
         HLIEModelInfo model_info_tmp;
@@ -854,7 +800,7 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         ModelInstance model_instance;
         server_model_meta model_meta;
         model_meta.name = model_info_tmp.get_model_name();
-        model_meta.path = model_info_tmp.get_model_path();
+        model_instance.path = model_info_tmp.get_model_path();
         model_instance.meta = std::move(model_meta);
         auto model_key = model_info_tmp.get_model_name();
         model_info_tmp.model_key_ = model_key;
@@ -934,7 +880,6 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
             LOG_INFO("Started process PID[{}] instance_id[{}]", pid, instance_id);
         }
     }
-#endif
 
     return 0;
 }
@@ -1062,7 +1007,6 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 true, // 需要模型Running
                 LLM // LLM模型类型
             },
-#ifdef HOUMO_XH2
             {
                 {"/v1/images/generations", "/images/generations"},
                 POST,
@@ -1097,7 +1041,6 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 [this](const server_http_req& req) { return device_service_->handle_devices(req); },
                 false // 不需要模型Running
             },
-#endif
             {
                 {"/v1/completions"},
                 POST,
@@ -1189,11 +1132,14 @@ void HLIEWorkflow::set_server_port(const int port) {
     if (llm_model_service_) {
         model_instances_[llm_model_service_->get_model_key()].meta.port = port;
     }
-#ifdef HOUMO_XH2
+
     if (sd_model_service_) {
         model_instances_[HLIEModelType::SD3].meta.port = port;
     }
-#endif
+
+    if (whisper_model_service_) {
+        model_instances_[whisper_model_service_->get_model_key()].meta.port = port;
+    }
 }
 
 server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
@@ -1218,13 +1164,19 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
             llm_model_service_->stop();
             llm_model_service_.reset();
         }
-#ifdef HOUMO_XH2
+
         if (sd_model_service_) {
             model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_UNLOADED;
             sd_model_service_->stop();
             sd_model_service_.reset();
         }
-#endif
+
+        if (whisper_model_service_) {
+            model_instances_[whisper_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
+            whisper_model_service_->stop();
+            whisper_model_service_.reset();
+        }
+
         LOG_INFO("Succeed to stop service process for instance_id[{}][{}]", instance_id, process_id);
     } else if (process_id != 0) {
         const auto& process_manager = Singleton<HLIEProcessManager>::instance();
@@ -1265,14 +1217,15 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
     if (llm_model_service_) {
         models.push_back(llm_model_service_->get_model_key());
     }
-#ifdef HOUMO_XH2
+
     if (sd_model_service_) {
         models.push_back(HLIEModelType::SD3);
     }
+
     if (whisper_model_service_) {
         models.push_back(whisper_model_service_->get_model_key());
     }
-#endif
+
     processors.push_back({{"params", ""},
                           {"instance_id", 0},
                           {"port", port_},
@@ -1358,7 +1311,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
 
         llm_model_service_.reset();
     }
-#ifdef HOUMO_XH2
+
     if (model_type == SD && sd_model_service_) {
         model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_UNLOADED;
         sd_model_service_->stop();
@@ -1381,7 +1334,6 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         whisper_model_service_.reset();
     }
 
-#endif
     LOG_INFO("Succeed to uninstall model");
 
     const json resp = {
@@ -1410,7 +1362,7 @@ std::optional<server_model_meta> HLIEWorkflow::get_model_meta(const std::string&
     }
 
     for (const auto& [name, inst] : model_instances_) {
-        if (inst.meta.path_mmproj.empty()) {
+        if (inst.path_mmproj.empty()) {
             continue;
         }
 
@@ -1430,7 +1382,7 @@ std::optional<std::reference_wrapper<HLIEWorkflow::ModelInstance>> HLIEWorkflow:
     }
 
     for (auto& [name, inst] : model_instances_) {
-        if (inst.meta.path_mmproj.empty()) {
+        if (inst.path_mmproj.empty()) {
             continue;
         }
 

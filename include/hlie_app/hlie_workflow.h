@@ -55,6 +55,8 @@ public:
     struct ModelInstance {
         int port;
         std::string key;
+        std::string path;
+        std::string path_mmproj;
         server_model_meta meta;
         HLIEModelInfo model_info;
     };

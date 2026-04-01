@@ -69,6 +69,8 @@ private:
     bool is_embedding_ = false;
     std::string model_key_;
     int batch_num_{1};
+
+    common_params params_;
 };
 
 HLIE_NAMESPACE_END

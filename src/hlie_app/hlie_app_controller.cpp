@@ -42,19 +42,13 @@ namespace {
             }
         }
 
-#ifndef HOUMO_XH2
-        Singleton<HLIEDeviceHelper>::instance()->init(devices);
-#endif
-
         // 多实例负载均衡场景判断与初始化
         const auto replicas = config_services->get_int("server", "replicas", 1);
         if (args.find("--instance_id") == args.end()) {
             if (replicas > 1) {
                 const auto& device_helper = Singleton<HLIEDeviceHelper>::instance();
                 // 主要用于多实例工作场景，单模型独占单IPU
-#ifdef HOUMO_XH2
                 device_helper->init(devices);
-#endif
                 const int device_count = device_helper->get_device_count();
                 if (replicas > device_count) {
                     LOG_ERROR("Copies[{}] is bigger than devices count[]", replicas, device_count);
@@ -116,9 +110,7 @@ namespace {
                 }
             }
         } else {
-#ifdef HOUMO_XH2
             Singleton<HLIEDeviceHelper>::instance()->init(devices);
-#endif
             if (args.find("--device_id") == args.end()) {
                 LOG_ERROR("Instance Replica must specify all the --instance_id and --device_id params");
                 return -1;
@@ -140,10 +132,7 @@ namespace {
 
         const auto tcim_log_level = config_services->get_int("log", "tcim_level", 2);
         HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(tcim_log_level));
-
-#ifdef HOUMO_XH2
         HlieUtil::set_env("TCIM_BACKEND", "Xh2HalBackend");
-#endif
 
         return 0;
     }

@@ -8,6 +8,7 @@ third_party/sd.cpp
 third_party/houmo
 third_party/*torch*
 third_party/whisper.cpp
+third_party/uwebsockets
 src/houmo-tcim-runtime
 release
 src/libtorch

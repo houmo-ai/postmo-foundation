@@ -78,6 +78,7 @@ void WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
 }
 
 int main(const int argc, char** argv) {
+    std::setlocale(LC_NUMERIC, "C");
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
     _putenv("TCIM_LOG_TAGS=all");
@@ -87,14 +88,11 @@ int main(const int argc, char** argv) {
     const auto& config_service = hm_HLIE::Singleton<hm_HLIE::HLIEConfigService>::instance();
     config_service->set_args(argc, argv);
 
-#ifdef HOUMO_XH2
     char exePath[MAX_PATH];
     GetModuleFileName(nullptr, exePath, MAX_PATH); // 获取exe绝对路径
     const auto programPath = std::string(exePath);
     const auto program_dir = std::string(exePath).substr(0, std::string(exePath).find_last_of('\\') + 1);
     _putenv(("TCIM_RUNTIME_PATH=" + program_dir + "/hal").c_str());
-#endif
-
 
     if (std::getenv("HLIECPP_WIN_D") || config_service->get_args().find("--instance_id") != config_service->get_args().end()) {
         printf("========HLIECpp Instance & COPY Mode======== \n");

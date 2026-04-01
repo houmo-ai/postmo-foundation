@@ -26,6 +26,7 @@ void sigchld_handler(int signo) {
 }
 
 int main(const int argc, char** argv) {
+    std::setlocale(LC_NUMERIC, "C");
     if (geteuid() != 0) {
         std::cerr << "Error: Not running as root!" << std::endl;
         return 1;
