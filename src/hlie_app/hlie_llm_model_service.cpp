@@ -126,6 +126,8 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         is_embedding_ = true;
     }
 
+    params_.model.name = model_info.get_model_name();
+
     // for consistency between server router mode and single-model mode, we set the same model name as alias
     if (params_.model_alias.empty() && !params_.model.name.empty()) {
         params_.model_alias.insert(params_.model.name);
