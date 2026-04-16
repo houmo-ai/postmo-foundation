@@ -133,11 +133,11 @@ int HLIEModelInfo::parse_from_gguf_filename(const std::string& file_path) {
     std::smatch m;
 
     // ===== xh（必需）=====
-    if (!std::regex_search(name, m, kXhRegex)) {
-        return -1;
-    }
+    // if (!std::regex_search(name, m, kXhRegex)) {
+    //     return -1;
+    // }
 
-    xh_version_ = std::stoi(m[1].str());
+    // xh_version_ = std::stoi(m[1].str());
 
     // ===== version=====
     if (!find(kVersionRegex, m)) {

@@ -1,0 +1,167 @@
+#ifndef HLIE_COSYVOICE_MODEL_SERVICE_H
+#define HLIE_COSYVOICE_MODEL_SERVICE_H
+
+#include <future>
+#include <memory>
+#include <string>
+
+#include "hlie_base/hlie_audio.h"
+#include "hlie_base/hlie_blocking_queue.h"
+#include "hlie_model_service.h"
+#include "hlie_ws_service.h"
+#include "httplib.h"
+#include "json.hpp"
+
+
+HLIE_NAMESPACE_BEGIN
+
+class HLIETokenizer;
+
+class HLIECosyVoiceModel;
+
+struct CosyVoiceRequest {
+    std::string content;
+};
+
+struct CosyVoiceResult {
+    bool success = false;
+    std::string error_message;
+    int64_t predicted_ms;
+};
+
+/**
+ * Build model inputs for zero-shot voice cloning synthesis.
+ *
+ * NOTE: This is a placeholder. Full implementation requires:
+ * - Text tokenization (CosyVoice3Tokenizer)
+ * - Speech token extraction (speech_tokenizer runtime)
+ * - Speaker embedding extraction (campplus runtime)
+ * - Speech feature extraction (mel spectrogram)
+ */
+struct FrontendInput {
+    std::vector<int> text_tokens;
+    int text_len;
+    std::vector<int> prompt_tokens;
+    int prompt_text_len;
+    std::vector<int> llm_prompt_speech_token;
+    int llm_prompt_speech_token_len;
+    std::vector<int> flow_prompt_speech_token;
+    int flow_prompt_speech_token_len;
+    std::vector<float> prompt_speech_feat;
+    int prompt_speech_feat_len;
+    std::vector<float> embedding;
+};
+
+/**
+ * Speech token extraction result.
+ */
+struct SpeechToken {
+    std::vector<int> data;  // Speech tokens [batch, token_len]
+    int token_len;            // Length of tokens
+
+    // Shape: [1, feat_len / 4]
+    int shape() const { return token_len; }
+};
+
+
+
+class CosyVoiceModelService final : public IHLIEModelService {
+public:
+    CosyVoiceModelService() = default;
+    ~CosyVoiceModelService() override = default;
+
+    /**
+     * 初始化并传递参数给SDCtx
+     */
+    int init(const std::string& model_dir, const HLIEModelInfo& model_info,
+             const std::shared_ptr<HLIEDeviceService>& device_service) override;
+
+    /**
+     * 执行模型推理
+     */
+    void run() override;
+
+    void process() override;
+
+    void stop() override;
+
+    int get_state() override;
+
+    int handle_health(nlohmann::ordered_json& resp);
+
+    void handle_models(nlohmann::ordered_json& resp) const;
+
+    std::string handle_stream(const WhisperStreamRequest& request);
+
+    void handle_transcriptions(const httplib::Request& req, httplib::Response& res);
+
+    [[nodiscard]] std::string get_model_key() const {
+        return model_key_;
+    }
+
+private:
+    std::future<CosyVoiceResult> transcription_async(const CosyVoiceRequest& request) const;
+    CosyVoiceResult transcription_sync(const CosyVoiceRequest& request) const;
+
+    std::string transcription(const CosyVoiceRequest& request);
+
+    /**
+     * Normalize text and optionally split it into synthesis segments.
+     *
+     * @param text Input text to normalize
+     * @param split Whether to split into multiple segments
+     * @param text_frontend Whether to use text frontend normalization
+     * @return Vector of normalized text segments, or single text if split=false
+     */
+    std::vector<std::string> text_normalize(const std::string& text, bool split = true, bool text_frontend = true);
+
+    /**
+     * Process text for zero-shot synthesis.
+     *
+     * @param tts_text Target text to synthesize
+     * @param prompt_text Prompt text for style/content steering
+     * @param resample_rate Target sample rate (24000 for CosyVoice2)
+     * @return FrontendInput structure ready for model inference
+     */
+    FrontendInput frontend_zero_shot(const std::string& tts_text, const std::string& prompt_text, const std::string& prompt_wav, int resample_rate = 24000);
+
+    /**
+     * Extract speech tokens from audio file using speech tokenizer.
+     *
+     * @param prompt_wav Path to prompt audio file
+     * @return Pair of (speech_token, token_len)
+     */
+    std::pair<SpeechToken, int> extract_speech_token(const std::string& prompt_wav) const;
+    std::pair<std::vector<float>, int> extract_speech_feat(const std::string& prompt_wav) const;
+
+    std::vector<float> extract_spk_embedding(const std::string& prompt_wav) const;
+
+    std::string model_key_;
+
+    std::shared_ptr<HLIECosyVoiceModel> cosyvoice_model_;
+
+    std::unique_ptr<hlie_audio_preprocessor_whisper> audio_preprocessor_;
+    std::unique_ptr<hlie_audio_preprocessor_librosa> audio_spec_preprocessor_;
+
+    struct QueueItem {
+        CosyVoiceRequest request;
+        std::shared_ptr<std::promise<CosyVoiceResult>> promise;
+    };
+
+    std::shared_ptr<HLIEBlockingQueue<QueueItem>> blocking_queue_;
+
+    std::unique_ptr<HLIEWebSocketService> websocket_service_;
+
+    std::unique_ptr<std::thread> worker_thread_; // 工作线程
+    std::atomic<bool> should_stop_{false}; // 线程停止标志
+
+    // TODO: Add tokenizer, text normalizer, and other runtime components
+    // CosyVoice3Tokenizer tokenizer_;
+    // std::string text_frontend_;
+    // ZhNormalizer zh_tn_model_;  // Further
+    // EnNormalizer en_tn_model_;  // Further
+};
+
+HLIE_NAMESPACE_END
+
+#endif

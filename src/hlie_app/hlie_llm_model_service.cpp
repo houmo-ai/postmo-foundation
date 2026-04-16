@@ -315,6 +315,11 @@ server_http_res_ptr LLModelService::handle_completions_oai(const server_http_req
     return res;
 }
 
+server_http_res_ptr LLModelService::handle_responses(const server_http_req& req) const {
+    auto res = llama_server_routes_->post_responses_oai(req);
+    return res;
+}
+
 server_http_res_ptr LLModelService::handle_embeddings_oai(const server_http_req& req) const {
     return llama_server_routes_->post_embeddings_oai(req);
 }

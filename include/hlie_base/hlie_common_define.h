@@ -104,5 +104,8 @@ struct server_res_generator_light : server_http_res {
     }
 };
 
+constexpr uint16_t FP16_ONE     = 1; // 1.0
+constexpr uint16_t FP16_NEG_INF = 0xFC00; // -65504
+
 
 #endif // HLIE_COMMON_DEFINE_H

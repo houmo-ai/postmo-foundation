@@ -13,5 +13,5 @@ add_library(${TARGET} ${SOURCES})
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 
 
-target_link_libraries(${TARGET} PRIVATE  ${INIH_LIBRARY_CPP} ${INIH_LIBRARY})
+target_link_libraries(${TARGET} PRIVATE  ${INIH_LIBRARY_CPP} ${INIH_LIBRARY} ${LLAMA_CPP_LIBRARY_GGML} ${LLAMA_CPP_LIBRARY_GGML_BASE} ${TCIM_LIBRARY})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)

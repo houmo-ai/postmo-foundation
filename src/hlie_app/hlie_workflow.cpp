@@ -18,6 +18,7 @@
 #include "hlie_app/hlie_device_service.h"
 #include "hlie_app/hlie_sd_model_service.h"
 #include "hlie_app/hlie_whisper_model_service.h"
+#include "hlie_app/hlie_cosyvoice_model_service.h"
 
 HLIE_NAMESPACE_BEGIN
 
@@ -158,7 +159,6 @@ namespace {
         if (const auto result = cli.send(req); result.error() != httplib::Error::Success) {
             const auto err_str = httplib::to_string(result.error());
             LOG_ERR("failed to notify router server: %s\n", err_str.c_str());
-            printf("failed xxxxxxx \n");
             // exit(1); // force exit
         }
     }
@@ -541,7 +541,8 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     const std::string model_path = body.value("model_path", std::string());
     LOG_DEBUG("start_service devices: {}, model_type: {}, model_name: {}", devices, model_type, model_name);
 
-    if (model_type != LLM && model_type != SD && model_type != WHISPER) {
+    if (model_type != HLIEModelType::LLM && model_type != HLIEModelType::SD && model_type != HLIEModelType::WHISPER &&
+        model_type != HLIEModelType::COSYVOICE) {
         res->error(format_error_response_ex("Invalid model type.", ERROR_TYPE_INVALID_REQUEST, 80006));
         return res;
     }
@@ -771,7 +772,12 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         }
     } else if (model_type == WHISPER) {
         if (start_whisper(meta, res, req, model_name, model_path, devices) < 0) {
-            LOG_ERROR("failed to start the whisper model");
+            LOG_ERROR("failed to start the WHISPER model");
+            return res;
+        }
+    } else if (model_type == HLIEModelType::COSYVOICE) {
+        if (start_cosyvoice(meta, res, req, model_name, model_path, devices) < 0) {
+            LOG_ERROR("failed to start the COSYVOICE model");
             return res;
         }
     }
@@ -846,6 +852,101 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         model_inst->get().meta.port = port_;
         if (port_ != master_port && !replicas_mode_) {
             update_status(master_port_, whisper_model_service_->get_model_key(), port_);
+        }
+    } else {
+        if (port_ != master_port) {
+            LOG_ERROR("slave cannot start new slave");
+            res->error(format_error_response_ex("slave cannot start new slave", ERROR_TYPE_SERVER, 80001));
+            return -1;
+        }
+
+        // 子进程实例参数
+        std::string json_info_file = generate_meta_info(model_info, model_dir_, res);
+        if (json_info_file.empty()) {
+            return -1;
+        }
+
+        auto instance_id = generate_instance_id();
+        std::vector args_for_sub_process = {std::string("--instance_id"), std::to_string(instance_id),
+                                            std::string("--device_id"),   devices,
+                                            std::string("--json_info"),   json_info_file};
+        const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
+
+        // Copy llama-params
+        for (const auto& [key, val] : args) {
+            args_for_sub_process.push_back(key);
+            args_for_sub_process.push_back(val);
+        }
+
+        if (auto pid =
+                Singleton<HLIEProcessManager>::instance()->create_process(program_path_, args_for_sub_process, {model_name}, instance_id);
+            pid == 0 || pid == -1) {
+            LOG_ERROR("Failed to start process for instance_id[{}]", instance_id);
+        } else {
+            LOG_INFO("Started process PID[{}] instance_id[{}]", pid, instance_id);
+        }
+    }
+
+    return 0;
+}
+
+int HLIEWorkflow::start_cosyvoice(std::optional<server_model_meta>& meta, std::unique_ptr<server_res_generator_light>& res,
+    const server_http_req& req, const std::string& model_name, const std::string& model_path, const std::string& devices) {
+
+    if (!meta) {
+        auto body = json::parse(req.body);
+        HLIEModelInfo model_info_tmp;
+        model_info_tmp.parse_from_gguf_filename(model_path);
+
+        ModelInstance model_instance;
+        server_model_meta model_meta;
+        model_meta.name = model_info_tmp.get_model_name();
+        model_instance.path = model_info_tmp.get_model_path();
+        model_instance.meta = std::move(model_meta);
+        auto model_key = model_info_tmp.get_model_name();
+        model_info_tmp.model_key_ = model_key;
+        model_instance.model_info = model_info_tmp;
+        model_instance.key = model_key;
+        model_instances_[model_key] = std::move(model_instance);
+        LOG_INFO("Service Starting Add COSYVOICE Model: {}", model_key);
+    }
+
+    auto model_inst = get_model_inst(model_name);
+    if (!model_inst) {
+        res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
+        return -1;
+    }
+
+    auto& model_info = model_inst->get().model_info;
+    if (model_info.model_version_.empty()) {
+        res->error(format_error_response_ex("failed to parse build_version from model name", ERROR_TYPE_INVALID_REQUEST, 80007));
+        return -1;
+    }
+
+    if (!HlieUtil::version_ge(model_info.model_version_, "v1.0.0")) {
+        res->error(format_error_response_ex("build_version must be >= v1.0.0", ERROR_TYPE_INVALID_REQUEST, 80007));
+        return -1;
+    }
+
+    model_info.set_devices(devices);
+
+    model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADING;
+    const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
+    if (!cosy_voice_model_service_) {
+        cosy_voice_model_service_ = std::make_shared<CosyVoiceModelService>();
+        if (cosy_voice_model_service_->init(model_dir_, model_info, device_service_) < 0) {
+            LOG_ERROR("failed to init the COSYVOICE model service");
+            res->error(format_error_response_ex("failed to init the COSYVOICE model service", ERROR_TYPE_SERVER, 80001));
+            cosy_voice_model_service_->stop();
+            cosy_voice_model_service_.reset();
+            return -1;
+        }
+
+        cosy_voice_model_service_->run();
+        model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
+        model_inst->get().meta.port = port_;
+        if (port_ != master_port && !replicas_mode_) {
+            update_status(master_port_, cosy_voice_model_service_->get_model_key(), port_);
         }
     } else {
         if (port_ != master_port) {
@@ -1000,7 +1101,6 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/v1/chat/completions", "/chat/completions", "/api/chat"},
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr {
-                    CHECK_SERVICE(llm_model_service_);
                     return route_llm_request(
                         req, std::bind(&LLModelService::handle_chat_completions, llm_model_service_, std::placeholders::_1));
                 },
@@ -1035,6 +1135,24 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                     whisper_model_service_->handle_transcriptions(req, res);
                 },
             },
+        {
+                {"/v1/audio/tts"},
+                POST,
+                nullptr,
+                true,
+                WHISPER, // 生图模型类型
+                [this](const httplib::Request& req, httplib::Response& res) {
+                    if (!cosy_voice_model_service_ || cosy_voice_model_service_->get_state() != SERVER_STATE_READY) {
+                        auto error_data = format_error_response_ex("Model is not available for now.", ERROR_TYPE_UNAVAILABLE, 80004);
+                        const json final_response{{"error", error_data}};
+                        res.set_content(safe_json_to_str(final_response), MIMETYPE_JSON);
+                        res.status = json_value(error_data, "code", 500);
+                        return;
+                    }
+
+                    cosy_voice_model_service_->handle_transcriptions(req, res);
+                },
+            },
             {
                 {"/hlie/v1/devices"},
                 GET,
@@ -1045,7 +1163,6 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/v1/completions"},
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr {
-                    CHECK_SERVICE(llm_model_service_);
                     return route_llm_request(
                         req, std::bind(&LLModelService::handle_completions_oai, llm_model_service_, std::placeholders::_1));
                 },
@@ -1056,9 +1173,17 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/completion", "/completions"},
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr {
-                    CHECK_SERVICE(llm_model_service_);
                     return route_llm_request(
                         req, std::bind(&LLModelService::handle_completions, llm_model_service_, std::placeholders::_1));
+                },
+                true,
+                LLM // LLM模型类型
+            },
+            {
+                {"/v1/responses", "/responses"},
+                POST,
+                [this](const server_http_req& req) -> server_http_res_ptr {
+                    return route_llm_request(req, std::bind(&LLModelService::handle_responses, llm_model_service_, std::placeholders::_1));
                 },
                 true,
                 LLM // LLM模型类型
@@ -1067,7 +1192,6 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/embedding", "/embeddings"},
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr {
-                    CHECK_SERVICE(llm_model_service_);
                     return route_llm_request(
                         req, std::bind(&LLModelService::handle_embeddings, llm_model_service_, std::placeholders::_1));
                 },
@@ -1078,7 +1202,6 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/v1/embeddings"},
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr {
-                    CHECK_SERVICE(llm_model_service_);
                     return route_llm_request(
                         req, std::bind(&LLModelService::handle_embeddings_oai, llm_model_service_, std::placeholders::_1));
                 },

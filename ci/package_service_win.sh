@@ -8,12 +8,13 @@ xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2
 
 xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/18/1632/windows11/houmo_drv_xh2_v0.7.0_windows11_x86_64.zip"
 
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/04/03/1804/windows11/houmo-HLIELLama-xh2_2.0.1_windows11_x86_64.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh2_2.0.1_windows11_x86_64.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.2.0_windows11_x86_64.tar.gz"
-xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.0.0_windows11_x86_64.tar.gz"
+xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.1.0_windows11_x86_64.tar.gz"
 
 uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-win_x64.tar.gz"
+libsamplerate_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/libsamplerate-win_x64.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {
@@ -65,6 +66,16 @@ deploy_uwebsockets() {
     download_file "$uwebsockets_url" "uwebsockets.tar.gz"
     tar -xzf uwebsockets.tar.gz -C third_party/uwebsockets --strip-components=1
     rm uwebsockets.tar.gz
+}
+
+deploy_libsamplerate() {
+    local libsamplerate_url=$1
+    mkdir -p third_party/samplerate
+    rm -rf third_party/samplerate/*
+
+    download_file "$libsamplerate_url" "libsamplerate.tar.gz"
+    tar -xzf libsamplerate.tar.gz -C third_party/samplerate --strip-components=1
+    rm libsamplerate.tar.gz
 }
 
 # 部署 Dadao SDK
@@ -143,6 +154,7 @@ package_service() {
     cp third_party/sd.cpp/bin/stable-diffusion.dll "$release_dir/bin/"
     cp third_party/whisper.cpp/bin/whisper.dll "$release_dir/bin/"
     cp third_party/uwebsockets/bin/uv.dll "$release_dir/bin/"
+    cp third_party/samplerate/bin/samplerate.dll "$release_dir/bin/"
 
     echo "Release files have been organized under: $release_dir"
     # 显示打包内容摘要
@@ -158,6 +170,7 @@ main() {
     deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
     deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"
     deploy_uwebsockets "$uwebsockets_url"
+    deploy_libsamplerate "$libsamplerate_url"
 
     echo "Deployed Dadao SDK and System SDK for $ARCH."
 

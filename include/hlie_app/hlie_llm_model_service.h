@@ -48,6 +48,7 @@ public:
     server_http_res_ptr handle_completions(const server_http_req& req) const;
 
     server_http_res_ptr handle_completions_oai(const server_http_req& req) const;
+    server_http_res_ptr handle_responses(const server_http_req& req) const;
 
     server_http_res_ptr handle_embeddings_oai(const server_http_req& req) const;
 

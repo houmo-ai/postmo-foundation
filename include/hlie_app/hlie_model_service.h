@@ -19,6 +19,7 @@ struct HLIEModelType {
     static constexpr auto LLM = "llm";
     static constexpr auto SD = "sd";
     static constexpr auto WHISPER = "whisper";
+    static constexpr auto COSYVOICE = "cosyvoice";
 
     // model real instance type
     static constexpr auto Qwen25 = "qwen2.5";

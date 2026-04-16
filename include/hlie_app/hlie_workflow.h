@@ -19,6 +19,7 @@ class LLModelService;
 class SDModelService;
 class WhisperModelService;
 class HLIEConfigService;
+class CosyVoiceModelService;
 
 class HLIEWorkflow {
 public:
@@ -80,6 +81,9 @@ private:
     int start_whisper(std::optional<server_model_meta>& meta, std::unique_ptr<server_res_generator_light>& res, const server_http_req& req,
                        const std::string& model_name, const std::string& model_path, const std::string& devices);
 
+    int start_cosyvoice(std::optional<server_model_meta>& meta, std::unique_ptr<server_res_generator_light>& res, const server_http_req& req,
+                       const std::string& model_name, const std::string& model_path, const std::string& devices);
+
     bool router_validate_model(const std::string& name, const std::unique_ptr<server_res_generator_light>& res);
 
     static server_http_res_ptr proxy_request(const server_http_req& req, const std::string& method, const std::string& name, int port);
@@ -107,6 +111,7 @@ private:
     std::shared_ptr<LLModelService> llm_model_service_;
     std::shared_ptr<SDModelService> sd_model_service_;
     std::shared_ptr<WhisperModelService> whisper_model_service_;
+    std::shared_ptr<CosyVoiceModelService> cosy_voice_model_service_;
     std::map<std::string, ModelInstance> model_instances_;
 
     std::shared_ptr<HLIEDeviceService> device_service_;
@@ -114,11 +119,11 @@ private:
     std::vector<std::string> api_keys_;
     std::string program_path_;
     std::string model_dir_;
-    int port_;
+    int port_{};
     bool is_slave_{false};
     bool replicas_mode_{false};
-    int master_port_;
-    time_t start_time_;
+    int master_port_{};
+    time_t start_time_{};
 
     std::mutex mutex_;
 
