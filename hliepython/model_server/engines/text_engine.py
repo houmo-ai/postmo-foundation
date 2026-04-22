@@ -1,0 +1,803 @@
+import os
+import json
+import jinja2
+import asyncio
+import uuid
+import time
+import hashlib
+from http import HTTPStatus
+from loguru import logger
+from collections.abc import AsyncGenerator
+from collections.abc import Sequence as GenericSequence
+from fastapi import Request
+from fastapi.responses import StreamingResponse
+
+from transformers import AutoTokenizer
+from typing import Dict, Any
+
+from qwen_vl_utils import process_vision_info
+
+from hliepython.model_server.engines.utils import should_include_usage
+from hliepython.model_server.engines.base_engine import InferenceEngine
+from hliepython.model_server.engines.protocol.chat_completions import (
+    ChatCompletionRequest,
+    parse_chat_messages,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ErrorResponse,
+    ChatCompletionResponseStreamChoice,
+    DeltaMessage,
+    ChatCompletionStreamResponse,
+    UsageInfo,
+    ChatCompletionResponseChoice,
+    ChatMessage,
+    ChatCompletionLogProb,
+    ChatCompletionLogProbs,
+    ChatCompletionLogProbsContent,
+    Logprob
+)
+
+from vllm.outputs import RequestOutput
+from vllm.v1.engine.exceptions import EngineDeadError
+from vllm import AsyncLLMEngine, SamplingParams
+from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.sampling_params import RequestOutputKind
+
+from vllm_houmo.models.export_meta_from_gguf import parse_gguf
+
+class TextEngine(InferenceEngine):
+    """文本推理引擎"""
+
+    def __init__(self, instance_config: Dict[str, Any]):
+        
+        self.model_name = instance_config.get("model_name", "")
+        self.device_ids = instance_config.get("device_ids", [])
+        self.model_path = instance_config.get("model_path", "")
+        self.model_type = instance_config.get("model_type", "text")
+        self.vllm_extra_config = instance_config.get("vllm_extra_config", {})
+        self.extra_config = instance_config.get("extra_config", {})
+
+        self.tokenizer = None
+
+        self.response_role = "assistant"
+        self.default_enable_think = False
+        self.return_tokens_as_token_ids: bool = False
+        self.enable_force_include_usage: bool = False
+
+        # 待开发功能
+        self.use_harmony = False
+        self.reasoning_parser = False
+
+        super().__init__(instance_config)
+
+    async def _abort_vllm_request(self, request_id: str):
+        """在取消请求时通知 vLLM 停止底层推理。"""
+        try:
+            abort_fn = getattr(self.engine, "abort", None)
+            if not callable(abort_fn):
+                return
+            result = abort_fn(request_id)
+            if asyncio.iscoroutine(result):
+                await result
+            logger.info(f"TextEngine: 已通知 vLLM 终止请求 {request_id}")
+        except Exception as e:
+            logger.warning(f"TextEngine: 终止请求 {request_id} 失败: {e}")
+
+    def _load_model(self):
+        """加载文本模型（使用 vLLM）"""
+        if AsyncLLMEngine is None:
+            raise RuntimeError("vLLM not available")
+
+        try:
+            # 获取配置参数（vLLM参数优先从 vllm_extra_config 读取）
+            max_model_len = self.vllm_extra_config.get("max_model_len", 2048)
+            gpu_memory_utilization = self.vllm_extra_config.get("gpu_memory_utilization", 0.5)
+            tensor_parallel_size = self.vllm_extra_config.get("tensor_parallel_size", 1)
+
+            if self.extra_config.get("vit_model_name"):
+                vit_model_name = os.path.join(
+                    self.model_path, self.extra_config["vit_model_name"]
+                )
+
+            additional_config = {
+                "visual_model_path": vit_model_name,
+                "visual_model_w": 448,
+                "visual_model_h": 448,
+            } if self.extra_config.get("vit_model_name") else {}
+
+            additional_config["device_ids"] = self.device_ids
+
+            parse_gguf(self.model_path)
+
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                self.model_path,
+                trust_remote_code=True,
+            )
+
+            # 配置 vLLM 引擎参数
+            engine_args = AsyncEngineArgs(
+                model=self.model_path,
+                max_num_seqs=1,     # 限制最大并发序列数
+                max_model_len=max_model_len,
+                gpu_memory_utilization=gpu_memory_utilization,
+                limit_mm_per_prompt={"image": 10},
+                tensor_parallel_size=tensor_parallel_size,
+                disable_log_stats=True,
+                enforce_eager=True,     # 禁用 CUDA 图以节省内存
+                additional_config=additional_config
+            )
+
+            # 创建异步引擎
+            self.engine = AsyncLLMEngine.from_engine_args(engine_args)
+            logger.info(f"TextEngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
+
+        except Exception as e:
+            logger.error(f"TextEngine: vLLM 引擎加载失败 {e}")
+            raise RuntimeError(f"Failed to load vLLM engine: {e}")
+
+
+    def _build_usage(self, prompt: str, content: str) -> Dict[str, int]:
+        """构建 usage 字段（当前保持原有的粗略 token 统计方式）。"""
+        prompt_tokens = len(prompt.split())
+        completion_tokens = len(content.split())
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+
+
+    def _build_full_response(self, request_id: str, content: str, prompt: str) -> Dict[str, Any]:
+        return {
+            "id": f"chatcmpl-{request_id}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": self.model_name,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": self._build_usage(prompt, content),
+        }
+
+    def create_error_response(
+        self,
+        message: str,
+        err_type: str = "BadRequestError",
+        status_code: HTTPStatus = HTTPStatus.BAD_REQUEST,
+    ) -> ErrorResponse:
+        return ErrorResponse(
+            message=message,
+            type=err_type,
+            code=status_code.value
+        )
+
+    def get_chat_request_role(self, request: ChatCompletionRequest) -> str:
+        logger.debug(f" ---------------------------------------------- ")
+        logger.debug(f"request.messages: {request.messages}")
+        logger.debug(f" ---------------------------------------------- ")
+        if request.add_generation_prompt:
+            return self.response_role
+        return request.messages[-1]["role"]
+
+    def _create_sampling_params(
+        self,
+        request: ChatCompletionRequest
+    ) -> SamplingParams:
+        output_kind = RequestOutputKind.DELTA \
+            if request.stream else RequestOutputKind.FINAL_ONLY
+
+        # 如果request.xxx 为None，那么就使用SamplingParams.from_optional的默认值
+        return SamplingParams.from_optional(
+            # 基础采样参数
+            n=request.n,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            top_k=request.top_k if request.top_k is not None else -1,
+            min_p=request.min_p if request.min_p is not None else 0.0,
+            seed=request.seed,
+
+            # 惩罚参数
+            presence_penalty=request.presence_penalty,
+            frequency_penalty=request.frequency_penalty,
+            repetition_penalty=request.repetition_penalty,
+
+            # 停止条件
+            max_tokens=request.max_completion_tokens,
+            min_tokens=request.min_tokens if request.min_tokens is not None else 0,
+            stop=request.stop,
+            stop_token_ids=request.stop_token_ids,
+            ignore_eos=request.ignore_eos,
+
+            # 输出控制
+            logprobs=self._get_logprobs_value(request),
+            prompt_logprobs=request.prompt_logprobs,
+            detokenize=request.detokenize if hasattr(request, 'detokenize') else True,
+            skip_special_tokens=request.skip_special_tokens,
+            spaces_between_special_tokens=request.spaces_between_special_tokens,
+            include_stop_str_in_output=request.include_stop_str_in_output,
+
+            # 高级参数
+            structured_outputs=request.structured_outputs,
+            logit_bias=request.logit_bias,
+            allowed_token_ids=request.allowed_token_ids,
+            bad_words=request.bad_words if hasattr(request, 'bad_words') else None,
+
+            # 输出类型和额外参数
+            output_kind=output_kind,
+            extra_args=request.vllm_xargs if hasattr(request, 'vllm_xargs') else None,
+            skip_clone=True,  # 每次请求创建新实例，可以跳过克隆
+        )
+
+    async def _preprocess_chat(
+        self,
+        request: ChatCompletionRequest,
+        request_messages: str
+    ):
+        conversation = parse_chat_messages(request_messages)
+
+        enable_think = False
+        reasoning_effort = request.reasoning_effort
+        if reasoning_effort is not None:
+            enable_think = reasoning_effort != "none"
+
+        request_prompt = self.tokenizer.apply_chat_template(
+            conversation,
+            tokenize=False,  # 返回字符串而非 token IDs
+            add_generation_prompt=True,
+            enable_thinking=enable_think,
+        )
+
+        sampling_params = self._create_sampling_params(request)
+
+        return conversation, request_prompt, sampling_params
+
+    def _get_logprobs_value(self, request: ChatCompletionRequest):
+        # vllm 的SamplingParams 中的logprobs=None 和 logprobs=0 有区别
+        #  - logprobs=None: 完全不返回任何 log 概率信息
+        #  - logprobs=0: 只返回采样 token 的 log 概率，不返回其他候选 token
+        if not getattr(request, "logprobs", False):
+            return None
+
+        top_logprobs = getattr(request, "top_logprobs", None)
+        if top_logprobs is None:
+            return 0
+
+        # OpenAI 官方限制是 0~20，防御性校验
+        return max(0, min(int(top_logprobs), 20))
+
+    async def create_chat_completions(
+        self,
+        request: ChatCompletionRequest,
+        raw_request: Request | None = None,
+    ):
+        try:
+            model_name = self.model_name
+            (conversation, request_prompt, sampling_params) \
+                = await self._preprocess_chat(request, request.messages)
+
+        except (ValueError, TypeError, RuntimeError, jinja2.TemplateError) as e:
+            import traceback
+            logger.info("Error in preprocessing prompt inputs")
+            return self.create_error_response(f"{e} {e.__cause__} {traceback.format_exc()}")
+
+        # 条件性处理视觉信息
+        image_data = None
+        try:
+            image_data, _ = process_vision_info(conversation)
+        except Exception as e:
+            logger.info("图像处理失败")
+            return self.create_error_response(f"{e} {e.__cause__}")
+
+        engine_input = {
+            "prompt": request_prompt
+        }
+        if image_data is not None:
+            engine_input["multi_modal_data"] = {"image": image_data}
+
+        request_id = self._base_request_id(raw_request)
+
+        fingerprint_data = {
+            "model_name": model_name,
+            "sampling_params": sampling_params.__dict__,
+            "prompt": engine_input,
+        }
+
+        serializable_data = self.serialize_for_fingerprint(fingerprint_data)
+        fingerprint_str = json.dumps(serializable_data, sort_keys=True)
+        system_fingerprint = f"fp-{hashlib.sha256(fingerprint_str.encode()).hexdigest()[:10]}"
+
+        # Schedule the request and get the result generator.
+        generator: AsyncGenerator[RequestOutput, None]
+
+        logger.info(f"\n\n\n\n\n\n\n\nengine_input: {engine_input}")
+
+        try:
+            generator = self.engine.generate(
+                sampling_params=sampling_params,
+                request_id=request_id,
+                prompt=engine_input,
+            )
+        except EngineDeadError:
+            logger.critical("vLLM engine is dead")
+            # return self.create_error_response("vLLM engine is dead")
+            raise
+        except ValueError as e:
+            # TODO: Use a vllm-specific Validation Error
+            return self.create_error_response(str(e))
+
+        if request.stream:
+            logger.info(f"走这条路呦~ ~ ~ ")
+            return StreamingResponse(
+                self.chat_completion_stream_generator(
+                    request,
+                    generator,
+                    request_id,
+                    system_fingerprint,
+                    model_name,
+                    conversation,
+                ),
+                media_type="text/event-stream",
+            )
+
+        try:
+            return await self.chat_completion_full_generator(
+                request,
+                generator,
+                request_id,
+                system_fingerprint,
+                model_name,
+                conversation,
+            )
+        except ValueError as e:
+            # TODO: Use a vllm-specific Validation Error
+            return self.create_error_response(str(e))
+
+
+    async def chat_completion_stream_generator(
+        self,
+        request: ChatCompletionRequest,
+        generator,
+        request_id: str,
+        system_fingerprint: str,
+        model_name: str,
+        conversation,
+    ) -> AsyncGenerator[str, None]:
+        created_time = int(time.time())
+        chunk_object_type = "chat.completion.chunk"
+        first_iteration = True
+
+        # Send response for each token for each request.n (index)
+        num_choices = 1 if request.n is None else request.n
+
+        previous_num_tokens = [0] * num_choices
+        finish_reason_sent = [False] * num_choices
+        num_prompt_tokens = 0
+
+        tool_choice_function_name = None
+        history_tool_call_cnt = 0
+        all_previous_token_ids = None
+
+        stream_options = request.stream_options
+        include_usage, include_continuous_usage = should_include_usage(
+            stream_options, self.enable_force_include_usage
+        )
+
+        try:
+            async for res in generator:
+                logger.debug(" ------------------------------------------- ")
+                logger.debug(f"本次迭代的结果：{res}")
+                logger.debug(" ------------------------------------------- ")
+                if res.prompt_token_ids is not None:
+                    num_prompt_tokens = len(res.prompt_token_ids)
+                    if res.encoder_prompt_token_ids is not None:
+                        num_prompt_tokens += len(res.encoder_prompt_token_ids)
+
+                # We need to do it here, because if there are exceptions in
+                # the result_generator, it needs to be sent as the FIRST
+                # response (by the try...catch).
+                if first_iteration:
+                    num_cached_tokens = res.num_cached_tokens
+                    # Send first response for each request.n (index) with
+                    # the role
+                    role = self.get_chat_request_role(request)
+
+                    # NOTE num_choices defaults to 1 so this usually executes
+                    # once per request
+                    for i in range(num_choices):
+                        choice_data = ChatCompletionResponseStreamChoice(
+                            index=i,
+                            delta=DeltaMessage(
+                                role=role,
+                                content="",
+                            ),
+                            logprobs=None,
+                            finish_reason=None,
+                        )
+
+                        # return prompt_token_ids at the first chunk ever
+                        chunk = ChatCompletionStreamResponse(
+                            id=request_id,
+                            object=chunk_object_type,
+                            created=created_time,
+                            choices=[choice_data],
+                            model=model_name,
+                            # prompt_token_ids=(
+                            #     res.prompt_token_ids
+                            #     if request.return_token_ids
+                            #     else None
+                            # ),
+                            system_fingerprint=system_fingerprint,
+                        )
+
+
+                        # if continuous usage stats are requested, add it
+                        if include_continuous_usage:
+                            chunk.usage = UsageInfo(
+                                prompt_tokens=num_prompt_tokens,
+                                completion_tokens=0,
+                                total_tokens=num_prompt_tokens,
+                            )
+
+                        data = chunk.model_dump_json(exclude_unset=True)
+                        yield f"data: {data}\n\n"
+
+                    first_iteration = False
+
+                for output in res.outputs:
+                    i = output.index
+                    tool_parser = None
+
+                    if request.logprobs and request.top_logprobs is not None:
+                        assert output.logprobs is not None, "Did not output logprobs"
+                        logprobs = self._create_chat_logprobs(
+                            token=output.text,
+                            token_ids=output.token_ids,
+                            token_logprobs=output.cumulative_logprob,
+                            top_logprobs=output.logprobs,
+                            num_output_top_logprobs=request.top_logprobs,
+                        )
+                    else:
+                        logprobs = None
+
+                    delta_text = output.text
+
+                    # 作用是在分块预填充（chunked prefill）场景下过滤空响应块，避免向客户端发送无意义的空数据
+                    # if (
+                    #     not delta_text
+                    #     and not output.token_ids
+                    #     and not previous_num_tokens[i]
+                    # ):
+                    #     # Chunked prefill case, don't return empty chunks
+                    #     continue
+
+                    delta_message = DeltaMessage(content=delta_text)
+
+                    # set the previous values for the next iteration
+                    previous_num_tokens[i] += len(output.token_ids)
+
+                    # if the message delta is None (e.g. because it was a
+                    # "control token" for tool calls or the parser otherwise
+                    # wasn't ready to send a token, then
+                    #   get the next token without streaming a chunk
+                    if delta_message is None:
+                        # NOTE: If return_token_ids is enabled, we still need to
+                        # send a chunk with token_ids even if delta_message is None
+                        # to ensure all tokens are included in the response
+                        if (
+                            output.finish_reason is None
+                            and not request.return_token_ids
+                        ):
+                            continue
+                        delta_message = DeltaMessage()
+
+                    if output.finish_reason is None:
+                        # Send token-by-token response for each request.n
+                        choice_data = ChatCompletionResponseStreamChoice(
+                            index=i,
+                            delta=delta_message,
+                            logprobs=logprobs,
+                            finish_reason=None,
+                        )
+
+                    # if the model is finished generating
+                    else:
+                        # check to make sure we haven't "forgotten" to stream
+                        #   any tokens that were generated but previously
+                        #   matched by partial json parsing
+                        # only happens if we are NOT using structured outputs
+                        auto_tools_called = False
+                        if tool_parser:
+                            auto_tools_called = len(tool_parser.prev_tool_call_arr) > 0
+                            index = (
+                                len(tool_parser.prev_tool_call_arr) - 1
+                                if auto_tools_called
+                                else 0
+                            )
+                        else:
+                            index = 0
+
+                        finish_reason_ = (
+                            output.finish_reason if output.finish_reason else "stop"
+                        )
+
+                        choice_data = ChatCompletionResponseStreamChoice(
+                            index=i,
+                            delta=delta_message,
+                            logprobs=logprobs,
+                            finish_reason=finish_reason_,
+                            stop_reason=output.stop_reason,
+                            # token_ids=(
+                            #     as_list(output.token_ids)
+                            #     if request.return_token_ids
+                            #     else None
+                            # ),
+                        )
+
+                        finish_reason_sent[i] = True
+
+                    # choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
+                    chunk = ChatCompletionStreamResponse(
+                        id=request_id,
+                        object=chunk_object_type,
+                        created=created_time,
+                        choices=[choice_data],
+                        model=model_name,
+                        system_fingerprint=system_fingerprint,
+                    )
+
+                    # handle usage stats if requested & if continuous
+                    if include_continuous_usage:
+                        completion_tokens = previous_num_tokens[i]
+                        chunk.usage = UsageInfo(
+                            prompt_tokens=num_prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            total_tokens=num_prompt_tokens + completion_tokens,
+                        )
+
+                    data = chunk.model_dump_json(exclude_unset=True)
+                    yield f"data: {data}\n\n"
+
+            # once the final token is handled, if stream_options.include_usage
+            # is sent, send the usage
+            if include_usage:
+                completion_tokens = sum(previous_num_tokens)
+                final_usage = UsageInfo(
+                    prompt_tokens=num_prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=num_prompt_tokens + completion_tokens,
+                )
+                # if self.enable_prompt_tokens_details and num_cached_tokens:
+                #     final_usage.prompt_tokens_details = PromptTokenUsageInfo(
+                #         cached_tokens=num_cached_tokens
+                #     )
+
+                final_usage_chunk = ChatCompletionStreamResponse(
+                    id=request_id,
+                    object=chunk_object_type,
+                    created=created_time,
+                    choices=[],
+                    model=model_name,
+                    usage=final_usage,
+                    system_fingerprint=system_fingerprint,
+                    # timings=build_timings(
+                    #     created_time,
+                    #     UsageInfo(
+                    #         prompt_tokens=num_prompt_tokens,
+                    #         completion_tokens=completion_tokens,
+                    #         total_tokens=num_prompt_tokens + completion_tokens,
+                    #     )
+                    # ),
+                )
+                final_usage_data = final_usage_chunk.model_dump_json(
+                    exclude_unset=True, exclude_none=True
+                )
+                yield f"data: {final_usage_data}\n\n"
+        except EngineDeadError:
+            logger.critical("vLLM engine is dead during streaming")
+            raise
+        except Exception as e:
+            # TODO: Use a vllm-specific Validation Error
+            logger.exception("Error in chat completion stream generator.")
+            data = self.create_streaming_error_response(str(e))
+            yield f"data: {data}\n\n"
+
+        # Send the final done message after all response.n are finished
+        yield "data: [DONE]\n\n"
+
+    async def chat_completion_full_generator(
+        self,
+        request: ChatCompletionRequest,
+        result_generator,
+        request_id: str,
+        system_fingerprint: str,
+        model_name: str,
+        conversation,
+    ) -> ErrorResponse | ChatCompletionResponse:
+        created_time = int(time.time())
+        final_res: RequestOutput | None = None
+
+        try:
+            async for res in result_generator:
+                logger.info(f" ---------------------------------- ")
+                logger.info(f"res: {res}")
+                logger.info(f" ---------------------------------- ")
+                final_res = res
+        except EngineDeadError:
+            logger.critical(f"Engine dead, abort {request_id}")
+            raise
+        except asyncio.CancelledError:
+            # return self.create_error_response("Client disconnected")
+            logger.warning(f"Client disconnected, abort {request_id}")
+            await self.engine.abort(request_id)
+            raise
+        except ValueError as e:
+            # TODO: Use a vllm-specific Validation Error
+            return self.create_error_response(str(e))
+
+        assert final_res is not None
+
+        choices: list[ChatCompletionResponseChoice] = []
+        history_tool_call_cnt = 0
+
+        role = self.get_chat_request_role(request)
+        for output in final_res.outputs:
+            token_ids = output.token_ids
+            out_logprobs = output.logprobs
+            tool_call_info = None
+
+            if request.logprobs and request.top_logprobs is not None:
+                assert out_logprobs is not None, "Did not output logprobs"
+                logprobs = self._create_chat_logprobs(
+                    token=output.text,
+                    token_ids=output.token_ids,
+                    token_logprobs=output.cumulative_logprob,
+                    top_logprobs=output.logprobs,
+                    num_output_top_logprobs=request.top_logprobs,
+                )
+            else:
+                logprobs = None
+
+            if self.use_harmony:
+                # Todo
+                pass
+
+            if self.reasoning_parser:
+                # Todo
+                pass
+            else:
+                reasoning = None
+                content = output.text
+
+            auto_tools_called = False
+            # if auto tools are not enabled, and a named tool choice using
+            #   outlines is not being used
+            if auto_tools_called:
+                # Todo
+                pass
+            else:
+                logger.warning(
+                    "Error in chat_completion_full_generator - cannot determine"
+                    " if tools should be extracted. Returning a standard chat "
+                    "completion."
+                )
+                message = ChatMessage(role=role, reasoning=reasoning, content=content)
+
+            # In OpenAI's API, when a tool is called, the finish_reason is:
+            # "tool_calls" for "auto" or "required" tool calls,
+            # and "stop" for named tool calls.
+            is_finish_reason_tool_calls = False
+
+            choice_data = ChatCompletionResponseChoice(
+                index=output.index,
+                message=message,
+                logprobs=logprobs,
+                finish_reason="tool_calls"
+                if is_finish_reason_tool_calls
+                else output.finish_reason
+                if output.finish_reason
+                else "stop",
+                stop_reason=output.stop_reason,
+                # token_ids=(
+                #     as_list(output.token_ids) if request.return_token_ids else None
+                # ),
+            )
+            # choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
+
+            choices.append(choice_data)
+
+        assert final_res.prompt_token_ids is not None
+        logger.info(f"final res: {final_res}")
+        num_prompt_tokens = len(final_res.prompt_token_ids)
+        num_generated_tokens = sum(
+            len(output.token_ids) for output in final_res.outputs
+        )
+        usage = UsageInfo(
+            prompt_tokens=num_prompt_tokens,
+            completion_tokens=num_generated_tokens,
+            total_tokens=num_prompt_tokens + num_generated_tokens,
+        )
+        response = ChatCompletionResponse(
+            id=request_id,
+            created=created_time,
+            model=model_name,
+            choices=choices,
+            usage=usage,
+            system_fingerprint=system_fingerprint,
+        )
+
+        return response
+    
+    def create_streaming_error_response(
+        self,
+        message: str,
+        err_type: str = "BadRequestError",
+        status_code: HTTPStatus = HTTPStatus.BAD_REQUEST,
+    ) -> str:
+        json_str = json.dumps(
+            self.create_error_response(
+                message=message, err_type=err_type, status_code=status_code
+            ).model_dump()
+        )
+        return json_str
+
+    def _create_chat_logprobs(
+        self,
+        token: GenericSequence[str],
+        token_ids: GenericSequence[int],
+        token_logprobs: GenericSequence[float],
+        top_logprobs: GenericSequence[dict[int, Logprob] | None],
+        num_output_top_logprobs: int | None = None,
+        return_as_token_id: bool | None = None,
+    ) -> ChatCompletionLogProbs:
+        """Create OpenAI-style logprobs."""
+        logprobs_content: list[ChatCompletionLogProbsContent] = []
+
+        should_return_as_token_id = (
+            return_as_token_id
+            if return_as_token_id is not None
+            else self.return_tokens_as_token_ids
+        )
+        for i, token_id in enumerate(token_ids):
+            step_top_logprobs = top_logprobs[i]
+            if step_top_logprobs is None or step_top_logprobs.get(token_id) is None:
+                if should_return_as_token_id:
+                    token = f"token_id:{token_id}"
+                else:
+                    # token = tokenizer.decode(token_id)
+                    token = f"token_id:{token_id}"
+
+                logprobs_content.append(
+                    ChatCompletionLogProbsContent(
+                        token=token,
+                        bytes=list(token.encode("utf-8", errors="replace")),
+                    )
+                )
+            else:
+                step_token = step_top_logprobs[token_id]
+                step_decoded = step_token.decoded_token
+
+                logprobs_content.append(
+                    ChatCompletionLogProbsContent(
+                        token=step_decoded,
+                        logprob=max(step_token.logprob, -9999.0),
+                        bytes=(
+                            None
+                            if step_decoded is None
+                            else list(step_decoded.encode("utf-8", errors="replace"))
+                        ),
+                        top_logprobs=self._get_top_logprobs(
+                            step_top_logprobs,
+                            num_output_top_logprobs,
+                            should_return_as_token_id,
+                        ),
+                    )
+                )
+
+        return ChatCompletionLogProbs(content=logprobs_content)
