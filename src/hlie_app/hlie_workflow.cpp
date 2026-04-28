@@ -1136,7 +1136,7 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 },
             },
         {
-                {"/v1/audio/tts"},
+                {"/v1/audio/speech"},
                 POST,
                 nullptr,
                 true,
@@ -1349,6 +1349,10 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
         models.push_back(whisper_model_service_->get_model_key());
     }
 
+    if (cosy_voice_model_service_) {
+        models.push_back(cosy_voice_model_service_->get_model_key());
+    }
+
     processors.push_back({{"params", ""},
                           {"instance_id", 0},
                           {"port", port_},
@@ -1418,7 +1422,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
 
     const auto body = json::parse(req.body);
     const std::string model_type = body.value("model_type", LLM);
-    if (model_type != LLM && model_type != SD && model_type != WHISPER) {
+    if (model_type != LLM && model_type != SD && model_type != WHISPER && model_type != HLIEModelType::COSYVOICE) {
         res->error(format_error_response_ex("Invalid model type.", ERROR_TYPE_INVALID_REQUEST, 80006));
         return res;
     }
@@ -1433,9 +1437,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         }
 
         llm_model_service_.reset();
-    }
-
-    if (model_type == SD && sd_model_service_) {
+    } else if (model_type == SD && sd_model_service_) {
         model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_UNLOADED;
         sd_model_service_->stop();
 
@@ -1444,9 +1446,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         }
 
         sd_model_service_.reset();
-    }
-
-    if (model_type == WHISPER && whisper_model_service_) {
+    } else if (model_type == WHISPER && whisper_model_service_) {
         model_instances_[whisper_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
         whisper_model_service_->stop();
 
@@ -1455,6 +1455,15 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         }
 
         whisper_model_service_.reset();
+    } else if (model_type == HLIEModelType::COSYVOICE && cosy_voice_model_service_) {
+        model_instances_[cosy_voice_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
+        cosy_voice_model_service_->stop();
+
+        if (is_slave_ && !replicas_mode_) {
+            update_status(master_port_, cosy_voice_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
+        }
+
+        cosy_voice_model_service_.reset();
     }
 
     LOG_INFO("Succeed to uninstall model");

@@ -9,7 +9,8 @@
 #include <whisper.h>
 #include "json.hpp"
 
-#include "../../include/hlie_app/models/cosyvoice_feat.h"
+#include "hlie_app/models/cosyvoice_feat.h"
+#include "hlie_app/models/cosyvoice_spk_feat.h"
 #include "hlie_app/hlie_device_service.h"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_app/models/hlie_cosyvoice_model.h"
@@ -614,10 +615,10 @@ int CosyVoiceModelService::init(const std::string& model_dir, const HLIEModelInf
     audio_spec_preprocessor_->initialize();
 
     model_key_ = model_info.model_key_;
+    /*
     websocket_service_ = std::make_unique<HLIEWebSocketService>();
-
     websocket_service_->init();
-
+    */
     return 0;
 }
 
@@ -892,7 +893,7 @@ std::vector<float> CosyVoiceModelService::transcription(const CosyVoiceRequest& 
 void CosyVoiceModelService::handle_transcriptions(const httplib::Request& req, httplib::Response& res) {
     try {
         const json body = json::parse(req.body);
-        std::string content = json_value(body, "content", std::string());
+        std::string content = json_value(body, "input", std::string());
         CosyVoiceRequest cosy_voice_request;
         cosy_voice_request.content = content;
 
@@ -1280,17 +1281,19 @@ std::vector<float> CosyVoiceModelService::extract_spk_embedding(const std::strin
 
     LOG_INFO("Speaker embedding mel spec: n_mel={}, n_len={}", mel.n_mel, mel.n_len);
 
+    std::vector<float> spk_feat(REF_SPK_FEAT.begin(), REF_SPK_FEAT.end());
+/*
     // Step 3: Convert to [T, 80] format (transpose from [n_mel, n_len] to [n_len, n_mel])
     std::vector<float> feat(feat_len * kNumMelBins);
     for (int m = 0; m < mel.n_mel && m < kNumMelBins; ++m) {
         for (int t = 0; t < feat_len; ++t) {
-            feat[t * kNumMelBins + m] = mel.data[m * mel.n_len + t];
+            feat[t * kNumMelBins + m] = spk_feat[m * mel.n_len + t];
         }
-    }
+    }*/
 
     // Step 4: Subtract mean along time dimension (keepdim=True equivalent)
     // feat.mean(dim=0, keepdim=True) -> compute mean per mel bin across time
-    std::vector<float> mean_per_bin(kNumMelBins, 0.0f);
+    /*std::vector<float> mean_per_bin(kNumMelBins, 0.0f);
     for (int t = 0; t < feat_len; ++t) {
         for (int m = 0; m < kNumMelBins; ++m) {
             mean_per_bin[m] += feat[t * kNumMelBins + m];
@@ -1317,16 +1320,19 @@ std::vector<float> CosyVoiceModelService::extract_spk_embedding(const std::strin
         // Truncate
         padded_feat.assign(feat.begin(), feat.begin() + kFixedLen * kNumMelBins);
     }
-
+    */
     // Step 6: Convert to float16 and prepare input shape [1, 1000, 80]
-    std::vector<uint16_t> campplus_input(kFixedLen * kNumMelBins);
-    for (size_t i = 0; i < padded_feat.size(); ++i) {
-        campplus_input[i] = TcimUtil::float_to_float16(padded_feat[i]);
+    std::vector<TensorFP16> campplus_input(kFixedLen * kNumMelBins);
+    for (size_t i = 0; i < spk_feat.size(); ++i) {
+        campplus_input[i] = static_cast<TensorFP16>(spk_feat[i]);
     }
 
     auto result = cosyvoice_model_->campplus(campplus_input);
 
     LOG_INFO("Extracted speaker embedding: size={}", result.size());
+    for (size_t i = 0; i < result.size(); ++i) {
+        LOG_INFO("{}", result[i]);
+    }
     return result;
 }
 

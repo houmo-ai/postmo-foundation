@@ -189,7 +189,7 @@ public:
     std::pair<std::vector<int>,int> speech_tokenizer(const std::vector<TensorFP16>& padded_input, const std::vector<TensorFP16>& mask,
                                                       const std::vector<TensorFP16>& mask1, int feat_len);
 
-    std::vector<float> campplus(const std::vector<uint16_t>& input) const;
+    std::vector<float> campplus(const std::vector<TensorFP16>& input) const;
 
     /**
      * Run LLM inference to generate speech tokens from text.
