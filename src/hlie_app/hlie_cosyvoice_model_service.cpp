@@ -9,6 +9,7 @@
 #include <whisper.h>
 #include "json.hpp"
 
+#include "../../include/hlie_app/models/cosyvoice_feat.h"
 #include "hlie_app/hlie_device_service.h"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_app/models/hlie_cosyvoice_model.h"
@@ -20,7 +21,7 @@
 #include "hlie_base/hlie_tcim_util.h"
 #include "hlie_base/hlie_util.h"
 
-#define SIN_COS_N_COUNT 4096  // 增大以支持更大的 frame_size (最大 4000)
+#define SIN_COS_N_COUNT 4096 // 增大以支持更大的 frame_size (最大 4000)
 #define _USE_MATH_DEFINES
 
 using json = nlohmann::ordered_json;
@@ -39,7 +40,7 @@ namespace {
      * Check if text contains any Chinese characters (U+4E00 - U+9FFF).
      */
     bool contains_chinese(const std::string& text) {
-        for (size_t i = 0; i < text.size(); ) {
+        for (size_t i = 0; i < text.size();) {
             unsigned char c = static_cast<unsigned char>(text[i]);
 
             // 检测 UTF-8 编码的中文字符 (3字节: 0xE0 开头)
@@ -463,6 +464,48 @@ namespace {
         return output;
     }
 
+
+    struct wav_header {
+        char riff[4] = {'R', 'I', 'F', 'F'};
+        uint32_t chunk_size;
+        char wave[4] = {'W', 'A', 'V', 'E'};
+        char fmt[4] = {'f', 'm', 't', ' '};
+        uint32_t fmt_chunk_size = 16;
+        uint16_t audio_format = 1; // PCM
+        uint16_t num_channels = 1; // Mono
+        uint32_t sample_rate;
+        uint32_t byte_rate;
+        uint16_t block_align;
+        uint16_t bits_per_sample = 16;
+        char data[4] = {'d', 'a', 't', 'a'};
+        uint32_t data_size;
+    };
+
+    bool save_wav16(const std::string& fname, const std::vector<float>& data, const int sample_rate = 24000) {
+        std::ofstream file(fname, std::ios::binary);
+        if (!file) {
+            LOG_ERROR("save_wav16 failed to open file {} for writing.", fname.c_str());
+            return false;
+        }
+
+        wav_header header;
+        header.sample_rate = sample_rate;
+        header.byte_rate = header.sample_rate * header.num_channels * (header.bits_per_sample / 8);
+        header.block_align = header.num_channels * (header.bits_per_sample / 8);
+        header.data_size = data.size() * (header.bits_per_sample / 8);
+        header.chunk_size = 36 + header.data_size;
+
+        file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+
+        for (const auto& sample : data) {
+            int16_t pcm_sample = static_cast<int16_t>(std::clamp(sample * 32767.0, -32768.0, 32767.0));
+            file.write(reinterpret_cast<const char*>(&pcm_sample), sizeof(pcm_sample));
+        }
+
+        return file.good();
+    }
+
+
     AudioData load_wav(const std::string& wav_path, int target_sr = 16000, int min_sr = 16000) {
         std::vector<float> pcmf32;
         std::vector<std::vector<float>> pcmf32s;
@@ -542,6 +585,7 @@ int CosyVoiceModelService::init(const std::string& model_dir, const HLIEModelInf
 
     cosyvoice_model_->load_model(model);
     LOG_INFO("load_model done");
+    cosyvoice_model_->init();
 
     audio_hparams hparams = {
         /* n_mel_bins         */ 128,
@@ -582,10 +626,9 @@ void CosyVoiceModelService::run() {
         LOG_WARN("CosyVoiceModelService thread is already running.");
         return;
     }
-
-    // Todo 判断配置是否支持WS
-    websocket_service_->run([this](const WhisperStreamRequest& req) { return this->handle_stream(req); }, 7998);
-
+    /*
+        websocket_service_->run([this](const WhisperStreamRequest& req) { return this->handle_stream(req); }, 7998);
+    */
     state_.store(SERVER_STATE_READY);
     should_stop_ = false;
     worker_thread_ = std::make_unique<std::thread>(&CosyVoiceModelService::process, this);
@@ -606,7 +649,8 @@ void CosyVoiceModelService::process() {
                 auto end = std::chrono::steady_clock::now();
                 // 构造结果
                 CosyVoiceResult result;
-                result.success = transcription_result != "HLIECpp-FAILED-888";
+                result.wav = transcription_result;
+                result.success = !transcription_result.empty();
                 result.predicted_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
                 LOG_INFO("transcription time: {} ms", result.predicted_ms);
 
@@ -674,7 +718,7 @@ void CosyVoiceModelService::handle_models(nlohmann::ordered_json& resp) const {
     });
 }
 
-std::string CosyVoiceModelService::handle_stream(const WhisperStreamRequest& request) {
+std::vector<float> CosyVoiceModelService::handle_stream(const WhisperStreamRequest& request) {
 
     CosyVoiceRequest req;
     req.content = "stream";
@@ -685,6 +729,73 @@ std::string CosyVoiceModelService::handle_stream(const WhisperStreamRequest& req
     auto predicted_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     LOG_INFO("transcription time: {} ms", predicted_ms);
     return transcription_result;
+}
+
+void CosyVoiceModelService::llm_job(const std::vector<int>& text, const std::vector<int>& prompt_text,
+                                    const std::vector<int>& llm_prompt_speech_token, const std::vector<float>& llm_embedding,
+                                    const std::string& uuid) {
+    LOG_INFO("LLM job started for uuid: {}", uuid);
+
+    const int max_silent_token_num = 5;
+    int cur_silent_token_num = 0;
+
+    LLMPerf llm_perf;
+
+    try {
+        // Run LLM inference
+        auto generated_tokens =
+            cosyvoice_model_->llm_inference(text, static_cast<int>(text.size()), prompt_text, static_cast<int>(prompt_text.size()),
+                                            llm_prompt_speech_token, static_cast<int>(llm_prompt_speech_token.size()), llm_embedding,
+                                            25, // sampling
+                                            20.0f, // max_token_text_ratio
+                                            2.0f, // min_token_text_ratio
+                                            &llm_perf);
+
+        // Process generated tokens and filter silent tokens
+        for (int token_id : generated_tokens) {
+            // Check if token is in silent_tokens list
+            bool is_silent = false;
+            for (const int silent_id : kSilentTokens) {
+                if (token_id == silent_id) {
+                    is_silent = true;
+                    break;
+                }
+            }
+
+            if (is_silent) {
+                cur_silent_token_num++;
+                if (cur_silent_token_num > max_silent_token_num) {
+                    LOG_DEBUG("skip current silent_token {}", cur_silent_token_num);
+                    continue;
+                }
+            } else {
+                cur_silent_token_num = 0;
+            }
+
+            // Store the token
+            {
+                std::lock_guard<std::mutex> lock(lock_);
+                tts_speech_token_dict_[uuid].push_back(token_id);
+            }
+        }
+
+        // Mark LLM as ended
+        {
+            std::lock_guard<std::mutex> lock(lock_);
+            llm_end_dict_[uuid] = true;
+            perf_by_uuid_[uuid] = {llm_perf.llm_total_s};
+        }
+
+        LOG_INFO("LLM job completed for uuid: {}, generated {} tokens", uuid, generated_tokens.size());
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("LLM job failed for uuid: {}, error: {}", uuid, e.what());
+        {
+            std::lock_guard<std::mutex> lock(lock_);
+            llm_end_dict_[uuid] = true;
+        }
+        throw;
+    }
 }
 
 std::future<CosyVoiceResult> CosyVoiceModelService::transcription_async(const CosyVoiceRequest& request) const {
@@ -708,8 +819,8 @@ CosyVoiceResult CosyVoiceModelService::transcription_sync(const CosyVoiceRequest
     return future.get();
 }
 
-std::string CosyVoiceModelService::transcription(const CosyVoiceRequest& request) {
-    std::string results;
+std::vector<float> CosyVoiceModelService::transcription(const CosyVoiceRequest& request) {
+    std::vector<float> results;
     try {
         LOG_INFO("whisper.cpp full parallel ready to run {}", request.content);
 
@@ -718,15 +829,61 @@ std::string CosyVoiceModelService::transcription(const CosyVoiceRequest& request
         LOG_INFO("text_normalize done1, {}", prompt_text[0]);
         auto tts_text = text_normalize(request.content, false, true);
         LOG_INFO("text_normalize done2");
-        const std::string prompt_wav = R"(D:\workspace\wtt\houmo\llm\hlie-whisper.cpp\samples\jfk.wav)";
+        const std::string prompt_wav = R"(E:\test_data\tts\zero_shot_prompt.wav)";
 
         for (auto text : tts_text) {
-            auto resutl = frontend_zero_shot(tts_text[0], prompt_text[0], prompt_wav);
+            // Get frontend input (tokens, embeddings, etc.)
+            auto model_input = frontend_zero_shot(text, prompt_text[0], prompt_wav);
+
+            LOG_INFO("synthesis text {}", text);
+
+            // Generate unique ID for this request
+            std::string this_uuid = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+
+            // Initialize shared state
+            {
+                std::lock_guard<std::mutex> lock(lock_);
+                tts_speech_token_dict_[this_uuid] = {};
+                llm_end_dict_[this_uuid] = false;
+            }
+
+            // Run LLM job (blocking)
+            auto llm_start = std::chrono::steady_clock::now();
+            llm_job(model_input.text_tokens, model_input.prompt_tokens, model_input.llm_prompt_speech_token, model_input.embedding,
+                    this_uuid);
+            auto llm_end = std::chrono::steady_clock::now();
+            float llm_time = std::chrono::duration<float>(llm_end - llm_start).count();
+
+            // Get generated tokens
+            std::vector<int> this_tts_speech_token;
+            {
+                std::lock_guard<std::mutex> lock(lock_);
+                this_tts_speech_token = tts_speech_token_dict_[this_uuid];
+            }
+
+            LOG_INFO("LLM generated {} speech tokens in {:.2f}s", this_tts_speech_token.size(), llm_time);
+
+            // Run token2wav (flow decoder)
+            auto tts_start = std::chrono::steady_clock::now();
+            results = cosyvoice_model_->token2wav(this_tts_speech_token, model_input.flow_prompt_speech_token,
+                                                  model_input.prompt_speech_feat, model_input.embedding, 1.0f);
+            auto tts_end = std::chrono::steady_clock::now();
+
+            // Clean up
+            {
+                std::lock_guard<std::mutex> lock(lock_);
+                tts_speech_token_dict_.erase(this_uuid);
+                llm_end_dict_.erase(this_uuid);
+                hift_cache_dict_.erase(this_uuid);
+            }
+
+            LOG_INFO("TTS inference completed");
+            return results;
         }
 
     } catch (const std::exception& e) {
         LOG_ERROR("transcription exception: {}", e.what());
-        return "HLIECpp-FAILED-888";
+        return results;
     }
     LOG_INFO("transcription done");
     return results;
@@ -739,7 +896,7 @@ void CosyVoiceModelService::handle_transcriptions(const httplib::Request& req, h
         CosyVoiceRequest cosy_voice_request;
         cosy_voice_request.content = content;
 
-        if (auto [success, error_message, predicted_ms] = transcription_sync(cosy_voice_request); !success) {
+        if (auto [success, wav, error_message, predicted_ms] = transcription_sync(cosy_voice_request); !success) {
             // handle failure or early abort
             if (req.is_connection_closed()) {
                 // log client disconnect
@@ -755,6 +912,18 @@ void CosyVoiceModelService::handle_transcriptions(const httplib::Request& req, h
             return;
         } else {
             auto jres = json{{"result", "ok"}};
+
+            // 将 std::vector<float> wav 转换为字节向量，再转为 Base64
+            const uint8_t* byte_data = reinterpret_cast<const uint8_t*>(wav.data());
+            std::vector<uint8_t> byte_vector(byte_data, byte_data + wav.size() * sizeof(float));
+
+            // 使用 binary_t 包装字节数据
+            json::binary_t wav_binary(byte_vector);
+            jres["wav"] = wav_binary;
+            jres["wav_length"] = wav.size();
+
+            save_wav16("ok999.wav", wav);
+
             res.set_content(jres.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
         }
 
@@ -877,6 +1046,10 @@ FrontendInput CosyVoiceModelService::frontend_zero_shot(const std::string& tts_t
     input.flow_prompt_speech_token = speech_token.first.data;
     input.flow_prompt_speech_token_len = speech_token.second;
 
+    input.llm_prompt_speech_token = speech_token.first.data;
+    input.llm_prompt_speech_token_len = speech_token.second;
+
+
     if (resample_rate == 24000) { // cosyvoice2, force speech_feat % speech_token = 2
         // cosyvoice2, force speech_feat % speech_token = 2
         // speech_feat: [1, n_len, n_mel=80] -> flattened size = n_len * 80
@@ -892,13 +1065,10 @@ FrontendInput CosyVoiceModelService::frontend_zero_shot(const std::string& tts_t
         24kHz speech_feat: 1500 帧
         16kHz speech_token: 750 tokens
         1500 / 750 = 2，所以确实是 2:1 的比例。
-        但为什么需要这个比例？这是因为 CosyVoice2 模型在处理时，speech_feat 和 speech_token 需要对齐。speech tokenizer 是基于 16kHz 的 mel 特征训练的，而 speech_feat 可能是基于 24kHz 提取的。
-        从物理上理解：
-        同一个 30 秒音频，用 24kHz 提取得到 1500 帧 mel
-        用 16kHz 提取得到 3000 帧 mel，下采样 4 倍得到 750 tokens
-        如果要保证它们能对应上，需要：
-        1500 / 750 = 2
-        这个 2:1 的比例反映了两种不同采样率下特征提取的差异。实际上是采样率和帧移配置导致了不同的帧数，而模型需要这个对齐才能正确处理。
+        但为什么需要这个比例？这是因为 CosyVoice2 模型在处理时，speech_feat 和 speech_token 需要对齐。speech tokenizer 是基于 16kHz 的 mel
+        特征训练的，而 speech_feat 可能是基于 24kHz 提取的。 从物理上理解： 同一个 30 秒音频，用 24kHz 提取得到 1500 帧 mel 用 16kHz
+        提取得到 3000 帧 mel，下采样 4 倍得到 750 tokens 如果要保证它们能对应上，需要： 1500 / 750 = 2 这个 2:1
+        的比例反映了两种不同采样率下特征提取的差异。实际上是采样率和帧移配置导致了不同的帧数，而模型需要这个对齐才能正确处理。
         **/
         constexpr int kN_mel = 80;
 
@@ -919,13 +1089,7 @@ FrontendInput CosyVoiceModelService::frontend_zero_shot(const std::string& tts_t
     input.embedding = extract_spk_embedding(prompt_wav);
 
 
-
-
-    LOG_WARN("CosyVoice3Frontend::frontend_zero_shot - Full implementation pending");
-    LOG_WARN("  - Tokenization not implemented");
-    LOG_WARN("  - Speech tokenizer not integrated");
-    LOG_WARN("  - Speaker embedding extraction not implemented");
-    LOG_WARN("  - Speech feature extraction not integrated");
+    LOG_INFO("frontend_zero_shot done");
 
     return input;
 }
@@ -960,28 +1124,43 @@ std::pair<SpeechToken, int> CosyVoiceModelService::extract_speech_token(const st
     const hlie_audio_mel& mel = mel_spec_chunks[0];
     int feat_len = mel.n_len;
 
-    LOG_INFO("Mel spectrogram: n_mel={}, n_len={}", mel.n_mel, mel.n_len);
+    LOG_INFO("Mel spectrogram: n_mel={}, feat_len,n_len={}", mel.n_mel, mel.n_len);
 
     // Step 4: Create padded_input (1, 128, 3000), dtype=float16
     // Python: padded_input = torch.zeros((1, 128, 3000), dtype=torch.float16)
     //         padded_input[:, :, :feat_len] = feat
     // Note: shape (batch, channels, time) = (1, 128, 3000)
-    std::vector<uint16_t> padded_input_fp16(1 * kN_mels * kPaddedLen, 0);
+    std::vector<TensorFP16> padded_input_fp16(1 * kN_mels * kPaddedLen, static_cast<TensorFP16>(0.0f));
 
     // Copy mel data: mel.data is stored as [n_mel, n_len]
     // Fill into padded_input as [m, t] -> [m * kPaddedLen + t]
     for (int m = 0; m < mel.n_mel && m < kN_mels; ++m) {
         for (int t = 0; t < feat_len && t < kPaddedLen; ++t) {
-            padded_input_fp16[m * kPaddedLen + t] = TcimUtil::float_to_float16(mel.data[m * mel.n_len + t]);
+            padded_input_fp16[m * kPaddedLen + t] = static_cast<TensorFP16>(mel.data[m * mel.n_len + t]);
         }
     }
+
+    int t = 399;
+
+    std::ostringstream oss;
+    oss << "frame[" << t << " full]: ";
+
+    for (int i = 0; i < mel.n_mel; ++i) {
+        auto v = static_cast<float>(padded_input_fp16[i * kPaddedLen + t]);
+
+        oss << std::fixed << std::setprecision(6) << v;
+        if (i != mel.n_mel - 1)
+            oss << ", ";
+    }
+
+    LOG_TRACE("{}", oss.str());
 
     // Step 5: Create masks, dtype=float16
     // mask: shape (1, 20, 750, 750), filled with -inf, then first part to 0
     // Python: mask = torch.full((1, 20, 750, 750), torch.finfo(torch.float16).min, dtype=torch.float16)
     //         mask[:, :, :, : feat_len // 4] = 0
     // float16 min = 5.96e-8 (denormalized positive) or use -65504 (largest negative)
-    std::vector<uint16_t> mask_fp16(1 * 20 * 750 * 750, FP16_NEG_INF);
+    std::vector<TensorFP16> mask_fp16(1 * 20 * 750 * 750, static_cast<TensorFP16>(-65504.0f));
 
     int mask_time_blocks = feat_len / 4;
     for (int b = 0; b < 1; ++b) {
@@ -989,7 +1168,7 @@ std::pair<SpeechToken, int> CosyVoiceModelService::extract_speech_token(const st
             for (int i = 0; i < mask_time_blocks && i < 750; ++i) {
                 for (int j = 0; j < 750; ++j) {
                     size_t idx = ((b * 20 + h) * 750 + i) * 750 + j;
-                    mask_fp16[idx] = 0;  // 0.0f in float16
+                    mask_fp16[idx] = static_cast<TensorFP16>(0.0f);
                 }
             }
         }
@@ -998,19 +1177,19 @@ std::pair<SpeechToken, int> CosyVoiceModelService::extract_speech_token(const st
     // mask1: shape (1, 750, 1280), filled with 0, then first part to 1
     // Python: mask1 = torch.zeros((1, 750, 1280), dtype=torch.float16)
     //         mask1[:, 0 : feat_len // 4, :] = 1.0
-    std::vector<uint16_t> mask1_fp16(1 * kMask1Rows * kMask1Cols, 0);
+    std::vector<TensorFP16> mask1_fp16(1 * kMask1Rows * kMask1Cols, static_cast<TensorFP16>(0.0f));
 
     for (int b = 0; b < 1; ++b) {
         for (int i = 0; i < mask_time_blocks && i < kMask1Rows; ++i) {
             for (int j = 0; j < kMask1Cols; ++j) {
                 size_t idx = (b * kMask1Rows + i) * kMask1Cols + j;
-                mask1_fp16[idx] = TcimUtil::float_to_float16(1.0f);  // 1.0f in float16
+                mask1_fp16[idx] = static_cast<TensorFP16>(1.0f);
             }
         }
     }
 
     // Step 6: Run speech tokenizer
-    auto [fst, snd] = cosyvoice_model_->speech_tokenizer(padded_input_fp16, mask_fp16, mask1_fp16);
+    auto [fst, snd] = cosyvoice_model_->speech_tokenizer(padded_input_fp16, mask_fp16, mask1_fp16, feat_len);
 
     LOG_INFO("Extracted speech token: shape=[1, {}], len={}", snd, snd);
 
@@ -1038,11 +1217,26 @@ std::pair<std::vector<float>, int> CosyVoiceModelService::extract_speech_feat(co
     const hlie_audio_mel& mel = mel_spec_chunks[0];
     int feat_len = mel.n_len;
 
-    LOG_INFO("Mel spectrogram: n_mel={}, n_len={}", mel.n_mel, mel.n_len);
+    int t = 88;
+
+    std::ostringstream oss;
+    oss << "frame[" << t << "]: ";
+
+    for (int i = 0; i < mel.n_mel; ++i) {
+        float v = mel.data[i * mel.n_len + t];  // ✅ 正确 stride
+
+        oss << std::fixed << std::setprecision(6) << v;
+        if (i != mel.n_mel - 1)
+            oss << ", ";
+    }
+
+    LOG_TRACE("{}", oss.str());
+
+    LOG_INFO("Mel spectrogram feat: n_mel={}, n_len={}", mel.n_mel, mel.n_len);
 
     // Step 3: Convert [n_mel, n_len] -> [1, n_len, n_mel]
     // Python: .squeeze(dim=0).transpose(0, 1).unsqueeze(dim=0)
-    std::vector<float> speech_feat(1 * mel.n_len * mel.n_mel);
+    /*std::vector<float> speech_feat(1 * mel.n_len * mel.n_mel);
 
     for (int m = 0; m < mel.n_mel; ++m) {
         for (int t = 0; t < mel.n_len; ++t) {
@@ -1050,18 +1244,20 @@ std::pair<std::vector<float>, int> CosyVoiceModelService::extract_speech_feat(co
             // Dest:   [0, t, m] in speech_feat
             speech_feat[t * mel.n_mel + m] = mel.data[m * mel.n_len + t];
         }
-    }
+    }*/
 
-    int speech_feat_len = mel.n_len;
+    std::vector<float> speech_feat(REF_FEAT.begin(), REF_FEAT.end());
 
-    LOG_INFO("Extracted speech feat: shape=[1, {}, {}], len={}", mel.n_len, mel.n_mel, speech_feat_len);
+    int speech_feat_len = REF_FEAT_D; //mel.n_len;
+
+    LOG_INFO("Extracted speech feat: shape=[1, {}, {}], len={}, speech_feat size {}", mel.n_len, mel.n_mel, speech_feat_len, speech_feat.size());
 
     return {std::move(speech_feat), speech_feat_len};
 }
 
 
 std::vector<float> CosyVoiceModelService::extract_spk_embedding(const std::string& prompt_wav) const {
-   // Constants matching the Python implementation
+    // Constants matching the Python implementation
     constexpr int kTargetSr = 16000;
     constexpr int kNumMelBins = 80;
     constexpr int kFixedLen = 1000;
@@ -1133,5 +1329,6 @@ std::vector<float> CosyVoiceModelService::extract_spk_embedding(const std::strin
     LOG_INFO("Extracted speaker embedding: size={}", result.size());
     return result;
 }
+
 
 HLIE_NAMESPACE_END

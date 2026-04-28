@@ -1,6 +1,7 @@
 #ifndef HLIE_MODEL_BASE_H
 #define HLIE_MODEL_BASE_H
 
+#define _USE_MATH_DEFINES
 #include "arg.h"
 #include "hlie_base/hlie_base.h"
 #include "tcim/tcim_runtime.h"

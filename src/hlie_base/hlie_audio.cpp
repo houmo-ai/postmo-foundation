@@ -531,10 +531,16 @@ bool hlie_audio_preprocessor_whisper::preprocess(const float* samples, size_t n_
 
     // because the cgraph in clip.cpp only accepts 3000 frames each, we need to split the mel
     // we always expect the mel to have 3000 silent frames at the end
-    if (DEBUG) {
-        printf("output: n_mel = %d, n_len = %d\n", out_full.n_mel, out_full.n_len);
-    }
+    LOG_DEBUG("output: n_mel = {}, n_len = {}", out_full.n_mel, out_full.n_len);
     const size_t frames_per_chunk = 3000;
+
+
+    // 如果 n_len < 3000，直接使用整个输出，不需要分块
+    if (out_full.n_len <= (int)frames_per_chunk) {
+        output.push_back(std::move(out_full));
+        return true;
+    }
+
     GGML_ASSERT((size_t)out_full.n_len > frames_per_chunk);
     for (size_t off = 0; off < (size_t)out_full.n_len; off += frames_per_chunk) {
         int n_len = std::min(frames_per_chunk, (size_t)out_full.n_len - off);
@@ -568,6 +574,7 @@ bool hlie_audio_preprocessor_whisper::preprocess(const float* samples, size_t n_
 //
 
 void hlie_audio_preprocessor_librosa::initialize() {
+    LOG_WARN("audio_n_fft is {}", hparams.audio_n_fft);
     cache.fill_sin_cos_table(hparams.audio_n_fft);
     cache.fill_hann_window(hparams.audio_window_len, true);
     // fmax = -1 means sr/2 (all frequencies up to Nyquist)
@@ -592,8 +599,11 @@ static void mel_spectrogram_worker_librosa(int ith, const float* hann, const std
                                            int frame_size, int frame_step, int n_threads, const filter_params_librosa& params,
                                            const hlie_audio_cache& cache, hlie_audio_mel& out) {
 
-    std::vector<float> fft_in(frame_size, 0.0f);
-    std::vector<float> fft_out(frame_size * 2, 0.0f);
+    LOG_DEBUG("mel_spectrogram_worker_librosa ith: {} frame_size: {}, n_threads: {}, n_samples_padded: {}", ith, frame_size, n_threads,
+              n_samples_padded);
+
+    std::vector<float> fft_in(frame_size * 8, 0.0f);
+    std::vector<float> fft_out(frame_size * 8, 0.0f);
 
     int n_fft_bins = params.n_fft_bins;
     int i = ith;
@@ -602,14 +612,24 @@ static void mel_spectrogram_worker_librosa(int ith, const float* hann, const std
 
     for (; i < out.n_len; i += n_threads) {
         const int offset = i * frame_step;
-
+        LOG_TRACE("mel_spectrogram_worker_librosa ith[{}] fft [{}]： offset {}", ith, i, fft_in.size(), frame_size, fft_out.size());
+        if (offset + frame_size > n_samples_padded) {
+            LOG_ERROR("BOUNDS FAIL ith: {} i: {} offset: {} + frame_size: {} > n_samples_padded: {}", ith, i, offset, frame_size,
+                      n_samples_padded);
+            break;
+        }
         // Apply Hann window
         for (int j = 0; j < frame_size; j++) {
             fft_in[j] = hann[j] * samples_padded[offset + j];
         }
 
+        LOG_TRACE("mel_spectrogram_worker_librosa ith[{}] fft [{}]： fft_in.size {}, frame_size {} ,fft_out.size {}", ith, i, fft_in.size(),
+                  frame_size, fft_out.size());
+
         // FFT
         fft(cache, fft_in.data(), frame_size, fft_out.data());
+
+        LOG_TRACE("mel_spectrogram_worker_librosa fft done ith[{}] fft [{}]", ith, i);
 
         // Calculate MAGNITUDE (sqrt, not power) - matches Python behavior
         // Python: spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-9)
@@ -636,6 +656,8 @@ static void mel_spectrogram_worker_librosa(int ith, const float* hann, const std
             out.data[j * out.n_len + i] = (float)sum;
         }
     }
+
+    LOG_TRACE("mel_spectrogram_worker_librosa done 666 ith: {}", ith);
 }
 
 // Simple spectral normalization - matches Python exactly
@@ -653,13 +675,16 @@ static void spectral_normalize_torch(std::vector<float>& data) {
 static bool mel_spectrogram_librosa(const float* samples, const int n_samples_in, const int n_threads, const filter_params_librosa& params,
                                     const hlie_audio_cache& cache, hlie_audio_mel& out) {
 
-    LOG_DEBUG("mel_spectrogram_librosa begin");
+    LOG_DEBUG("mel_spectrogram_librosa begin, n_samples_in: {}, n_threads: {}", n_samples_in, n_threads);
     out.n_len_org = n_samples_in;
 
     // Hann window
     const float* hann = cache.hann_window.data();
     const int frame_size = params.n_fft;
     const int frame_step = params.hop_length;
+
+
+    LOG_DEBUG("mel_spectrogram_librosa 2222");
 
     // Symmetric reflect padding - matches Python:
     // torch.nn.functional.pad(y, (pad, pad), mode="reflect")
@@ -683,17 +708,17 @@ static bool mel_spectrogram_librosa(const float* samples, const int n_samples_in
         }
     }
 
-    LOG_DEBUG("mel_spectrogram_librosa step 2");
-
     int n_samples = samples_padded.size();
 
     out.n_mel = params.n_mel;
     out.n_len = (n_samples - frame_size) / frame_step + 1;
+    LOG_DEBUG("mel_spectrogram_librosa step 2, out n_mel: {}, n_len: {}", out.n_mel, out.n_len);
 
     if (out.n_mel > 0 && (size_t)out.n_len > SIZE_MAX / out.n_mel) {
         LOG_ERROR("%s: size overflow\n", __func__);
         return false;
     }
+
     if (n_samples < frame_size) {
         LOG_ERROR("%s: not enough samples after padding\n", __func__);
         return false;
@@ -705,8 +730,11 @@ static bool mel_spectrogram_librosa(const float* samples, const int n_samples_in
     {
         std::vector<std::thread> workers(n_threads - 1);
         for (int iw = 0; iw < n_threads - 1; ++iw) {
+            LOG_DEBUG("mel_spectrogram_librosa step 3 workers {}", iw + 1);
+
             workers[iw] = std::thread(mel_spectrogram_worker_librosa, iw + 1, hann, std::cref(samples_padded), n_samples, frame_size,
                                       frame_step, n_threads, std::cref(params), std::cref(cache), std::ref(out));
+            LOG_DEBUG("mel_spectrogram_librosa step 3 workers {} created, joinable: {}", iw + 1, workers[iw].joinable());
         }
 
         // main thread
@@ -717,9 +745,12 @@ static bool mel_spectrogram_librosa(const float* samples, const int n_samples_in
         }
     }
 
+    LOG_DEBUG("mel_spectrogram_librosa step 4");
+
     // Apply spectral normalization (matching Python spectral_normalize_torch)
     spectral_normalize_torch(out.data);
 
+    LOG_DEBUG("mel_spectrogram_librosa done");
     return true;
 }
 
@@ -738,6 +769,8 @@ bool hlie_audio_preprocessor_librosa::preprocess(const float* samples, size_t n_
     params.hop_length = hparams.audio_hop_len;
     params.sample_rate = hparams.audio_sample_rate;
     params.pad_size = (hparams.audio_n_fft - hparams.audio_hop_len) / 2;
+
+    LOG_DEBUG("hlie_audio_preprocessor_librosa params.n_fft to {}", params.n_fft);
 
     // make sure the cache is initialized
     GGML_ASSERT(!cache.sin_vals.empty());
@@ -902,4 +935,71 @@ std::vector<float> hlie_audio_streaming_istft::flush() {
     }
 
     return output;
+}
+
+
+// =============================================================================
+// STFT implementation - matches PyTorch torch.stft
+// =============================================================================
+
+size_t STFTUtil::hlie_audio_stft(const hlie_audio_cache& cache, const float* input, int input_len, int n_fft, int hop_length,
+                                 const float* window, int window_len, float* output, size_t output_size) {
+    // Validate inputs
+    if (input == nullptr || window == nullptr || output == nullptr) {
+        LOG_ERROR("hlie_audio_stft: null pointer input");
+        return 0;
+    }
+
+    if (n_fft <= 0 || hop_length <= 0 || window_len != n_fft) {
+        LOG_ERROR("hlie_audio_stft: invalid params, n_fft={}, hop_length={}, window_len={}", n_fft, hop_length, window_len);
+        return 0;
+    }
+
+    if (input_len < n_fft) {
+        LOG_ERROR("hlie_audio_stft: input_len {} < n_fft {}", input_len, n_fft);
+        return 0;
+    }
+
+    // Calculate output dimensions
+    // center=False: n_frames = (input_len - n_fft) / hop_length + 1
+    int n_frames = (input_len - n_fft) / hop_length + 1;
+    int n_freq_bins = n_fft / 2 + 1; // onesided=True
+
+    size_t required_size = (size_t)n_frames * n_freq_bins * 2; // 2 = real + imag
+
+    if (output_size < required_size) {
+        LOG_ERROR("hlie_audio_stft: output buffer too small. Required: {}, Provided: {}", required_size, output_size);
+        return 0;
+    }
+
+    // Temporary buffers for per-frame processing
+    std::vector<float> frame(n_fft, 0.0f);
+    std::vector<float> fft_result(n_fft * 2, 0.0f);
+
+    // Process each frame
+    for (int frame_idx = 0; frame_idx < n_frames; frame_idx++) {
+        int offset = frame_idx * hop_length;
+
+        // Copy frame and apply window
+        for (int i = 0; i < n_fft; i++) {
+            if (offset + i < input_len) {
+                frame[i] = input[offset + i] * window[i];
+            } else {
+                frame[i] = 0.0f;
+            }
+        }
+
+        // Compute FFT
+        fft(cache, frame.data(), n_fft, fft_result.data());
+
+        // Pack output: [real, imag] for each frequency bin
+        // For onesided=True, only output positive frequencies (0 to nyquist)
+        for (int k = 0; k < n_freq_bins; k++) {
+            size_t out_idx = ((size_t)frame_idx * n_freq_bins + k) * 2;
+            output[out_idx + 0] = fft_result[k * 2 + 0]; // real
+            output[out_idx + 1] = fft_result[k * 2 + 1]; // imag
+        }
+    }
+
+    return required_size;
 }

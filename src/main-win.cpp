@@ -3,9 +3,103 @@
 #include <iostream>
 #include <thread>
 
-#include "hlie_base/hlie_config_service.h"
+#include <windows.h>
+#include <DbgHelp.h>
+#include <shlobj.h>
 #include "hlie_app/hlie_app_controller.h"
-#include <Windows.h>
+#include "hlie_base/hlie_config_service.h"
+
+
+#pragma comment(lib, "dbghelp.lib")
+
+namespace minidump {
+
+    static std::string g_dumpDir;
+    static std::atomic<bool> g_handling{false};
+
+    // -------------------- Utility: Create directory recursively --------------------
+    static void EnsureDirectory(const std::string& path) {
+        SHCreateDirectoryExA(nullptr, path.c_str(), nullptr);
+    }
+
+    // -------------------- Utility: Generate timestamped filename --------------------
+    static std::string GenerateDumpPath() {
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+
+        char buffer[MAX_PATH];
+        snprintf(buffer, MAX_PATH, "%s\\crash_%04d%02d%02d_%02d%02d%02d_%lu.dmp", g_dumpDir.c_str(), st.wYear, st.wMonth, st.wDay, st.wHour,
+                 st.wMinute, st.wSecond, GetCurrentProcessId());
+
+        return std::string(buffer);
+    }
+
+    // -------------------- Core dump writer --------------------
+    static void WriteDump(EXCEPTION_POINTERS* exceptionInfo) {
+        if (g_handling.exchange(true)) {
+            return; // prevent re-entry
+        }
+
+        std::string filePath = GenerateDumpPath();
+
+        HANDLE hFile =
+            CreateFileA(filePath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+        if (hFile == INVALID_HANDLE_VALUE) {
+            return;
+        }
+
+        MINIDUMP_EXCEPTION_INFORMATION mei;
+        mei.ThreadId = GetCurrentThreadId();
+        mei.ExceptionPointers = exceptionInfo;
+        mei.ClientPointers = TRUE;
+
+        MINIDUMP_TYPE dumpType = (MINIDUMP_TYPE)(MiniDumpWithDataSegs | MiniDumpWithHandleData | MiniDumpWithThreadInfo |
+                                                 MiniDumpWithIndirectlyReferencedMemory);
+
+        MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), hFile, dumpType, exceptionInfo ? &mei : nullptr, nullptr, nullptr);
+
+        FlushFileBuffers(hFile);
+        CloseHandle(hFile);
+    }
+
+    // -------------------- Handlers --------------------
+    static LONG WINAPI UnhandledHandler(EXCEPTION_POINTERS* exceptionInfo) {
+        WriteDump(exceptionInfo);
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
+
+    static LONG CALLBACK VectoredHandler(PEXCEPTION_POINTERS exceptionInfo) {
+        WriteDump(exceptionInfo);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // -------------------- Initialization --------------------
+    void Initialize(const std::string& customDir = "") {
+        char path[MAX_PATH] = {0};
+
+        if (!customDir.empty()) {
+            g_dumpDir = customDir;
+        } else {
+            PWSTR wpath = nullptr;
+            if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &wpath))) {
+                char tmp[MAX_PATH];
+                WideCharToMultiByte(CP_ACP, 0, wpath, -1, tmp, MAX_PATH, nullptr, nullptr);
+                g_dumpDir = std::string(tmp) + "\\HLIECpp\\dumps";
+                CoTaskMemFree(wpath);
+            } else {
+                GetTempPathA(MAX_PATH, path);
+                g_dumpDir = std::string(path) + "HLIECpp\\dumps";
+            }
+        }
+
+        EnsureDirectory(g_dumpDir);
+
+        AddVectoredExceptionHandler(1, VectoredHandler);
+        SetUnhandledExceptionFilter(UnhandledHandler);
+    }
+
+} // namespace minidump
 
 
 // Windows SCM 全局状态句柄
@@ -26,8 +120,7 @@ void ReportSvcStatus(const DWORD currentState, const DWORD win32ExitCode, const 
 hm_HLIE::HLIEWinAppController appController;
 
 void WINAPI Handler(const DWORD controlCode) {
-    switch (controlCode)
-    {
+    switch (controlCode) {
     case SERVICE_CONTROL_STOP:
         ReportSvcStatus(SERVICE_STOP_PENDING, NO_ERROR, 0);
         appController.stop();
@@ -85,6 +178,8 @@ int main(const int argc, char** argv) {
     _putenv("TCIM_BACKEND=Xh1HdiBackend");
     _putenv("HM_PLATFORM=ASIC");
 
+    minidump::Initialize();
+
     const auto& config_service = hm_HLIE::Singleton<hm_HLIE::HLIEConfigService>::instance();
     config_service->set_args(argc, argv);
 
@@ -101,8 +196,7 @@ int main(const int argc, char** argv) {
 
     char serviceName[] = "HLIECpp";
     SERVICE_TABLE_ENTRY ServiceTable[] = {{serviceName, ServiceMain}, {NULL, NULL}};
-    if (!StartServiceCtrlDispatcher(ServiceTable))
-    {
+    if (!StartServiceCtrlDispatcher(ServiceTable)) {
         // 此处处理错误（如记录日志）
         const DWORD err = GetLastError();
         std::cerr << "HoumoHI WIN32 Service StartServiceCtrlDispatcher failed, ErrCode: " << err;

@@ -25,6 +25,7 @@ struct CosyVoiceRequest {
 
 struct CosyVoiceResult {
     bool success = false;
+    std::vector<float> wav;
     std::string error_message;
     int64_t predicted_ms;
 };
@@ -56,13 +57,21 @@ struct FrontendInput {
  * Speech token extraction result.
  */
 struct SpeechToken {
-    std::vector<int> data;  // Speech tokens [batch, token_len]
-    int token_len;            // Length of tokens
+    std::vector<int> data; // Speech tokens [batch, token_len]
+    int token_len; // Length of tokens
 
     // Shape: [1, feat_len / 4]
-    int shape() const { return token_len; }
+    int shape() const {
+        return token_len;
+    }
 };
 
+/**
+ * Structure to hold LLM performance metrics.
+ */
+struct LLMStagePerf {
+    float llm_stage_wall_s = 0.0f; // Wall time for LLM stage (includes prefill+decode+host overhead)
+};
 
 
 class CosyVoiceModelService final : public IHLIEModelService {
@@ -91,7 +100,7 @@ public:
 
     void handle_models(nlohmann::ordered_json& resp) const;
 
-    std::string handle_stream(const WhisperStreamRequest& request);
+    std::vector<float> handle_stream(const WhisperStreamRequest& request);
 
     void handle_transcriptions(const httplib::Request& req, httplib::Response& res);
 
@@ -99,11 +108,26 @@ public:
         return model_key_;
     }
 
+    /**
+     * Run the LLM stage and store generated speech tokens for a request.
+     *
+     * This is the main entry point for LLM inference, equivalent to the Python
+     * llm_job method. It runs the speech token LLM to generate tokens from text.
+     *
+     * @param text Target text token sequence
+     * @param prompt_text Prompt text token sequence
+     * @param llm_prompt_speech_token Prompt speech-token sequence
+     * @param llm_embedding Speaker embedding used by the LLM
+     * @param uuid Unique request identifier for shared state
+     */
+    void llm_job(const std::vector<int>& text, const std::vector<int>& prompt_text, const std::vector<int>& llm_prompt_speech_token,
+                 const std::vector<float>& llm_embedding, const std::string& uuid);
+
 private:
     std::future<CosyVoiceResult> transcription_async(const CosyVoiceRequest& request) const;
     CosyVoiceResult transcription_sync(const CosyVoiceRequest& request) const;
 
-    std::string transcription(const CosyVoiceRequest& request);
+    std::vector<float> transcription(const CosyVoiceRequest& request);
 
     /**
      * Normalize text and optionally split it into synthesis segments.
@@ -123,7 +147,8 @@ private:
      * @param resample_rate Target sample rate (24000 for CosyVoice2)
      * @return FrontendInput structure ready for model inference
      */
-    FrontendInput frontend_zero_shot(const std::string& tts_text, const std::string& prompt_text, const std::string& prompt_wav, int resample_rate = 24000);
+    FrontendInput frontend_zero_shot(const std::string& tts_text, const std::string& prompt_text, const std::string& prompt_wav,
+                                     int resample_rate = 24000);
 
     /**
      * Extract speech tokens from audio file using speech tokenizer.
@@ -142,6 +167,17 @@ private:
 
     std::unique_ptr<hlie_audio_preprocessor_whisper> audio_preprocessor_;
     std::unique_ptr<hlie_audio_preprocessor_librosa> audio_spec_preprocessor_;
+
+    // Shared state for multi-threaded inference
+    std::mutex lock_;
+    std::map<std::string, std::vector<int>> tts_speech_token_dict_;
+    std::map<std::string, bool> llm_end_dict_;
+    std::map<std::string, float*> hift_cache_dict_;
+    std::map<std::string, LLMStagePerf> perf_by_uuid_;
+
+    // Silent tokens that can be skipped
+    static constexpr std::array<int, 11> kSilentTokens = {1, 2, 28, 29, 55, 248, 494, 2241, 2242, 2322, 2323};
+
 
     struct QueueItem {
         CosyVoiceRequest request;

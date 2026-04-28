@@ -64,6 +64,8 @@ class GGUFPacker:
         self.file_info: Dict[str, Dict] = {}
         self.vocab_keys: List[str] = []
         self.vocab_size: int = 0
+        self.merges: List[str] = []
+        self.merges_size: int = 0
 
     def add_raw_file(self, key: str, file_path: str):
         """添加文件，存储为原始字节"""
@@ -108,6 +110,18 @@ class GGUFPacker:
         print(f"   vocab 大小: {self.vocab_size}")
         print(f"   前10个: {self.vocab_keys[:10]}")
 
+    def add_merges_file(self, file_path: str):
+        """添加 merges.txt 按行读取 添加到 self.merges : list"""
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f'merges.txt 不存在: {file_path}')
+        with open(file_path, 'r', encoding='utf-8') as f:
+            self.merges = [line.strip() for line in f if line.strip()]
+        self.merges_size = len(self.merges)
+        print(f"✓ 添加 Merges: {file_path}")
+        print(f"   merges 数量: {self.merges_size}")
+        print(f"   前5个: {self.merges[:5]}")
+
+
     def set_metadata(self, key: str, value: Any):
         """设置元数据"""
         self.file_info[key] = value
@@ -134,10 +148,12 @@ class GGUFPacker:
         gguf_writer.add_string("file_info", json.dumps(self.file_info))
 
         if self.vocab_keys:
-            gguf_writer.add_int32("vocab_size", len(self.vocab_keys))
+            gguf_writer.add_int32("vocab_size", self.vocab_size)
+            gguf_writer.add_array(f"vocab", self.vocab_keys)
 
-        if self.vocab_keys:
-           gguf_writer.add_array(f"vocab", self.vocab_keys)
+        if self.merges:
+            gguf_writer.add_int32(f"merges_size", self.merges_size)
+            gguf_writer.add_array("merges", self.merges)
 
         # 写入文件信息（作为 tensor 元数据）
         # for key, info in self.file_info.items():
@@ -184,6 +200,11 @@ def pack_cosyvoice3(input_dir: str, output_path: str):
     # 必须有 vocab.json
     vocab_path = find_file(input_dir, "vocab.json")
     packer.add_vocab(vocab_path)
+
+    # 添加 merges.txt
+    merges_path = find_file(input_dir, "merges.txt")
+    if merges_path:
+        packer.add_merges_file(merges_path)
 
     # 写入
     packer.write()

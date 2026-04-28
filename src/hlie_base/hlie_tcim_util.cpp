@@ -10,9 +10,9 @@
 HLIE_NAMESPACE_BEGIN
 
 
-int64_t TcimUtil::numel(const std::vector<int>& shape) {
+int64_t TcimUtil::numel(const std::vector<int64_t>& shape) {
     int64_t n = 1;
-    for (auto s : shape)
+    for (const auto s : shape)
         n *= s;
     return n;
 }
@@ -25,7 +25,7 @@ int64_t TcimUtil::numel(const std::vector<int>& shape) {
  * @param shape
  * @return
  */
-tcim::Tensor TcimUtil::load_fp16_bin(const std::string& path, const std::vector<int>& shape) {
+tcim::Tensor TcimUtil::load_fp16_bin(const std::string& path, const std::vector<int64_t>& shape) {
     int64_t total = numel(shape);
 
     std::vector<uint16_t> buffer(total);
@@ -77,7 +77,7 @@ std::vector<uint16_t> TcimUtil::load_fp16_data(const std::string& path, size_t o
  * @param shape Tensor 的形状
  * @return 创建的 Tensor
  */
-tcim::Tensor TcimUtil::create_fp16_tensor(const void* data, const std::vector<int>& shape) {
+tcim::Tensor TcimUtil::create_fp16_tensor(const void* data, const std::vector<int64_t>& shape) {
     std::vector<int64_t> shape64(shape.begin(), shape.end());
     tcim::TensorInfo info = tcim::TensorInfo::CreateNDInfo(shape64, tcim::DataType::FLOAT16);
     tcim::Tensor t = tcim::Tensor::CreateHostTensor(info);
@@ -94,6 +94,12 @@ tcim::Tensor TcimUtil::embedding_lookup(const tcim::Tensor& weight, const std::v
 
     int T = input_ids.size();
 
+    for (auto s : weight_shape) {
+        LOG_TRACE("embedding_lookup weight shape : {}", s);
+    }
+
+    LOG_TRACE("embedding_lookup vocab: {}, dim: {}， input_ids: {}", vocab, dim, T);
+
     // 使用 weight 的 dtype 和 shape 创建输出 Tensor
     std::vector<int64_t> out_shape = {1, (int64_t)T, (int64_t)dim};
     tcim::TensorInfo info = tcim::TensorInfo::CreateNDInfo(out_shape, weight.Info().DataType());
@@ -101,9 +107,14 @@ tcim::Tensor TcimUtil::embedding_lookup(const tcim::Tensor& weight, const std::v
 
     const uint16_t* w = (const uint16_t*)weight.Data();
     uint16_t* o = (uint16_t*)out.Data();
+    LOG_TRACE("embedding_lookup start look");
 
     for (int i = 0; i < T; i++) {
         int id = input_ids[i];
+        LOG_TRACE("embedding_lookup look id: {}", id);
+        if (id >= vocab) {
+            LOG_ERROR("assert(id >= 0 && id < vocab) failed");
+        }
         assert(id >= 0 && id < vocab);
 
         memcpy(o + i * dim, w + id * dim, dim * sizeof(uint16_t));
@@ -113,7 +124,7 @@ tcim::Tensor TcimUtil::embedding_lookup(const tcim::Tensor& weight, const std::v
 }
 
 /**
- * Tcim Tensor 拼接
+ * Tcim Tensor 拼接 , dim use 1
  *
  * @param inputs
  * @return
@@ -125,13 +136,13 @@ tcim::Tensor TcimUtil::concat_seq(const std::vector<tcim::Tensor>& inputs) {
     const auto& ref_shape = inputs[0].Info().Shape();
     tcim::DataType dtype = inputs[0].Info().DataType();
 
-    int B = ref_shape[0];
-    int D = ref_shape[2];
+    int BB = ref_shape[0];
+    int DD = ref_shape[2];
 
     int total_T = 0;
     for (auto& t : inputs) {
-        assert(t.shape()[0] == B);
-        assert(t.shape()[2] == D);
+        assert(t.shape()[0] == BB);
+        assert(t.shape()[2] == DD);
         total_T += t.Info().Shape()[1];
     }
 
@@ -149,7 +160,7 @@ tcim::Tensor TcimUtil::concat_seq(const std::vector<tcim::Tensor>& inputs) {
 
         const uint16_t* src = (const uint16_t*)t.Data();
 
-        memcpy(dst + offset_T * D, src, T * D * sizeof(uint16_t));
+        memcpy(dst + offset_T * DD, src, T * DD * sizeof(uint16_t));
 
         offset_T += T;
     }

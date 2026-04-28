@@ -2,35 +2,313 @@
 
 #include <fstream>
 #include <gguf.h>
+#include <queue>
 #include <regex>
-#include <sstream>
 
 #include "hlie_base/hlie_gguf_util.h"
 #include "hlie_base/hlie_logger.h"
+#include "hlie_base/unicode.h"
 
+
+namespace {
+    std::vector<hlie_token> cache_special_tokens{151646};
+    void append(const hlie_token token_id, std::vector<hlie_token>& output) {
+        output.push_back(token_id);
+    }
+
+    std::vector<std::string> regex_exprs = {
+        "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| "
+        "?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+    };
+
+    bool append_bos(std::vector<hlie_token>& output) {
+        return false;
+    }
+
+    bool append_eos(std::vector<hlie_token>& output) {
+        return false;
+    }
+
+    void check_double_bos_eos(const std::vector<hlie_token>& output) {
+    }
+} // namespace
 
 HLIE_NAMESPACE_BEGIN
 
-bool HLIETokenizer::load(const std::string& tokenizer_dir) {
-    std::string vocab_path = tokenizer_dir + "/vocab.json";
+void HLIETokenizer::tokenizer_st_partition(std::forward_list<fragment_buffer_variant>& buffer) const {
+    // for each special token
+    for (const hlie_token special_id : cache_special_tokens) {
+        const auto& text = std::string("<|endofprompt|>");// get_token_data(special_id);
 
-    if (!load_vocab(vocab_path)) {
-        LOG_ERROR("Failed to load vocab.json from: {}", vocab_path);
-        return false;
+        // for each text fragment
+        auto it = buffer.begin();
+        while (it != buffer.end()) {
+            auto& fragment = (*it);
+
+            // if a fragment is text ( not yet processed )
+            if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
+                const auto& raw_text = fragment.raw_text;
+
+                auto raw_text_base_offset = fragment.offset;
+                auto raw_text_base_length = fragment.length;
+
+                // loop over the text
+                while (true) {
+                    // find the first occurrence of a given special token in this fragment
+                    //  passing offset argument only limit the "search area" but match coordinates
+                    //  are still relative to the source full raw_text
+                    //  string_view begins at pos 0 for the same reason
+                    auto match =
+                        std::string_view(raw_text.data(), raw_text_base_offset + raw_text_base_length).find(text, raw_text_base_offset);
+
+                    // no occurrences found, stop processing this fragment for a given special token
+                    if (match == std::string::npos)
+                        break;
+
+
+                    auto source = std::distance(buffer.begin(), it);
+
+                    // if match is further than base offset
+                    //  then we have some text to the left of it
+                    if (match > raw_text_base_offset) {
+                        // left
+                        const int64_t left_reminder_offset = raw_text_base_offset + 0;
+                        int64_t left_reminder_length = match - raw_text_base_offset;
+
+                        // if (data.attr & TOKEN_ATTR_LSTRIP) {
+                        //     while (left_reminder_length > 0 && isspace(raw_text[left_reminder_offset + left_reminder_length - 1])) {
+                        //         left_reminder_length--;
+                        //     }
+                        // }
+
+                        if (left_reminder_length > 0) {
+                            buffer.emplace_after(it, raw_text, left_reminder_offset, left_reminder_length);
+                            it++;
+                        }
+                    }
+
+                    // special token
+                    buffer.emplace_after(it, special_id);
+                    it++;
+
+                    // right
+                    if (match + text.length() < raw_text_base_offset + raw_text_base_length) {
+                        int64_t right_reminder_offset = match + text.length();
+                        int64_t right_reminder_length = raw_text_base_length - ((match - raw_text_base_offset) + text.length());
+
+                        // if (data.attr & TOKEN_ATTR_RSTRIP) {
+                        //     while (right_reminder_length > 0 && isspace(raw_text[right_reminder_offset])) {
+                        //         right_reminder_offset++;
+                        //         right_reminder_length--;
+                        //     }
+                        // }
+
+                        if (right_reminder_length > 0) {
+                            buffer.emplace_after(it, raw_text, right_reminder_offset, right_reminder_length);
+                            it++;
+                        }
+
+                        if (source == 0) {
+                            buffer.erase_after(buffer.before_begin());
+                        } else {
+                            buffer.erase_after(std::next(buffer.begin(), (source - 1)));
+                        }
+
+                        // repeat for the right side
+                        raw_text_base_offset = right_reminder_offset;
+                        raw_text_base_length = right_reminder_length;
+                    } else {
+                        if (source == 0) {
+                            buffer.erase_after(buffer.before_begin());
+                        } else {
+                            buffer.erase_after(std::next(buffer.begin(), (source - 1)));
+                        }
+                        break;
+                    }
+                }
+            }
+            it++;
+        }
     }
-
-    LOG_INFO("Tokenizer loaded: {} tokens", token_to_id_.size());
-    return true;
 }
 
-bool HLIETokenizer::load_from_gguf(const std::string& gguf_path, size_t vocab_offset, size_t vocab_size) {
-    if (!load_vocab_from_gguf(gguf_path, vocab_offset, vocab_size)) {
-        LOG_ERROR("Failed to load vocab from GGUF at offset {}, size {}", vocab_offset, vocab_size);
-        return false;
+const std::string& HLIETokenizer::get_token_data(const hlie_token id) const {
+    return id_to_token_.at(id);
+}
+
+std::vector<hlie_token> HLIETokenizer::tokenize(const std::string& raw_text) {
+
+    std::vector<hlie_token> output;
+    std::forward_list<fragment_buffer_variant> fragment_buffer;
+
+    if (!raw_text.empty()) {
+        fragment_buffer.emplace_front(raw_text, 0, raw_text.length());
+        tokenizer_st_partition(fragment_buffer);
     }
 
-    LOG_INFO("CosyVoice3Tokenizer loaded from GGUF: {} tokens", token_to_id_.size());
-    return true;
+    for (const auto& fragment : fragment_buffer) {
+        if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
+            std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+            tokenize_i(text, output);
+        } else {
+            append(fragment.token, output);
+            LOG_WARN("Add specail token {}", fragment.token);
+        }
+    }
+
+    return output;
+}
+
+void HLIETokenizer::tokenize_i(const std::string& text, std::vector<hlie_token>& output) {
+    int final_prev_index = -1;
+    const auto word_collection = unicode_regex_split(text, regex_exprs);
+
+    symbols_final.clear();
+
+    for (const auto& word : word_collection) {
+        work_queue = llm_bigram_bpe::queue();
+        symbols.clear();
+
+        LOG_TRACE("tokenize_i process word ={}",word);
+
+        int index = 0;
+        size_t offset = 0;
+
+        while (offset < word.size()) {
+            llm_symbol sym;
+            size_t char_len = std::min(word.size() - offset, (size_t)unicode_len_utf8(word[offset]));
+            sym.text = word.c_str() + offset;
+            sym.n = char_len;
+            offset += sym.n;
+            sym.prev = index - 1;
+            sym.next = offset == word.size() ? -1 : index + 1;
+            index++;
+            symbols.emplace_back(sym);
+        }
+        for (int i = 1; i < (int)symbols.size(); ++i) {
+            add_new_bigram(i - 1, i);
+        }
+
+        // build token(s)
+        while (!work_queue.empty()) {
+            auto bigram = work_queue.pop_move();
+
+            auto& left_symbol = symbols[bigram.left];
+            auto& right_symbol = symbols[bigram.right];
+
+            if (left_symbol.n == 0 || right_symbol.n == 0) {
+                continue;
+            }
+            std::string left_token = std::string(left_symbol.text, left_symbol.n);
+            std::string right_token = std::string(right_symbol.text, right_symbol.n);
+            if (left_token + right_token != bigram.text) {
+                continue; // Skip this bigram if it's outdated
+            }
+
+            // merge the right sym into the left one
+            left_symbol.n += right_symbol.n;
+            right_symbol.n = 0;
+
+            // remove the right sym from the chain
+            left_symbol.next = right_symbol.next;
+            if (right_symbol.next >= 0) {
+                symbols[right_symbol.next].prev = bigram.left;
+            }
+
+            add_new_bigram(left_symbol.prev, bigram.left); // left side of current symbol
+            add_new_bigram(bigram.left, left_symbol.next); // right side of current symbol
+        }
+
+        // add the finished tokens to the final list keeping correct order for next and prev
+        for (auto& sym : symbols) {
+            if (sym.n > 0) {
+                sym.prev = final_prev_index;
+                sym.next = -1;
+                if (final_prev_index != -1) {
+                    symbols_final[final_prev_index].next = symbols_final.size();
+                }
+                symbols_final.emplace_back(sym);
+                final_prev_index = symbols_final.size() - 1;
+            }
+        }
+    }
+
+    symbols = symbols_final;
+
+    if (!symbols.empty()) {
+        for (int i = 0; i != -1; i = symbols[i].next) {
+            auto& symbol = symbols[i];
+            if (symbol.n == 0) {
+                continue;
+            }
+
+            const std::string str = std::string(symbol.text, symbol.n);
+            const auto token = text_to_token(str);
+
+            if (token == TOKEN_NULL) {
+                for (auto j = str.begin(); j != str.end(); ++j) {
+                    std::string byte_str(1, *j);
+                    auto token_multibyte = text_to_token(byte_str);
+                    if (token_multibyte != TOKEN_NULL) {
+                        LOG_TRACE("tokenize_i push_back token_multibyte ={}",token_multibyte);
+                        output.push_back(token_multibyte);
+                    }
+                }
+            } else {
+                LOG_TRACE("tokenize_i push_back token ={}",token);
+                output.push_back(token);
+            }
+        }
+    }
+}
+
+hlie_token HLIETokenizer::text_to_token(const std::string& text) const {
+    auto it = token_to_id_.find(text);
+    if (it != token_to_id_.end()) {
+        return (*it).second;
+    }
+
+    return TOKEN_NULL;
+}
+
+void HLIETokenizer::add_new_bigram(int left, int right) {
+    if (left == -1 || right == -1) {
+        return;
+    }
+    std::string left_token = std::string(symbols[left].text, symbols[left].n);
+    std::string right_token = std::string(symbols[right].text, symbols[right].n);
+
+    int rank_found = -1;
+
+    rank_found = find_bpe_rank(left_token, right_token);
+
+    if (rank_found < 0) {
+        return;
+    }
+
+    llm_bigram_bpe bigram;
+
+    bigram.left = left;
+    bigram.right = right;
+    bigram.text = left_token + right_token;
+    bigram.size = left_token.size() + right_token.size();
+    bigram.rank = rank_found;
+
+    work_queue.push(bigram);
+}
+
+int HLIETokenizer::find_bpe_rank(const std::string& token_left, const std::string& token_right) const {
+    GGML_ASSERT(token_left.find(' ') == std::string::npos);
+    GGML_ASSERT(token_left.find('\n') == std::string::npos);
+    GGML_ASSERT(token_right.find(' ') == std::string::npos);
+    GGML_ASSERT(token_right.find('\n') == std::string::npos);
+
+    const auto it = bpe_ranks.find(std::make_pair(token_left, token_right));
+    if (it == bpe_ranks.end()) {
+        return -1;
+    }
+
+    return it->second;
 }
 
 bool HLIETokenizer::load_from_gguf_ctx(gguf_context* ctx) {
@@ -62,6 +340,29 @@ bool HLIETokenizer::load_from_gguf_ctx(gguf_context* ctx) {
 
     LOG_INFO("Tokenizer loaded, size: {}", token_to_id_.size());
 
+    const auto merges_idx = gguf_find_key(ctx, "merges");
+    if (merges_idx == -1) {
+        LOG_ERROR("cannot find tokenizer merges in model file");
+        return false;
+    }
+
+    const auto n_merges = gguf_get_arr_n(ctx, merges_idx);
+    for (int i = 0; i < n_merges; i++) {
+        const std::string word = gguf_get_arr_str(ctx, merges_idx, i);
+
+        std::string first;
+        std::string second;
+
+        const size_t pos = word.find(' ', 1);
+
+        if (pos != std::string::npos) {
+            first = word.substr(0, pos);
+            second = word.substr(pos + 1);
+        }
+
+        bpe_ranks.emplace(std::make_pair(first, second), i);
+    }
+
     return true;
 }
 
@@ -77,15 +378,16 @@ std::vector<int> HLIETokenizer::encode(const std::string& text) {
     std::string normalized = normalize_text(text);
     LOG_INFO("normalized text: {}", normalized);
 
+    /*
     // Step 2: Split into word tokens using regex
     std::vector<std::string> words = split_into_words(normalized);
     LOG_INFO("split_into_words words: {}", words.size());
     for (auto word : words) {
         LOG_INFO("of word: {}", word);
-    }
+    }*/
 
     // Step 3: Convert words to token IDs using BPE
-    return words_to_ids(words);
+    return tokenize(normalized);
 }
 
 std::string HLIETokenizer::decode(const std::vector<int>& tokens) {
@@ -120,87 +422,6 @@ size_t HLIETokenizer::vocab_size() const {
     return token_to_id_.size();
 }
 
-
-bool HLIETokenizer::load_vocab_from_gguf(const std::string& path, size_t offset, size_t size) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        LOG_ERROR("Cannot open GGUF file: {}", path);
-        return false;
-    }
-
-    // Seek to vocab offset
-    file.seekg(offset, std::ios::beg);
-    if (!file.good()) {
-        LOG_ERROR("Failed to seek to vocab offset {}", offset);
-        return false;
-    }
-
-    // Read vocab data
-    std::string content(size, '\0');
-    file.read(&content[0], size);
-    if (!file.good()) {
-        LOG_ERROR("Failed to read vocab data, expected {} bytes", size);
-        return false;
-    }
-
-    // Parse vocabulary
-    return parse_vocab_content(content);
-}
-
-bool HLIETokenizer::parse_vocab_content(const std::string& content) {
-    LOG_INFO("Parsing vocab content, length: {}", content.size());
-
-    // Parse JSON - format: {"token": id, ...}
-    std::string pattern_str = "\"([^\"]+)\"";
-    std::regex pattern(pattern_str);
-    std::smatch match;
-    std::string::const_iterator search_start(content.cbegin());
-
-    int count = 0;
-    while (std::regex_search(search_start, content.cend(), match, pattern)) {
-        std::string token = match[1].str();
-
-        // Handle Unicode escape sequences
-        token = decode_unicode_escapes(token);
-
-        int id;
-        // Try to get the number after the closing quote
-        std::string remainder = match.suffix().str();
-        if (!remainder.empty() && remainder[0] == ':') {
-            size_t num_start = 1;
-            while (num_start < remainder.size() && (remainder[num_start] == ' ' || remainder[num_start] == '\t')) {
-                num_start++;
-            }
-            size_t num_end = num_start;
-            while (num_end < remainder.size() && std::isdigit(remainder[num_end])) {
-                num_end++;
-            }
-            if (num_end > num_start) {
-                id = std::stoi(remainder.substr(num_start, num_end - num_start));
-            } else {
-                search_start = match.suffix().first;
-                continue;
-            }
-        } else {
-            search_start = match.suffix().first;
-            continue;
-        }
-
-        token_to_id_[token] = id;
-        id_to_token_[id] = token;
-
-        count++;
-        if (count <= 3) {
-            LOG_INFO("Loaded token: '{}' (len={}) -> {}", token, token.size(), id);
-        }
-
-        search_start = match.suffix().first;
-    }
-
-    LOG_INFO("Parsed {} tokens from vocab", count);
-    return count > 0;
-}
-
 std::string HLIETokenizer::normalize_text(const std::string& text) {
     std::string result = text;
 
@@ -224,7 +445,7 @@ std::vector<std::string> HLIETokenizer::split_into_words(const std::string& text
     // 检测是否包含中文
     bool has_chinese = false;
     for (unsigned char c : text) {
-        if ((c & 0xF0) == 0xE0) {  // UTF-8 中文范围
+        if ((c & 0xF0) == 0xE0) { // UTF-8 中文范围
             has_chinese = true;
             break;
         }
@@ -249,11 +470,11 @@ std::vector<std::string> HLIETokenizer::split_into_words(const std::string& text
             // 计算字符长度
             size_t char_len = 1;
             if ((c & 0xF0) == 0xE0) {
-                char_len = 3;  // 中文 3字节
+                char_len = 3; // 中文 3字节
             } else if ((c & 0xE0) == 0xC0) {
-                char_len = 2;  // 2字节字符
+                char_len = 2; // 2字节字符
             } else if ((c & 0xF8) == 0xF0) {
-                char_len = 4;  // emoji 4字节
+                char_len = 4; // emoji 4字节
             }
 
             if (i + char_len <= n) {
@@ -341,9 +562,10 @@ std::vector<int> HLIETokenizer::words_to_ids(const std::vector<std::string>& wor
                 unknown_counts[unknown]++;
                 unknown_total++;
 
-                LOG_WARN("Unknown token[{}] '{}' (hex={:02x}, byte_len={})",
-                         unknown_total, unknown, static_cast<unsigned int>(c),
-                         (c & 0xF0) == 0xE0 ? 3 : (c & 0xE0) == 0xC0 ? 2 : 1);
+                LOG_WARN("Unknown token[{}] '{}' (hex={:02x}, byte_len={})", unknown_total, unknown, static_cast<unsigned int>(c),
+                         (c & 0xF0) == 0xE0       ? 3
+                             : (c & 0xE0) == 0xC0 ? 2
+                                                  : 1);
 
                 ++i;
             }
@@ -357,8 +579,7 @@ std::vector<int> HLIETokenizer::words_to_ids(const std::vector<std::string>& wor
     LOG_INFO("Total unknown tokens: {}", unknown_total);
     for (const auto& [char_str, count] : unknown_counts) {
         unsigned char c = static_cast<unsigned char>(char_str[0]);
-        LOG_INFO("  '{}' (hex={:02x}): {} times",
-                 char_str, static_cast<unsigned int>(c), count);
+        LOG_INFO("  '{}' (hex={:02x}): {} times", char_str, static_cast<unsigned int>(c), count);
     }
 
     LOG_INFO("=== words_to_ids END, total tokens: {} ===", tokens.size());
@@ -383,41 +604,6 @@ bool HLIETokenizer::is_special_token(int token_id) {
     const std::string& token = it->second;
     // Special tokens usually start with <| or end with |>
     return token.find("<|") != std::string::npos || token.find("|>") != std::string::npos;
-}
-
-
-bool HLIETokenizer::load_vocab(const std::string& path) {
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        LOG_ERROR("Cannot open vocab file: {}", path);
-        return false;
-    }
-
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string content = buffer.str();
-
-    // Parse JSON - format: {"token": id, ...}
-    std::string pattern_str = "\"([^\"]+)\":\\s*(\\d+)";
-    std::regex pattern(pattern_str);
-    std::smatch match;
-    std::string::const_iterator search_start(content.cbegin());
-
-    while (std::regex_search(search_start, content.cend(), match, pattern)) {
-        std::string token = match[1];
-        int id = std::stoi(match[2]);
-
-        // Handle Unicode escape sequences
-        token = decode_unicode_escapes(token);
-
-        token_to_id_[token] = id;
-        id_to_token_[id] = token;
-
-        search_start = match.suffix().first;
-    }
-
-    LOG_INFO("Loaded {} tokens from vocabulary", token_to_id_.size());
-    return !token_to_id_.empty();
 }
 
 std::string HLIETokenizer::decode_unicode_escapes(const std::string& text) {

@@ -29,10 +29,10 @@ HLIE_NAMESPACE_BEGIN
 
 class HLIE_API TcimUtil {
 public:
-    static int64_t numel(const std::vector<int>& shape);
-    static tcim::Tensor load_fp16_bin(const std::string& path, const std::vector<int>& shape);
+    static int64_t numel(const std::vector<int64_t>& shape);
+    static tcim::Tensor load_fp16_bin(const std::string& path, const std::vector<int64_t>& shape);
     static std::vector<uint16_t> load_fp16_data(const std::string& path, size_t offset, size_t size);
-    static tcim::Tensor create_fp16_tensor(const void* data, const std::vector<int>& shape);
+    static tcim::Tensor create_fp16_tensor(const void* data, const std::vector<int64_t>& shape);
     static tcim::Tensor embedding_lookup(const tcim::Tensor& weight, const std::vector<int>& input_ids);
     static tcim::Tensor concat_seq(const std::vector<tcim::Tensor>& inputs);
 
