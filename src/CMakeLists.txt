@@ -50,6 +50,7 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${TCIM_RUNTIME_PATH}/include)
 include_directories(${TCIM_RUNTIME_PATH}/examples/common/hpp)
 
+include_directories(${PROJECT_SOURCE_DIR}/third_party/)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include/nlohmann)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/cpp-httplib)

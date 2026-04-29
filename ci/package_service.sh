@@ -39,6 +39,7 @@ xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software
 
 uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-linux_${ARCH}.tar.gz"
 libsamplerate_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/libsamplerate-linux_${ARCH}.tar.gz"
+eigen3_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/eigen3.tar.gz"
 
 
 # 下载文件并检查是否成功
@@ -101,6 +102,16 @@ deploy_libsamplerate() {
     download_file "$libsamplerate_url" "libsamplerate.tar.gz"
     tar -xzf libsamplerate.tar.gz -C third_party/samplerate --strip-components=1
     rm libsamplerate.tar.gz
+}
+
+deploy_eigen3() {
+  local eigen3_url=$1
+  mkdir -p third_party/eigen3
+  rm -rf third_party/eigen3/*
+
+  download_file "$eigen3_url" "eigen3.tar.gz"
+  tar -xzf eigen3.tar.gz -C third_party/eigen3 --strip-components=1
+  rm eigen3.tar.gz
 }
 
 # 部署 Dadao SDK
@@ -180,13 +191,14 @@ package_service() {
 
     # 清理并创建目录结构
     rm -rf "$release_dir"/*
-    mkdir -p "$release_dir/config" "$release_dir/lib" "$release_dir/bin" "$release_dir/scripts"
+    mkdir -p "$release_dir/config" "$release_dir/lib" "$release_dir/bin" "$release_dir/scripts" "$release_dir/samples"
 
     # 复制库文件
     cp build/bin/libhlie*.so "$release_dir/lib/" || true
     cp build/bin/libhlie*.so "$release_dir/lib/" || true
     cp third_party/llama.cpp_houmo/lib/*.so* "$release_dir/lib/" || true
     cp build/bin/houmo-llm-hi-cpp-linux "$release_dir/bin/HLIECpp" || true
+    cp samples/zero_shot_prompt.wav "$release_dir/samples/zero_shot_prompt.wav" || true
     cp config/linux/sys.cfg "$release_dir/config/sys.cfg" || true
 
     cp third_party/sd.cpp/lib/libstable-diffusion.so "$release_dir/lib/" || true
@@ -230,6 +242,7 @@ main() {
     deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"
     deploy_uwebsockets "$uwebsockets_url"
     deploy_libsamplerate "$libsamplerate_url"
+    deploy_eigen3 "$eigen3_url"
 
     echo "Deployed Dadao SDK and System SDK for $ARCH."
 

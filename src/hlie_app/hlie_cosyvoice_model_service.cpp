@@ -646,14 +646,14 @@ void CosyVoiceModelService::process() {
 
             try {
                 auto start = std::chrono::steady_clock::now();
-                auto transcription_result = transcription(request);
+                auto speech_result = speech(request);
                 auto end = std::chrono::steady_clock::now();
                 // 构造结果
                 CosyVoiceResult result;
-                result.wav = transcription_result;
-                result.success = !transcription_result.empty();
+                result.wav = speech_result;
+                result.success = !speech_result.empty();
                 result.predicted_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-                LOG_INFO("transcription time: {} ms", result.predicted_ms);
+                LOG_INFO("speech time: {} ms", result.predicted_ms);
 
                 // 通知调用者
                 promise->set_value(result);
@@ -725,11 +725,11 @@ std::vector<float> CosyVoiceModelService::handle_stream(const WhisperStreamReque
     req.content = "stream";
 
     const auto start = std::chrono::steady_clock::now();
-    auto transcription_result = transcription(req);
+    auto speech_result = speech(req);
     const auto end = std::chrono::steady_clock::now();
     auto predicted_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    LOG_INFO("transcription time: {} ms", predicted_ms);
-    return transcription_result;
+    LOG_INFO("tts stream cost: {} ms", predicted_ms);
+    return speech_result;
 }
 
 void CosyVoiceModelService::llm_job(const std::vector<int>& text, const std::vector<int>& prompt_text,
@@ -799,7 +799,7 @@ void CosyVoiceModelService::llm_job(const std::vector<int>& text, const std::vec
     }
 }
 
-std::future<CosyVoiceResult> CosyVoiceModelService::transcription_async(const CosyVoiceRequest& request) const {
+std::future<CosyVoiceResult> CosyVoiceModelService::speech_async(const CosyVoiceRequest& request) const {
     const auto promise = std::make_shared<std::promise<CosyVoiceResult>>();
     auto future = promise->get_future();
 
@@ -815,22 +815,22 @@ std::future<CosyVoiceResult> CosyVoiceModelService::transcription_async(const Co
     return future;
 }
 
-CosyVoiceResult CosyVoiceModelService::transcription_sync(const CosyVoiceRequest& request) const {
-    auto future = transcription_async(request);
+CosyVoiceResult CosyVoiceModelService::speech_sync(const CosyVoiceRequest& request) const {
+    auto future = speech_async(request);
     return future.get();
 }
 
-std::vector<float> CosyVoiceModelService::transcription(const CosyVoiceRequest& request) {
+std::vector<float> CosyVoiceModelService::speech(const CosyVoiceRequest& request) {
     std::vector<float> results;
     try {
-        LOG_INFO("whisper.cpp full parallel ready to run {}", request.content);
+        LOG_INFO("cosyvoice3 ready to run {}", request.content);
 
         const std::string prompt = "You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。";
         auto prompt_text = text_normalize(prompt, false, true);
-        LOG_INFO("text_normalize done1, {}", prompt_text[0]);
+        LOG_INFO("text_normalize prompt done");
         auto tts_text = text_normalize(request.content, false, true);
-        LOG_INFO("text_normalize done2");
-        const std::string prompt_wav = R"(E:\test_data\tts\zero_shot_prompt.wav)";
+        LOG_INFO("text_normalize request done");
+        const std::string prompt_wav = R"(..\samples\zero_shot_prompt.wav)";
 
         for (auto text : tts_text) {
             // Get frontend input (tokens, embeddings, etc.)
@@ -883,21 +883,21 @@ std::vector<float> CosyVoiceModelService::transcription(const CosyVoiceRequest& 
         }
 
     } catch (const std::exception& e) {
-        LOG_ERROR("transcription exception: {}", e.what());
+        LOG_ERROR("speech exception: {}", e.what());
         return results;
     }
-    LOG_INFO("transcription done");
+    LOG_INFO("speech done");
     return results;
 }
 
-void CosyVoiceModelService::handle_transcriptions(const httplib::Request& req, httplib::Response& res) {
+void CosyVoiceModelService::handle_speech(const httplib::Request& req, httplib::Response& res) {
     try {
         const json body = json::parse(req.body);
         std::string content = json_value(body, "input", std::string());
         CosyVoiceRequest cosy_voice_request;
         cosy_voice_request.content = content;
 
-        if (auto [success, wav, error_message, predicted_ms] = transcription_sync(cosy_voice_request); !success) {
+        if (auto [success, wav, error_message, predicted_ms] = speech_sync(cosy_voice_request); !success) {
             // handle failure or early abort
             if (req.is_connection_closed()) {
                 // log client disconnect
@@ -930,7 +930,7 @@ void CosyVoiceModelService::handle_transcriptions(const httplib::Request& req, h
 
         LOG_INFO("process audio done");
     } catch (const std::exception& ex) {
-        LOG_ERROR("handle_transcriptions ex: {}", ex.what());
+        LOG_ERROR("handle_speech ex: {}", ex.what());
         throw;
     }
 }
@@ -1330,9 +1330,6 @@ std::vector<float> CosyVoiceModelService::extract_spk_embedding(const std::strin
     auto result = cosyvoice_model_->campplus(campplus_input);
 
     LOG_INFO("Extracted speaker embedding: size={}", result.size());
-    for (size_t i = 0; i < result.size(); ++i) {
-        LOG_INFO("{}", result[i]);
-    }
     return result;
 }
 

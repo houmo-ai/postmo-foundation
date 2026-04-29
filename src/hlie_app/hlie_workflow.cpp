@@ -1140,7 +1140,7 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 POST,
                 nullptr,
                 true,
-                WHISPER, // 生图模型类型
+                HLIEModelType::COSYVOICE,
                 [this](const httplib::Request& req, httplib::Response& res) {
                     if (!cosy_voice_model_service_ || cosy_voice_model_service_->get_state() != SERVER_STATE_READY) {
                         auto error_data = format_error_response_ex("Model is not available for now.", ERROR_TYPE_UNAVAILABLE, 80004);
@@ -1150,7 +1150,7 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                         return;
                     }
 
-                    cosy_voice_model_service_->handle_transcriptions(req, res);
+                    cosy_voice_model_service_->handle_speech(req, res);
                 },
             },
             {

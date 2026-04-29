@@ -85,6 +85,10 @@ public:
     static uint16_t float_to_float16(float f);
 
     static float float16_to_float(uint16_t h);
+
+    static std::vector<TensorFP16> float_to_tensor_vec(const std::vector<float>& values);
+
+    static std::vector<float> tensor_to_float_vec(const void* data, size_t count);
 };
 
 HLIE_NAMESPACE_END

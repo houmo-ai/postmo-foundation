@@ -322,17 +322,20 @@ uint16_t TcimUtil::float_to_float16(const float f) {
 
     // 1. 处理 NaN 和 Infinity
     if (exp == 128) {
-        if (mantissa == 0) return sign | 0x7C00; // Inf
+        if (mantissa == 0)
+            return sign | 0x7C00; // Inf
         // NaN: 保持最高位有效载荷，确保它依然是 NaN
         return sign | 0x7C00 | (mantissa >> 13) | (mantissa != 0 && (mantissa >> 13) == 0);
     }
 
     // 2. 边界处理：溢出
-    if (exp > 15) return sign | 0x7C00;
+    if (exp > 15)
+        return sign | 0x7C00;
 
     // 3. 处理次正规数 (Subnormal) 或 零
     if (exp < -14) {
-        if (exp < -24) return sign; // 太小，转为正负0
+        if (exp < -24)
+            return sign; // 太小，转为正负0
 
         // 补充隐含位并根据指数差值进行位移
         mantissa |= 0x800000;
@@ -344,7 +347,8 @@ uint16_t TcimUtil::float_to_float16(const float f) {
         uint32_t round_bit = (mantissa >> (shift - 1)) & 1;
         uint16_t sub = (mantissa >> shift);
 
-        if (round_bit && (sticky || (sub & 1))) sub++;
+        if (round_bit && (sticky || (sub & 1)))
+            sub++;
         return sign | sub;
     }
 
@@ -364,14 +368,15 @@ uint16_t TcimUtil::float_to_float16(const float f) {
         }
     }
 
-    if (new_exp >= 31) return sign | 0x7C00; // 舍入后溢出
+    if (new_exp >= 31)
+        return sign | 0x7C00; // 舍入后溢出
 
     return sign | (new_exp << 10) | new_mantissa;
 }
 
 float TcimUtil::float16_to_float(uint16_t h) {
     uint32_t sign = (h & 0x8000) << 16;
-    uint32_t exp  = (h & 0x7C00) >> 10;
+    uint32_t exp = (h & 0x7C00) >> 10;
     uint32_t mant = (h & 0x03FF);
 
     uint32_t f;
@@ -403,6 +408,19 @@ float TcimUtil::float16_to_float(uint16_t h) {
     float result;
     std::memcpy(&result, &f, sizeof(result));
     return result;
+}
+
+std::vector<TensorFP16> TcimUtil::float_to_tensor_vec(const std::vector<float>& values) {
+    std::vector<TensorFP16> out(values.size());
+    std::transform(values.begin(), values.end(), out.begin(), [](float value) { return static_cast<TensorFP16>(value); });
+    return out;
+}
+
+std::vector<float> TcimUtil::tensor_to_float_vec(const void* data, size_t count) {
+    const auto* typed = static_cast<const TensorFP16*>(data);
+    std::vector<float> out(count);
+    std::transform(typed, typed + count, out.begin(), [](TensorFP16 value) { return static_cast<float>(value); });
+    return out;
 }
 
 HLIE_NAMESPACE_END

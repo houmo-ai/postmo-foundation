@@ -10,6 +10,7 @@ third_party/*torch*
 third_party/whisper.cpp
 third_party/uwebsockets
 third_party/samplerate
+third_party/eigen3
 src/houmo-tcim-runtime
 release
 src/libtorch

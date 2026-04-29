@@ -5,10 +5,12 @@
 
 #include "ggml-cpp.h"
 #include "gguf.h"
-#include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_audio.h"
+#include "hlie_base/hlie_logger.h"
+#include "hlie_base/hlie_sampler.h"
 #include "hlie_base/hlie_tcim_util.h"
 #include "hlie_base/hlie_tokenizer.h"
+#include "hlie_base/librosa.h"
 
 namespace {
     constexpr std::string_view quant_embedding = "quant_embedding.bin";
@@ -33,7 +35,7 @@ namespace {
     constexpr int MAX_SILENT_TOKEN_NUM = 5;
     constexpr int INPUT_SEQUENCE_LENGTH = 256;
 
- // RAS sampling constants
+    // RAS sampling constants
     constexpr float DEFAULT_TOP_P = 0.8f;
     constexpr int DEFAULT_TOP_K = 25;
     constexpr int DEFAULT_WIN_SIZE = 10;
@@ -83,7 +85,7 @@ namespace {
                 return i;
             }
         }
-        return token_size - 1;  // fallback
+        return token_size - 1; // fallback
     }
 
     /**
@@ -100,8 +102,7 @@ namespace {
             sorted.emplace_back(probs[i], i);
         }
 
-        std::sort(sorted.begin(), sorted.end(),
-                  [](const auto& a, const auto& b) { return a.first > b.first; });
+        std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
 
         // Select candidates based on top_p and top_k
         std::vector<float> cand_probs;
@@ -149,9 +150,8 @@ namespace {
      * RAS (Repetition-Aware Sampling) - applies repetition-aware logic on top of nucleus sampling.
      * Equivalent to Python's ras_sampling function.
      */
-    int ras_sampling(const float* weighted_scores, const std::vector<int>& decoded_tokens, int sampling,
-                     float top_p = DEFAULT_TOP_P, int top_k = DEFAULT_TOP_K,
-                     int win_size = DEFAULT_WIN_SIZE, float tau_r = DEFAULT_TAU_R) {
+    int ras_sampling(const float* weighted_scores, const std::vector<int>& decoded_tokens, int sampling, float top_p = DEFAULT_TOP_P,
+                     int top_k = DEFAULT_TOP_K, int win_size = DEFAULT_WIN_SIZE, float tau_r = DEFAULT_TAU_R) {
         // Step 1: Get top candidate using nucleus sampling
         int top_ids = nucleus_sampling(weighted_scores, top_p, top_k);
 
@@ -192,12 +192,64 @@ namespace {
         return max_idx;
     }
 
+    std::vector<float> TransposeSeqFeatToFeatSeq(const std::vector<float>& input, int seq_len, int feat_dim) {
+        std::vector<float> out(static_cast<size_t>(seq_len * feat_dim), 0.0f);
+        for (int seq_idx = 0; seq_idx < seq_len; ++seq_idx) {
+            for (int feat_idx = 0; feat_idx < feat_dim; ++feat_idx) {
+                out[static_cast<size_t>(feat_idx * seq_len + seq_idx)] = input[static_cast<size_t>(seq_idx * feat_dim + feat_idx)];
+            }
+        }
+        return out;
+    }
+
+    std::vector<float> BuildCosineTimeSpan(int steps) {
+        constexpr float kPi = 3.14159265358979323846f;
+        std::vector<float> t_span(static_cast<size_t>(steps + 1), 0.0f);
+        for (int idx = 0; idx <= steps; ++idx) {
+            const float t = static_cast<float>(idx) / static_cast<float>(steps);
+            t_span[static_cast<size_t>(idx)] = 1.0f - std::cos(t * 0.5f * kPi);
+        }
+        return t_span;
+    }
+    
+    
+    std::vector<float> ResizeMelLinear(const std::vector<float>& mel, int mel_bins,
+                                       int src_frames, int dst_frames) {
+        if (src_frames <= 0 || dst_frames <= 0) {
+            return {};
+        }
+        if (src_frames == dst_frames) {
+            return mel;
+        }
+
+        std::vector<float> resized(static_cast<size_t>(mel_bins * dst_frames), 0.0f);
+        for (int mel_idx = 0; mel_idx < mel_bins; ++mel_idx) {
+            const float* src = mel.data() + static_cast<size_t>(mel_idx * src_frames);
+            float* dst = resized.data() + static_cast<size_t>(mel_idx * dst_frames);
+            if (dst_frames == 1) {
+                dst[0] = src[0];
+                continue;
+            }
+            for (int frame_idx = 0; frame_idx < dst_frames; ++frame_idx) {
+                const float src_pos = static_cast<float>(frame_idx) *
+                                      static_cast<float>(src_frames - 1) /
+                                      static_cast<float>(dst_frames - 1);
+                const int left = static_cast<int>(src_pos);
+                const int right = std::min(left + 1, src_frames - 1);
+                const float alpha = src_pos - static_cast<float>(left);
+                dst[frame_idx] = src[left] * (1.0f - alpha) + src[right] * alpha;
+            }
+        }
+        return resized;
+    }
+
 } // namespace
 
 HLIE_NAMESPACE_BEGIN
 
 
 int HLIECosyVoiceModel::init() {
+    hlie_sampler_ = std::make_shared<HLIESampler>();
     speech_tokenizer_input_names_.clear();
     speech_tokenizer_output_names_.clear();
 
@@ -246,6 +298,25 @@ int HLIECosyVoiceModel::init() {
     cur_len_tensor.Buffer().CopyFromHost(loop_curr_len.data(), loop_curr_len.size() * sizeof(int));
     llm_qwen2_decode_model_->SetInput(decode_input_names_[2], cur_len_tensor);
 
+
+    for (int idx = 0; idx < cosyvoice3_flow_decoder_model_->GetInputNum(); idx++) {
+        auto name = cosyvoice3_flow_decoder_model_->GetInputName(idx);
+        auto info = cosyvoice3_flow_decoder_model_->GetInputInfo(name).AsContiguous();
+        flow_decoder_input_maps_[name] = tcim::Tensor::CreateHostTensor(info);
+    }
+
+    for (int idx = 0; idx < cosyvoice3_hift_part1_model_->GetInputNum(); idx++) {
+        auto name = cosyvoice3_hift_part1_model_->GetInputName(idx);
+        auto info = cosyvoice3_hift_part1_model_->GetInputInfo(name).AsContiguous();
+        hift_part1_input_maps_[name] = tcim::Tensor::CreateHostTensor(info);
+    }
+
+    for (int idx = 0; idx < cosyvoice3_hift_part2_model_->GetInputNum(); idx++) {
+        auto name = cosyvoice3_hift_part2_model_->GetInputName(idx);
+        auto info = cosyvoice3_hift_part2_model_->GetInputInfo(name).AsContiguous();
+        hift_part2_input_maps_[name] = tcim::Tensor::CreateHostTensor(info);
+    }
+
     LOG_INFO("HLIECosyVoiceModel::init 4");
 
     // Initialize stop token IDs: [6561, 6562, ..., 6760]
@@ -256,13 +327,13 @@ int HLIECosyVoiceModel::init() {
 
     // ========== Print all models' input/output information ==========
     auto print_model_info = [](const std::shared_ptr<tcim::Module>& model, const std::string& model_name) {
-        LOG_INFO("╔══════════════════════════════════════════════════════════════╗");
-        LOG_INFO("║ Model: {:<55} ║", model_name);
-        LOG_INFO("╠══════════════════════════════════════════════════════════════╣");
+        LOG_TRACE("╔══════════════════════════════════════════════════════════════╗");
+        LOG_TRACE("║ Model: {:<55} ║", model_name);
+        LOG_TRACE("╠══════════════════════════════════════════════════════════════╣");
 
         // Print inputs
         size_t num_inputs = model->GetInputNum();
-        LOG_INFO("║ Inputs ({:2d}):                                                     ║", num_inputs);
+        LOG_TRACE("║ Inputs ({:2d}):                                                     ║", num_inputs);
         for (size_t i = 0; i < num_inputs; ++i) {
             auto input_name = model->GetInputName(static_cast<int>(i));
             auto input_info = model->GetInputInfo(input_name).AsContiguous();
@@ -312,8 +383,8 @@ int HLIECosyVoiceModel::init() {
 
         // Print outputs
         size_t num_outputs = model->GetOutputNum();
-        LOG_INFO("╠══════════════════════════════════════════════════════════════╣");
-        LOG_INFO("║ Outputs ({:2d}):                                                    ║", num_outputs);
+        LOG_TRACE("╠══════════════════════════════════════════════════════════════╣");
+        LOG_TRACE("║ Outputs ({:2d}):                                                    ║", num_outputs);
         for (size_t i = 0; i < num_outputs; ++i) {
             auto output_name = model->GetOutputName(static_cast<int>(i));
             auto output_info = model->GetOutputInfo(output_name).AsContiguous();
@@ -358,9 +429,9 @@ int HLIECosyVoiceModel::init() {
                 break;
             }
 
-            LOG_INFO("║   [{:2d}] {:<20} │ shape: {:<28} │ {:<10} ║", i, output_name.substr(0, 20), shape_str.substr(0, 28), dtype_str);
+            LOG_TRACE("║   [{:2d}] {:<20} │ shape: {:<28} │ {:<10} ║", i, output_name.substr(0, 20), shape_str.substr(0, 28), dtype_str);
         }
-        LOG_INFO("╚══════════════════════════════════════════════════════════════╝");
+        LOG_TRACE("╚══════════════════════════════════════════════════════════════╝");
     };
 
     // Print all model information
@@ -402,24 +473,17 @@ int HLIECosyVoiceModel::load_model(const std::string& model) {
         LOG_INFO("loaded HLIECosyVoiceModel meta data with {} key-value pairs and {} tensors from (version GGUF V3 (latest))", n_kv,
                  model.c_str());
 
-        std::vector<std::string> dummy_tensor_names;
 
         const auto n_tensors = gguf_get_n_tensors(ctx);
         // Helper lambda to load model by name
-        auto load_model_by_name = [&](const std::string& tensor_name, auto& model_ptr) -> bool {
+        auto load_model_by_name = [&](const std::string& tensor_name, auto& model_ptr,
+                                      const std::vector<std::string>& dummy_tensor_names = {}) -> bool {
             for (int i = 0; i < n_tensors; ++i) {
                 const char* name = gguf_get_tensor_name(ctx, i);
                 if (tensor_name == name) {
                     const size_t size = gguf_get_tensor_size(ctx, i);
                     const size_t offset = gguf_get_tensor_offset(ctx, i) + gguf_get_meta_size(ctx);
-                    if (tensor_name == cosyvoice3_llm_qwen2_decode) {
-                        for (auto i : dummy_tensor_names) {
-                            LOG_INFO(" dummy_tensor_names {} from {}", i, tensor_name);
-                        }
-                        model_ptr = create_infer_engine(model, offset, size, dummy_tensor_names);
-                    } else {
-                        model_ptr = create_infer_engine(model, offset, size);
-                    }
+                    model_ptr = create_infer_engine(model, offset, size, dummy_tensor_names);
 
                     if (!model_ptr) {
                         LOG_ERROR("failed to load {}", tensor_name);
@@ -466,34 +530,43 @@ int HLIECosyVoiceModel::load_model(const std::string& model) {
             return -1;
         if (!load_model_by_name(std::string(cosyvoice3_flow_spk), cosyvoice3_flow_spk_model_))
             return -1;
-        if (!load_model_by_name(std::string(cosyvoice3_hift_part1), cosyvoice3_hift_part1_model_))
-            return -1;
-        if (!load_model_by_name(std::string(cosyvoice3_hift_part2), cosyvoice3_hift_part2_model_))
-            return -1;
+
         if (!load_model_by_name(std::string(cosyvoice3_llm_decoder), cosyvoice3_llm_decoder_model_))
             return -1;
         if (!load_model_by_name(std::string(cosyvoice3_llm_qwen2_prefill), llm_qwen2_prefill_model_))
             return -1;
 
 
+        std::vector<std::string> llm_qwen2_docode_dummy_tensor_names;
         prefill_input_names_ = TcimUtil::get_module_input_names(llm_qwen2_prefill_model_);
         for (const auto& input_name : prefill_input_names_) {
             if (input_name.find("model_layers") != std::string::npos) {
-                dummy_tensor_names.push_back(input_name);
+                llm_qwen2_docode_dummy_tensor_names.push_back(input_name);
             }
         }
 
         // Todo: Decode need init dummy and cache
-        if (!load_model_by_name(std::string(cosyvoice3_llm_qwen2_decode), llm_qwen2_decode_model_))
+        if (!load_model_by_name(std::string(cosyvoice3_llm_qwen2_decode), llm_qwen2_decode_model_, llm_qwen2_docode_dummy_tensor_names))
             return -1;
 
-        for (const auto& input_name : dummy_tensor_names) {
+        for (const auto& input_name : llm_qwen2_docode_dummy_tensor_names) {
             auto cache = llm_qwen2_prefill_model_->GetDevInput(input_name);
             llm_qwen2_decode_model_->SetInput(input_name, cache);
         }
 
         if (!load_model_by_name(std::string(cosyvoice3_speech_tokenizer), cosyvoice3_speech_tokenizer_model_))
             return -1;
+
+        if (!load_model_by_name(std::string(cosyvoice3_hift_part1), cosyvoice3_hift_part1_model_))
+            return -1;
+
+        std::string hift2_dummy_input_name = cosyvoice3_hift_part1_model_->GetInputName(0);
+
+        if (!load_model_by_name(std::string(cosyvoice3_hift_part2), cosyvoice3_hift_part2_model_, {hift2_dummy_input_name}))
+            return -1;
+
+        auto dummy_input = cosyvoice3_hift_part1_model_->GetDevInput(hift2_dummy_input_name);
+        CHECK_TCIM_STATUS(cosyvoice3_hift_part2_model_->SetDevInput(hift2_dummy_input_name, dummy_input));
 
         // Load all tensors
         if (!load_tensor_by_name(std::string(quant_embedding), token_weight_embedding_, {151936, 896}))
@@ -592,23 +665,25 @@ std::pair<std::vector<int>, int> HLIECosyVoiceModel::speech_tokenizer(const std:
 
     // Step 5: 复制输出到 host (直接就是 token ID)
     // 输出可能是 INT32, INT16 或其他类型
-    std::vector<int> speech_tokens{490, 499, 495, 243, 273, 273, 30, 27, 273, 27, 27, 27, 27, 30, 246, 492, 501, 5092, 2904, 4856, 5956, 4948,
-        2760, 3652, 3808, 6316, 6040, 4816, 5060, 3976, 6236, 5992, 3320, 2104, 2096, 4236, 2160, 1928, 1685, 1823, 3950, 5424, 1532, 3720, 1588,
-        2043, 5660, 4928, 5864, 5864, 987, 492, 4228, 5656, 3712, 3692, 1477, 19, 1, 17, 404, 2180, 6044, 2368, 831, 2730, 3410, 5816, 6276, 1624,
-        1385, 5032, 4600, 2168, 1086, 4600, 4432, 3400, 105, 1311, 6008, 5848, 6036, 579, 3430, 2025, 1648, 1648, 4352, 4028, 4432, 4432, 2244,
-        1271, 1271, 6104, 5128, 5308, 5080, 5052, 4052, 3810, 3828, 128, 73, 73, 316, 45, 27, 27, 27, 243, 244, 252, 243, 243, 243, 243, 243, 243, 243, 244, 244, 244};
-/*
-    // 直接复制 INT32 token IDs
-    std::vector<int32_t> buffer(output_shape[1]);
-    output.Buffer().CopyToHost(buffer.data(), output.MemSize());
+    std::vector<int> speech_tokens{
+        490,  499,  495,  243,  273,  273,  30,   27,   273,  27,   27,   27,   27,   30,   246,  492,  501,  5092, 2904, 4856, 5956,
+        4948, 2760, 3652, 3808, 6316, 6040, 4816, 5060, 3976, 6236, 5992, 3320, 2104, 2096, 4236, 2160, 1928, 1685, 1823, 3950, 5424,
+        1532, 3720, 1588, 2043, 5660, 4928, 5864, 5864, 987,  492,  4228, 5656, 3712, 3692, 1477, 19,   1,    17,   404,  2180, 6044,
+        2368, 831,  2730, 3410, 5816, 6276, 1624, 1385, 5032, 4600, 2168, 1086, 4600, 4432, 3400, 105,  1311, 6008, 5848, 6036, 579,
+        3430, 2025, 1648, 1648, 4352, 4028, 4432, 4432, 2244, 1271, 1271, 6104, 5128, 5308, 5080, 5052, 4052, 3810, 3828, 128,  73,
+        73,   316,  45,   27,   27,   27,   243,  244,  252,  243,  243,  243,  243,  243,  243,  243,  244,  244,  244};
+    /*
+        // 直接复制 INT32 token IDs
+        std::vector<int32_t> buffer(output_shape[1]);
+        output.Buffer().CopyToHost(buffer.data(), output.MemSize());
 
-    // 转换为 int 并截取实际长度
-    speech_tokens.resize(speech_token_len);
-    for (int64_t i = 0; i < speech_token_len; ++i) {
-        speech_tokens[i] = static_cast<int>(buffer[i]);
-        LOG_DEBUG("speech_tokens[{}]: {}", i, speech_tokens[i]);
-    }
-*/
+        // 转换为 int 并截取实际长度
+        speech_tokens.resize(speech_token_len);
+        for (int64_t i = 0; i < speech_token_len; ++i) {
+            speech_tokens[i] = static_cast<int>(buffer[i]);
+            LOG_DEBUG("speech_tokens[{}]: {}", i, speech_tokens[i]);
+        }
+    */
     LOG_INFO("Extracted speech tokens: count={}", speech_tokens.size());
 
     return {std::move(speech_tokens), static_cast<int>(speech_tokens.size())};
@@ -682,7 +757,6 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
     auto t_start = high_resolution_clock::now();
 
     // ========== STEP 1: Concatenate prompt_text + text ==========
-    // Equivalent Python: text = torch.concat([prompt_text, text], dim=1)
     std::vector<int> concat_text = prompt_text;
     concat_text.insert(concat_text.end(), text.begin(), text.end());
     int concat_text_len = text_len + prompt_text_len;
@@ -698,7 +772,6 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
     }
 
     // ========== STEP 3: Get prompt speech token embeddings ==========
-    // Equivalent Python: prompt_speech_token_emb = self.speech_embedding(prompt_speech_token)
     // Direct batch lookup - more efficient than individual lookups
     LOG_DEBUG("LLM inference: STEP 3: Get prompt speech token embeddings, prompt_speech_token_len: {}", prompt_speech_token_len);
     tcim::Tensor prompt_speech_emb;
@@ -711,14 +784,7 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
     }
 
     // ========== STEP 4: Build lm_input = [sos_emb, text_emb, task_id_emb, prompt_speech_emb] ==========
-    // Equivalent Python:
-    // lm_input = torch.concat([self.sos_emb, text, self.task_id_emb, prompt_speech_token_emb], dim=1)
-
     // Prepare individual tensors for concatenation
-    // - sos_emb: [1, 1, 896]
-    // - text_emb: [1, concat_text_len, 896]
-    // - task_id_emb: [1, 1, 896]
-    // - prompt_speech_emb: [1, prompt_speech_token_len, 896]
     LOG_DEBUG("STEP 4: Build lm_input = [sos_emb, text_emb, task_id_emb, prompt_speech_emb]");
     std::vector<tcim::Tensor> lm_input_tensors;
     lm_input_tensors.push_back(*llm_sos_embedding_); // [1, 1, 896]
@@ -746,8 +812,8 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
     }
 
     // Calculate min/max length for generation
-    int min_len = static_cast<int>((text_len - prompt_text_len)*min_token_text_ratio);
-    int max_len = static_cast<int>((text_len - prompt_text_len)*max_token_text_ratio);
+    int min_len = static_cast<int>(text_len * min_token_text_ratio);
+    int max_len = static_cast<int>(text_len * max_token_text_ratio);
 
     // ========== STEP 5: PREFILL PHASE ==========
     auto t_prefill0 = high_resolution_clock::now();
@@ -768,7 +834,6 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
 
         if (round_idx == prefill_loop_round - 1) {
             // Last round: use remaining tokens
-            // Equivalent Python: inputs_embeds = lm_input[:, round_idx * self.prefill_length : seq_length, :]
             current_length = seq_length - round_idx * prefill_length_;
         } else {
             current_length = prefill_length_;
@@ -799,17 +864,11 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
         }
 
         // ========== Pad using token_embedding with pad_token_id ==========
-        // Equivalent Python:
-        // pad_input_ids = torch.zeros((self.prefill_length - effective_length), dtype=torch.long)
-        // pad_input_ids.fill_(self.pad_token_id)  # 151645
-        // pad_input_ids = pad_input_ids.unsqueeze(0)
-        // pad_embeds = self.token_embedding(pad_input_ids)
-
         std::vector<tcim::Tensor> prefill_tensors;
         int effective_length = chunk_len;
         if (effective_length < prefill_length_) {
             int pad_len = prefill_length_ - effective_length;
-            LOG_DEBUG("prefill  round_idx: {} pad_len: {} ", round_idx,pad_len);
+            LOG_DEBUG("prefill  round_idx: {} pad_len: {} ", round_idx, pad_len);
             // Create pad_token_ids vector filled with pad_token_id (151645)
             std::vector<int> pad_token_ids(pad_len, pad_token_id()); // pad_token_id = 151645
 
@@ -851,7 +910,6 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
     auto t_prefill1 = high_resolution_clock::now();
 
     // ========== STEP 6: Get prefill output and run LLM decoder ==========
-    // auto prefill_out = llm_qwen2_prefill_model_->GetDevOutput(llm_qwen2_prefill_model_->GetOutputName(0));
     auto prefill_dev_opt = llm_qwen2_prefill_model_->GetDevOutput(llm_qwen2_prefill_model_->GetOutputName(0));
     auto llm_decoder_dev_ipt0 = prefill_dev_opt.SelectBatch({0});
     CHECK_TCIM_STATUS(cosyvoice3_llm_decoder_model_->SetInput(llm_decoder_input_names_[0], llm_decoder_dev_ipt0));
@@ -859,22 +917,13 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
     cosyvoice3_llm_decoder_model_->Run();
     cosyvoice3_llm_decoder_model_->Sync();
 
-    // Get log probabilities
-    auto decoder_out = cosyvoice3_llm_decoder_model_->GetOutput(llm_decoder_output_names_[0]);
-    tcim::Tensor decoder_out_tensor = tcim::Tensor::CreateHostTensor(decoder_out.Info().AsContiguous());
-    decoder_out.CastTo(decoder_out_tensor);
-
-    const auto* logp_fp16 = static_cast<const TensorFP16*>(decoder_out_tensor.Buffer().Data());
-    std::vector<float> logp_scores(llm_output_size());
-    for (int i = 0; i < llm_output_size(); ++i) {
-        logp_scores[i] = static_cast<float>(logp_fp16[i]);
-    }
-
     // ========== STEP 7: Sample first token ==========
     std::vector<int> out_tokens;
     bool ignore_eos = (min_len > 0);
+    auto llm_dev_output_opt = cosyvoice3_llm_decoder_model_->GetDevOutput(llm_decoder_output_names_[0]);
+    auto llm_host_output_opt = llm_dev_output_opt.ToHost(true);
 
-    int top_ids = sampling_ids(logp_scores.data(), out_tokens, sampling, ignore_eos);
+    int top_ids =  hlie_sampler_->SamplingIds(llm_host_output_opt, out_tokens, 6761, sampling, ignore_eos);
     auto t_first_token = high_resolution_clock::now();
 
     // Check if first token is stop token
@@ -909,7 +958,6 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
 
     LOG_DEBUG("CosyVoice3 llm decode start, top_ids: {}, context_length: {}, max_len: {}", top_ids, context_length, max_len);
     for (int i = 1; i < max_len; ++i) {
-        // Get embedding for current token: lm_input = self.speech_embedding.weight[top_ids]
         auto token_emb = TcimUtil::embedding_lookup(*speech_weight_embedding_, {top_ids});
 
         // Set decode input
@@ -920,46 +968,29 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
         LOG_DEBUG("CosyVoice3 llm decode [{}], top_ids: {}, context_length: {}", i, top_ids, context_length);
         const auto decode_valid_length_tensor = llm_qwen2_decode_input_map_.at(decode_valid_length_name);
         CHECK_TCIM_STATUS(decode_valid_length_tensor.Buffer().CopyFromHost(valid_len_vec.data(), valid_len_vec.size() * sizeof(int32_t)));
-        CHECK_TCIM_STATUS( llm_qwen2_decode_model_->SetInput(decode_valid_length_name, decode_valid_length_tensor));
+        CHECK_TCIM_STATUS(llm_qwen2_decode_model_->SetInput(decode_valid_length_name, decode_valid_length_tensor));
 
         CHECK_TCIM_STATUS(llm_qwen2_decode_model_->Run());
         CHECK_TCIM_STATUS(llm_qwen2_decode_model_->Sync());
 
         // ========== STEP 4: Get decode output ==========
-        // Equivalent Python: decode_dev_opt = self.decode.get_dev_output(...).select_batch([0])
         auto decode_dev_opt = llm_qwen2_decode_model_->GetDevOutput(llm_qwen2_decode_model_->GetOutputName(0));
         auto llm_decoder_dev_ipt = decode_dev_opt.SelectBatch({0});
 
         // ========== STEP 5: Set llm_decoder input ==========
-        // Equivalent Python: self.llm_decoder.set_input(..., llm_decoder_dev_ipt)
         CHECK_TCIM_STATUS(cosyvoice3_llm_decoder_model_->SetInput(llm_decoder_input_names_[0], llm_decoder_dev_ipt));
 
         // ========== STEP 6: Run llm_decoder ==========
         // Equivalent Python: self.llm_decoder.run()
         CHECK_TCIM_STATUS(cosyvoice3_llm_decoder_model_->Run());
-        CHECK_TCIM_STATUS( cosyvoice3_llm_decoder_model_->Sync());
+        CHECK_TCIM_STATUS(cosyvoice3_llm_decoder_model_->Sync());
 
-        // ========== STEP 7: Get logp output and squeeze ==========
-        // Equivalent Python: logp = self.llm_decoder.get_dev_output(...).to_host().numpy()
-        //                   logp = torch.from_numpy(logp).squeeze(dim=0)
-        // auto logp_out = cosyvoice3_llm_decoder_model_->GetOutput(llm_decoder_output_names_[0]); //  logits   │ shape: 1 × 1 × 896  │ float16
-
-        auto logits_info  = cosyvoice3_llm_decoder_model_->GetOutputInfo(llm_decoder_output_names_[0]).AsContiguous();
-
-        tcim::Tensor logits_tensor = tcim::Tensor::CreateHostTensor(logits_info);
-        cosyvoice3_llm_decoder_model_->GetOutput(llm_decoder_output_names_[0]).CastTo(logits_tensor);
-        auto* p_logits = static_cast<TensorFP16*>(logits_tensor.Buffer().Data());
-
-        // Convert to float scores
-        std::vector<float> logp_scores2(llm_output_size());
-        for (int j = 0; j < llm_output_size(); ++j) {
-            logp_scores2[j] = static_cast<float>(p_logits[j]);
-        }
-
-        // ========== STEP 8: Sample next token ==========
-        // Equivalent Python: top_ids = self.sampling_ids(logp.squeeze(dim=0), ...)
+        // ========== STEP 7: Get logp output and squeeze Sample ==========
         ignore_eos = (i < min_len);
-        top_ids = sampling_ids(logp_scores2.data(), out_tokens, sampling, ignore_eos);
+        auto llm_dev_output_opt1 = cosyvoice3_llm_decoder_model_->GetDevOutput(llm_decoder_output_names_[0]);
+        auto llm_host_output_opt1 = llm_dev_output_opt.ToHost(true);
+        top_ids = hlie_sampler_->SamplingIds(llm_host_output_opt1, out_tokens, 6761, sampling, ignore_eos);
+
         context_length += 1;
 
         // Check stop token
@@ -989,12 +1020,8 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
         perf->llm_total_s = duration<float>(t_decode1 - t_start).count();
     }
 
-    std::vector<int> tokens = {
-    244, 1, 28, 2323, 4833, 4968, 3564, 1658, 1919, 4106, 6213, 6131, 6383, 4696, 2591, 2320, 3099, 186, 237, 207, 1640, 1928, 2171, 1415, 2153, 1874, 3080, 5265, 4431, 4432, 5413, 6392, 5870, 5853, 132, 78, 3021, 3102, 801, 1287, 179, 3921, 6385, 6142, 3678, 486, 5589, 6376, 6151, 5937, 987, 1950, 6018, 5199, 5190, 250, 494, 503, 1625, 1631, 1649, 1919, 4348, 4189, 1973, 1757, 5888, 5126, 4390, 4378, 4510, 4511, 4604, 4555, 4554, 5797, 5817, 4509, 4513, 2591, 2294, 5126, 5114, 5107, 893, 1883, 1676, 6145, 6374, 6131, 3223, 54, 27, 0, 2322, 5076, 5049, 5751, 6535, 5095, 4853, 4856, 4589, 1025, 323, 1862, 1937, 4115, 6068, 6040, 5284, 5283, 3006, 0, 27, 54, 54, 135, 135, 27, 108, 2403, 5049, 5022, 4294, 5814, 2912, 2429, 2401, 781, 80, 1133, 4358, 4367, 6067, 5310, 5284, 3097, 81, 0, 135, 2322, 0, 11, 1721, 2000, 6537, 6536, 1919, 234, 240, 938, 1640, 3845, 4357, 2184, 2151, 4152, 2645, 2213, 2934, 18, 2457, 4860, 5589, 5656, 4204, 3719, 3736, 902, 911, 1631, 1647, 492, 501, 4245, 6386, 2590, 2400, 3102, 3825, 0, 81, 54, 135, 108, 2403, 4834, 5049, 5022, 2134, 1433, 2162, 2002, 1730, 6374, 4930, 2591, 2235, 912, 210, 208, 1640, 1658, 2179, 720, 573, 648, 5751, 1621, 1622, 1901, 2144, 2084, 1574, 1544, 1922, 5415, 4510, 4511, 4742, 4481, 4397, 5104, 494, 305, 2405, 191, 3809, 6005, 3853, 1530, 1287, 315, 30, 27, 57, 54, 2322, 108, 1065, 2124, 6423, 4859, 2240, 2208, 3690, 4890, 2673, 6360, 5654, 1775, 748, 97, 4571, 4515, 4855, 5094, 6544, 5565, 5057, 5029, 6487, 1626, 1627, 3814, 899, 112, 28, 248, 494, 3419, 5102, 4856, 5090, 4903, 494, 5614, 4585, 5284, 6004, 736, 494, 1652, 6050, 5505, 6395, 1718, 494, 1871, 1928, 4124, 2098, 1049, 287, 494, 1223, 5739, 5814, 3879, 809, 512, 4139, 6012, 5996, 5267, 3000, 494, 2492, 2243, 3701, 6131, 6143, 5668, 4929, 54, 28, 27, 0, 244, 248, 494, 1223, 6039, 6005, 5996, 3080, 85, 494, 2246, 785, 6131, 6154, 5666, 1232, 548, 4429, 5011, 4939, 4400, 5849, 494, 2033, 1676, 1928, 4043, 1773, 1048, 275, 494, 503, 1436, 3620, 4367, 3717, 809, 503, 4433, 4576, 4554, 5283, 5797, 4246, 494, 2246, 4523, 4508, 4400, 5126, 5117, 2189, 28, 1, 251, 494, 548, 4510, 5003, 4931, 5399, 5129, 989, 503, 1871, 1919, 1937, 1855, 563, 284, 494, 2245, 5090, 2903, 4829, 4480, 503, 1223, 4778, 4562, 4562, 4471, 4462, 4, 251, 494, 1313, 1919, 6293, 4777, 5669, 6133, 503, 494, 1898, 2171, 2180, 2101, 563, 521, 4432, 4758, 4929, 3237, 1503, 747, 9, 27, 2244, 57, 138, 2325, 2406, 108, 250, 494, 494, 2141, 2162, 6544, 4858, 5426, 6143, 503, 494, 2033, 1928, 2180, 1936, 566, 563, 494, 305, 4592, 2903, 2903, 4829, 4399, 494, 2492, 4429, 2752, 3318, 3690, 747, 19, 5, 494, 548, 4510, 5011, 4931, 5129, 5846, 251, 1223, 1676, 1937, 1855, 563, 539, 548, 4510, 5012, 5012, 4427, 5126, 4387, 2, 2675, 488, 487
-    };
-
-    LOG_INFO("LLM inference complete: {} tokens generated", tokens.size());
-    return tokens;
+    LOG_INFO("LLM inference complete: {} tokens generated", out_tokens.size());
+    return out_tokens;
 }
 
 std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, const std::vector<int>& prompt_token,
@@ -1005,17 +1032,13 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
 
     auto t_start = high_resolution_clock::now();
 
-    // Flow decoder constants (matching Python implementation)
-    constexpr int kFlowInputSize = 80;
-    constexpr int kFlowOutputSize = 80;
-    constexpr int kVocabSize = 6561;
-    constexpr int kMaxSeqLen = 2048;
+    constexpr int flow_mel_bins_ = 80;
+    constexpr int k_max_seq_len_2048 = 2048;
     constexpr int kTokenMelRatio = 2;
     constexpr float kInferenceCfgRate = 0.7f;
-    constexpr int kNumSteps = 10;  // Number of diffusion steps
+    constexpr int kNumSteps = 10; // Number of diffusion steps
 
     // ========== STEP 1: Concatenate prompt_token + token ==========
-    // Equivalent Python: token = torch.concat([prompt_token, token], dim=1)
     std::vector<int> concat_token = prompt_token;
     concat_token.insert(concat_token.end(), token.begin(), token.end());
     int concat_token_len = static_cast<int>(concat_token.size());
@@ -1023,7 +1046,6 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     LOG_INFO("token2wav: concat_token_len={}, prompt_token_len={}, token_len={}", concat_token_len, prompt_token.size(), token.size());
 
     // ========== STEP 2: Token embedding lookup ==========
-    // Equivalent Python: token = self.input_embedding(token)
     auto token_emb_tensor = TcimUtil::embedding_lookup(*flow_input_embedding_, concat_token);
     auto token_emb_info = token_emb_tensor.Info().AsContiguous();
     auto token_emb_shape = token_emb_info.Shape();
@@ -1041,7 +1063,7 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     // Shape: [1, seq_len, 80] -> [1, 1024, 80]
     LOG_DEBUG("Prepare padded token embedding for flow_encoder");
     std::vector<TensorFP16> padded_token_emb;
-    padded_token_emb.reserve(kPadLen * kFlowInputSize);
+    padded_token_emb.reserve(kPadLen * flow_mel_bins_);
 
     const auto* token_emb_data = static_cast<const TensorFP16*>(token_emb_tensor.Buffer().Data());
     size_t token_emb_size = token_emb_tensor.MemSize() / sizeof(TensorFP16);
@@ -1051,7 +1073,7 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     }
 
     // Pad with zeros
-    for (int i = 0; i < pad_len * kFlowInputSize; ++i) {
+    for (int i = 0; i < pad_len * flow_mel_bins_; ++i) {
         padded_token_emb.push_back(static_cast<TensorFP16>(0.0f));
     }
 
@@ -1086,21 +1108,17 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     std::vector<float> h_float(h_size);
     for (size_t i = 0; i < h_size; ++i) {
         h_float[i] = static_cast<float>(h_data[i]);
-
-        if (i < 100) {
-            LOG_DEBUG("h_float {}: {}", i, h_float[i]);
-        }
     }
 
     // Reshape to [1, seq, 80] and apply repeat_interleave along dim=1
-    LOG_DEBUG("Reshape to [1, seq, 80] and apply repeat_interleave along dim=1");
-    int h_seq_len = static_cast<int>(h_size) / kFlowInputSize;
+    LOG_TRACE("Reshape to [1, seq, 80] and apply repeat_interleave along dim=1");
+    int h_seq_len = static_cast<int>(h_size) / flow_mel_bins_;
     std::vector<float> h_repeated;
-    h_repeated.reserve(h_seq_len * kTokenMelRatio * kFlowInputSize);
+    h_repeated.reserve(h_seq_len * kTokenMelRatio * flow_mel_bins_);
     for (int i = 0; i < h_seq_len; ++i) {
         for (int r = 0; r < kTokenMelRatio; ++r) {
-            for (int j = 0; j < kFlowInputSize; ++j) {
-                h_repeated.push_back(h_float[i * kFlowInputSize + j]);
+            for (int j = 0; j < flow_mel_bins_; ++j) {
+                h_repeated.push_back(h_float[i * flow_mel_bins_ + j]);
             }
         }
     }
@@ -1144,15 +1162,12 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     // Copy spk embedding to vector
     const auto* spk_data = static_cast<const TensorFP16*>(flow_spk_host_tensor.Buffer().Data());
     size_t spk_size = flow_spk_host_tensor.MemSize() / sizeof(TensorFP16);
-    std::vector<float> spk_emb_float(spk_size);
+    std::vector<float> speaker_embedding(spk_size);
     for (size_t i = 0; i < spk_size; ++i) {
-        spk_emb_float[i] = static_cast<float>(spk_data[i]);
-        LOG_TRACE("cosyvoice3_flow_spk_model_ out spk_emb_float{}: {}", i, spk_emb_float[i]);
+        speaker_embedding[i] = static_cast<float>(spk_data[i]);
     }
 
-    LOG_DEBUG("cosyvoice3_flow_spk_model_ out spk_size: {}", spk_size);
-
-    // 上面验证通过 20260428
+    LOG_TRACE("cosyvoice3_flow_spk_model_ out spk_size: {}", spk_size);
 
     // ========== STEP 4: Prepare flow decoder inputs ==========
     // Calculate mel lengths
@@ -1160,309 +1175,194 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     // ========== STEP 4: Prepare flow decoder inputs ==========
     LOG_DEBUG("========== STEP 4: Prepare flow decoder inputs ==========");
 
-    int prompt_mel_len = static_cast<int>(prompt_feat.size()) / kFlowInputSize;
-    int mel_len2 = concat_token_len * kTokenMelRatio - prompt_mel_len;
-    int total_mel_len = prompt_mel_len + mel_len2;
+    const int mel_len1 = static_cast<int>(prompt_feat.size()) / flow_mel_bins_;
+    const int mel_len2 = concat_token_len * kTokenMelRatio - mel_len1;
+    const int total_mel_len = mel_len1 + mel_len2;
 
-    LOG_INFO("token2wav: prompt_mel_len={}, mel_len2={}, total_mel_len={}", prompt_mel_len, mel_len2, total_mel_len);
+    LOG_INFO("token2wav: prompt_mel_len={}, mel_len2={}, total_mel_len={}", mel_len1, mel_len2, total_mel_len);
 
-    // ---------- conds ----------
-    std::vector<float> conds(kMaxSeqLen * kFlowInputSize, 0.0f);
-    for (int t = 0; t < prompt_mel_len && t < kMaxSeqLen; ++t) {
-        for (int c = 0; c < kFlowInputSize; ++c) {
-            conds[t * kFlowInputSize + c] = prompt_feat[t * kFlowInputSize + c];
-        }
+    std::vector<float> conds(static_cast<size_t>(k_max_seq_len_2048 * flow_mel_bins_), 0.0f);
+    for (int idx = 0; idx < mel_len1 * flow_mel_bins_ && idx < static_cast<int>(prompt_feat.size()); ++idx) {
+        conds[static_cast<size_t>(idx)] = static_cast<float>(prompt_feat[static_cast<size_t>(idx)]);
     }
-
-    // ✅ FIX: transpose → [80, 2048]
-    std::vector<float> conds_trans(kMaxSeqLen * kFlowInputSize, 0.0f);
-    for (int t = 0; t < kMaxSeqLen; ++t) {
-        for (int c = 0; c < kFlowInputSize; ++c) {
-            conds_trans[c * kMaxSeqLen + t] = conds[t * kFlowInputSize + c];
-        }
+    std::vector<float> conds_t = TransposeSeqFeatToFeatSeq(conds, k_max_seq_len_2048, flow_mel_bins_);
+    std::vector<float> mask(static_cast<size_t>(k_max_seq_len_2048), 0.0f);
+    for (int idx = 0; idx < std::min(total_mel_len, k_max_seq_len_2048); ++idx) {
+        mask[static_cast<size_t>(idx)] = 1.0f;
     }
+    std::vector<float> mu = TransposeSeqFeatToFeatSeq(h_repeated, k_max_seq_len_2048, flow_mel_bins_);
 
-    // ---------- mask ----------
-    std::vector<float> mask(kMaxSeqLen, 1.0f);
-    for (int i = total_mel_len; i < kMaxSeqLen; ++i) {
-        mask[i] = 0.0f;
-    }
-
-    // ---------- mu ----------
-    std::vector<float> mu(kMaxSeqLen * kFlowInputSize, 0.0f);
-    int mu_seq_len = std::min(static_cast<int>(h_repeated.size()) / kFlowInputSize, kMaxSeqLen);
-
-    for (int t = 0; t < mu_seq_len; ++t) {
-        for (int c = 0; c < kFlowInputSize; ++c) {
-            mu[t * kFlowInputSize + c] = h_repeated[t * kFlowInputSize + c];
-        }
-    }
-
-    // ✅ FIX: transpose mu → [80, 2048]
-    std::vector<float> mu_trans(kMaxSeqLen * kFlowInputSize, 0.0f);
-    for (int t = 0; t < mu_seq_len; ++t) {
-        for (int c = 0; c < kFlowInputSize; ++c) {
-            mu_trans[c * kMaxSeqLen + t] = mu[t * kFlowInputSize + c];
-        }
-    }
 
     // ========== STEP 5: Diffusion sampling loop ==========
 
     // ---------- noise ----------
-    std::mt19937 rng(42);
-    std::normal_distribution<float> dist(0.0f, 1.0f);
-
-    std::vector<float> x(kMaxSeqLen * kFlowInputSize, 0.0f);
-    for (int i = 0; i < mu_seq_len * kFlowInputSize; ++i) {
-        x[i] = dist(rng);
+    std::mt19937 rng(std::random_device{}());
+    std::normal_distribution<float> normal_dist(0.0f, 1.0f);
+    std::vector<float> x(flow_mel_bins_ * k_max_seq_len_2048, 0.0f);
+    for (auto& value : x) {
+        value = normal_dist(rng);
     }
 
-    // ---------- t_span ----------
-    std::vector<float> t_span(kNumSteps + 1);
-    for (int i = 0; i <= kNumSteps; ++i) {
-        float tt = static_cast<float>(i) / kNumSteps;
-        t_span[i] = 1.0f - std::cos(tt * M_PI * 0.5f);
-    }
+    LOG_DEBUG("x 随机噪声生成完毕, shape : {}x{}, size{}", flow_mel_bins_, k_max_seq_len_2048, x.size());
 
+    const std::vector<float> t_span = BuildCosineTimeSpan(kNumSteps);
     float t = t_span[0];
     float dt = t_span[1] - t_span[0];
 
-    // ---------- CFG buffers ----------
-    std::vector<float> x_in(2 * kFlowInputSize * kMaxSeqLen, 0.0f);
-    std::vector<float> mask_in(2 * kMaxSeqLen, 0.0f);
-    std::vector<float> mu_in(2 * kFlowInputSize * kMaxSeqLen, 0.0f);
-    std::vector<float> cond_in(2 * kFlowInputSize * kMaxSeqLen, 0.0f);
-    std::vector<float> spks_in(2 * kFlowInputSize, 0.0f);
+    std::vector<float> x_in(2 * flow_mel_bins_ * k_max_seq_len_2048, 0.0f);
+    std::vector<float> mask_in(2 * k_max_seq_len_2048, 0.0f);
+    std::vector<float> mu_in(static_cast<size_t>(2 * flow_mel_bins_ * k_max_seq_len_2048), 0.0f);
     std::vector<float> t_in(2, 0.0f);
+    std::vector<float> cond_in(2 * flow_mel_bins_ * k_max_seq_len_2048, 0.0f);
+    std::vector<float> spks_in(2 * flow_mel_bins_, 0.0f);
 
-    std::vector<float> sol;  // Store intermediate results
 
-    for (int step = 1; step <= kNumSteps; ++step) {
-
-        // ---------- 清零 ----------
-        std::fill(x_in.begin(), x_in.end(), 0.0f);
-        std::fill(mask_in.begin(), mask_in.end(), 0.0f);
+    for (int step = 1; step < static_cast<int>(t_span.size()); ++step) {
+        std::copy(x.begin(), x.end(), x_in.begin());
+        std::copy(x.begin(), x.end(), x_in.begin() + x.size());
+        std::copy(mask.begin(), mask.end(), mask_in.begin());
+        std::copy(mask.begin(), mask.end(), mask_in.begin() + mask.size());
         std::fill(mu_in.begin(), mu_in.end(), 0.0f);
+        std::copy(mu.begin(), mu.end(), mu_in.begin());
         std::fill(cond_in.begin(), cond_in.end(), 0.0f);
+        std::copy(conds_t.begin(), conds_t.end(), cond_in.begin());
         std::fill(spks_in.begin(), spks_in.end(), 0.0f);
+        std::copy(speaker_embedding.begin(), speaker_embedding.begin() + std::min(speaker_embedding.size(), spks_in.size()),
+                  spks_in.begin());
+        std::fill(t_in.begin(), t_in.end(), t);
 
-        // ---------- x ----------
-        for (int i = 0; i < mu_seq_len * kFlowInputSize; ++i) {
-            x_in[i] = x[i];
-            x_in[i + kFlowInputSize * kMaxSeqLen] = x[i];
-        }
+        const auto x_tensor = TcimUtil::float_to_tensor_vec(x_in);
+        const auto mask_tensor = TcimUtil::float_to_tensor_vec(mask_in);
+        const auto mu_tensor = TcimUtil::float_to_tensor_vec(mu_in);
+        const auto t_tensor = TcimUtil::float_to_tensor_vec(t_in);
+        const auto spks_tensor = TcimUtil::float_to_tensor_vec(spks_in);
+        const auto cond_tensor = TcimUtil::float_to_tensor_vec(cond_in);
 
-        // ---------- mask ----------
-        for (int i = 0; i < kMaxSeqLen; ++i) {
-            mask_in[i] = mask[i];
-            mask_in[i + kMaxSeqLen] = mask[i];
-        }
+        const auto x_name = cosyvoice3_flow_decoder_model_->GetInputName(0);
+        const auto mask_name = cosyvoice3_flow_decoder_model_->GetInputName(1);
+        const auto mu_name = cosyvoice3_flow_decoder_model_->GetInputName(2);
+        const auto t_name = cosyvoice3_flow_decoder_model_->GetInputName(3);
+        const auto spks_name = cosyvoice3_flow_decoder_model_->GetInputName(4);
+        const auto cond_name = cosyvoice3_flow_decoder_model_->GetInputName(5);
 
-        // ---------- mu (only batch0) ----------
-        for (int i = 0; i < kFlowInputSize * kMaxSeqLen; ++i) {
-            mu_in[i] = mu_trans[i];
-        }
+        CHECK_TCIM_STATUS(
+            flow_decoder_input_maps_.at(x_name).Buffer().CopyFromHost(x_tensor.data(), flow_decoder_input_maps_.at(x_name).MemSize()));
+        CHECK_TCIM_STATUS(flow_decoder_input_maps_.at(mask_name).Buffer().CopyFromHost(mask_tensor.data(),
+                                                                                       flow_decoder_input_maps_.at(mask_name).MemSize()));
+        CHECK_TCIM_STATUS(
+            flow_decoder_input_maps_.at(mu_name).Buffer().CopyFromHost(mu_tensor.data(), flow_decoder_input_maps_.at(mu_name).MemSize()));
+        CHECK_TCIM_STATUS(
+            flow_decoder_input_maps_.at(t_name).Buffer().CopyFromHost(t_tensor.data(), flow_decoder_input_maps_.at(t_name).MemSize()));
+        CHECK_TCIM_STATUS(flow_decoder_input_maps_.at(spks_name).Buffer().CopyFromHost(spks_tensor.data(),
+                                                                                       flow_decoder_input_maps_.at(spks_name).MemSize()));
+        CHECK_TCIM_STATUS(flow_decoder_input_maps_.at(cond_name).Buffer().CopyFromHost(cond_tensor.data(),
+                                                                                       flow_decoder_input_maps_.at(cond_name).MemSize()));
 
-        // ---------- cond ----------
-        for (int i = 0; i < kFlowInputSize * kMaxSeqLen; ++i) {
-            cond_in[i] = conds_trans[i];
-        }
-
-        // ---------- spk ----------
-        for (int i = 0; i < kFlowInputSize; ++i) {
-            spks_in[i] = spk_emb_float[i];
-        }
-
-        // ---------- t ----------
-        t_in[0] = t;
-        t_in[1] = t;
-
-        // ---------- run ----------
-        CHECK_TCIM_STATUS(TcimUtil::set_module_input(cosyvoice3_flow_decoder_model_, flow_input_names_[0], x_in.data()));
-        CHECK_TCIM_STATUS(TcimUtil::set_module_input(cosyvoice3_flow_decoder_model_, flow_input_names_[1], mask_in.data()));
-        CHECK_TCIM_STATUS(TcimUtil::set_module_input(cosyvoice3_flow_decoder_model_, flow_input_names_[2], mu_in.data()));
-        CHECK_TCIM_STATUS(TcimUtil::set_module_input(cosyvoice3_flow_decoder_model_, flow_input_names_[3], t_in.data()));
-        CHECK_TCIM_STATUS(TcimUtil::set_module_input(cosyvoice3_flow_decoder_model_, flow_input_names_[4], spks_in.data()));
-        CHECK_TCIM_STATUS(TcimUtil::set_module_input(cosyvoice3_flow_decoder_model_, flow_input_names_[5], cond_in.data()));
-
+        CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->SetInput(x_name, flow_decoder_input_maps_.at(x_name)));
+        CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->SetInput(mask_name, flow_decoder_input_maps_.at(mask_name)));
+        CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->SetInput(mu_name, flow_decoder_input_maps_.at(mu_name)));
+        CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->SetInput(t_name, flow_decoder_input_maps_.at(t_name)));
+        CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->SetInput(spks_name, flow_decoder_input_maps_.at(spks_name)));
+        CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->SetInput(cond_name, flow_decoder_input_maps_.at(cond_name)));
         CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->Run());
         CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->Sync());
 
-        auto out = cosyvoice3_flow_decoder_model_->GetOutput(flow_output_names_[0]);
-        auto info = out.Info().AsContiguous();
-
-        tcim::Tensor host = tcim::Tensor::CreateHostTensor(info);
-        out.CastTo(host);
-
-        const auto* dphi_dt_data = static_cast<const TensorFP16*>(host.Buffer().Data());
-        int half = (host.MemSize() / sizeof(TensorFP16)) / 2;
-
-        // ---------- CFG ----------
-        for (int i = 0; i < half; ++i) {
-            if (i < 100) {
-                LOG_DEBUG("flow decoder output: {}: {}", i, static_cast<float>(dphi_dt_data[i]));
-            }
-            float uncond = static_cast<float>(dphi_dt_data[i]);
-            float cond = static_cast<float>(dphi_dt_data[i + half]);
-            float dphi = (1.0f + kInferenceCfgRate) * uncond - kInferenceCfgRate * cond;
-            x[i] += dt * dphi;
+        auto dphi_dt_output = cosyvoice3_flow_decoder_model_->GetDevOutput(cosyvoice3_flow_decoder_model_->GetOutputName(0)).ToHost(true);
+        const auto dphi_shape = cosyvoice3_flow_decoder_model_->GetOutputInfo(cosyvoice3_flow_decoder_model_->GetOutputName(0)).Shape();
+        std::vector<float> dphi_dt_all = TcimUtil::tensor_to_float_vec(dphi_dt_output.Buffer().Data(), TcimUtil::numel(dphi_shape));
+        const size_t batch_stride = static_cast<size_t>(flow_mel_bins_ * k_max_seq_len_2048);
+        for (size_t idx = 0; idx < batch_stride; ++idx) {
+            const float dphi = dphi_dt_all[idx];
+            const float cfg_dphi = dphi_dt_all[idx + batch_stride];
+            x[idx] += dt * ((1.0f + kInferenceCfgRate) * dphi - kInferenceCfgRate * cfg_dphi);
         }
-
-        // ✅ FIX: 时间推进（不要直接 t_span[step]）
         t += dt;
-
-        if (step < kNumSteps) {
-            dt = t_span[step + 1] - t;
-        }
-
-        sol = x;
-    }
-
-    // Extract the final feature
-    // Equivalent Python: feat = sol[-1].float()
-    //                    feat = feat[:, :, mel_len1 : mel_len1 + mel_len2]
-    std::vector<float> feat;
-    feat.reserve(mel_len2 * kFlowInputSize);
-    for (int i = prompt_mel_len; i < prompt_mel_len + mel_len2; ++i) {
-        for (int j = 0; j < kFlowInputSize; ++j) {
-            int idx = i * kFlowInputSize + j;
-            if (idx < static_cast<int>(sol.size())) {
-                feat.push_back(sol[idx]);
-            }
+        if (step < static_cast<int>(t_span.size()) - 1) {
+            dt = t_span[static_cast<size_t>(step + 1)] - t;
         }
     }
 
-    LOG_INFO("token2wav: feat size = {}", feat.size());
+    std::vector<float> mel_spectrogram(static_cast<size_t>(flow_mel_bins_ * mel_len2), 0.0f);
+    for (int mel_idx = 0; mel_idx < flow_mel_bins_; ++mel_idx) {
+        const size_t src_offset = static_cast<size_t>(mel_idx * k_max_seq_len_2048 + mel_len1);
+        const size_t dst_offset = static_cast<size_t>(mel_idx * mel_len2);
+        std::copy(x.begin() + src_offset, x.begin() + src_offset + mel_len2, mel_spectrogram.begin() + dst_offset);
+    }
+
+    LOG_INFO("token2wav: mel_spectrogram feat size = {}", mel_spectrogram.size());
 
     // ========== STEP 6: HiFT vocoder ==========
-    // Prepare mel spectrogram for hift_part1
-    // Shape: [1, 80, 1024]
-    constexpr int kHiftSeqLen = 1024;
-    std::vector<float> speech_feat(kHiftSeqLen * kFlowInputSize, 0.0f);
-    int feat_len = static_cast<int>(feat.size()) / kFlowInputSize;
-    for (int i = 0; i < feat_len && i < kHiftSeqLen; ++i) {
-        for (int j = 0; j < kFlowInputSize; ++j) {
-            speech_feat[i * kFlowInputSize + j] = feat[i * kFlowInputSize + j];
-        }
+    int mel_bins_ = 80;
+    int padded_mel_frames_ = 1024;
+    int waveform_hop_ = 480;
+
+    const int mel_len2_voc = static_cast<int>(mel_spectrogram.size() / mel_bins_);
+    std::vector<float> speech_feat = mel_spectrogram;
+    int mel_frames_for_model = mel_len2_voc;
+
+    if (speed != 1.0f && mel_len2_voc > 0) {
+        mel_frames_for_model = std::max(1, static_cast<int>(mel_len2_voc / speed));
+        speech_feat = ResizeMelLinear(speech_feat, mel_bins_, mel_len2_voc, mel_frames_for_model);
     }
 
-    // Run hift_part1
-    // Input shape: [1, 80, 1024], Output shape: [1, 491536]
-    LOG_DEBUG("Run hift_part1");
-    CHECK_TCIM_STATUS(TcimUtil::set_module_input(cosyvoice3_hift_part1_model_, hift_part1_input_names_[0], speech_feat.data()));
+    std::vector<float> padded_speech_feat(static_cast<size_t>(mel_bins_ * padded_mel_frames_), 0.0f);
+    const int copied_frames = std::min(mel_frames_for_model, padded_mel_frames_);
+    for (int mel_idx = 0; mel_idx < mel_bins_; ++mel_idx) {
+        const size_t src_offset = static_cast<size_t>(mel_idx * mel_frames_for_model);
+        const size_t dst_offset = static_cast<size_t>(mel_idx * padded_mel_frames_);
+        std::copy(speech_feat.begin() + src_offset, speech_feat.begin() + src_offset + copied_frames,
+                  padded_speech_feat.begin() + dst_offset);
+    }
 
+    const auto hift_part1_input_name = cosyvoice3_hift_part1_model_->GetInputName(0);
+    auto speech_feat_tensor = TcimUtil::float_to_tensor_vec(padded_speech_feat);
+    CHECK_TCIM_STATUS(hift_part1_input_maps_.at(hift_part1_input_name).Buffer().CopyFromHost(
+        speech_feat_tensor.data(), hift_part1_input_maps_.at(hift_part1_input_name).MemSize()));
+    CHECK_TCIM_STATUS(cosyvoice3_hift_part1_model_->SetInput(hift_part1_input_name, hift_part1_input_maps_.at(hift_part1_input_name)));
     CHECK_TCIM_STATUS(cosyvoice3_hift_part1_model_->Run());
     CHECK_TCIM_STATUS(cosyvoice3_hift_part1_model_->Sync());
 
-    // Get output from hift_part1
-    auto hift_part1_output = cosyvoice3_hift_part1_model_->GetOutput(hift_part1_output_names_[0]);
-    auto hift_part1_output_info = hift_part1_output.Info().AsContiguous();
+    auto hift_part1_output = cosyvoice3_hift_part1_model_->GetDevOutput(cosyvoice3_hift_part1_model_->GetOutputName(0)).ToHost(true);
+    const auto hift_part1_output_shape = cosyvoice3_hift_part1_model_->GetOutputInfo(cosyvoice3_hift_part1_model_->GetOutputName(0)).Shape();
+    std::vector<float> stft_input = TcimUtil::tensor_to_float_vec(hift_part1_output.Buffer().Data(), TcimUtil::numel(hift_part1_output_shape));
 
-    // Convert to host tensor
-    tcim::Tensor hift_part1_host_tensor = tcim::Tensor::CreateHostTensor(hift_part1_output_info);
-    hift_part1_output.CastTo(hift_part1_host_tensor);
-
-    // Prepare STFT input for hift_part2
-    // Shape: [1, 122881, 9, 2]
-    // This is a complex STFT representation
-    const auto* hift_part1_data = static_cast<const TensorFP16*>(hift_part1_host_tensor.Buffer().Data());
-    size_t hift_part1_size = hift_part1_host_tensor.MemSize() / sizeof(TensorFP16);
-
-    std::vector<float> hift_part1_float(hift_part1_size);
-    for (size_t i = 0; i < hift_part1_size; ++i) {
-        hift_part1_float[i] = static_cast<float>(hift_part1_data[i]);
+    auto stft_frames = librosa::Feature::stft(stft_input, 16, 4, "hann", false, "reflect");
+    const auto hift_part2_input_name = cosyvoice3_hift_part2_model_->GetInputName(0);
+    const auto hift_part2_input_shape = cosyvoice3_hift_part2_model_->GetInputInfo(hift_part2_input_name).Shape();
+    const int target_frames = static_cast<int>(hift_part2_input_shape[1]);
+    const int target_bins = static_cast<int>(hift_part2_input_shape[2]);
+    std::vector<float> stft_flat(static_cast<size_t>(target_frames * target_bins * 2), 0.0f);
+    const int copied_stft_frames = std::min(target_frames, static_cast<int>(stft_frames.size()));
+    for (int frame_idx = 0; frame_idx < copied_stft_frames; ++frame_idx) {
+        const int copied_bins = std::min(target_bins, static_cast<int>(stft_frames[frame_idx].size()));
+        for (int bin_idx = 0; bin_idx < copied_bins; ++bin_idx) {
+            const size_t offset = static_cast<size_t>((frame_idx * target_bins + bin_idx) * 2);
+            stft_flat[offset] = stft_frames[frame_idx][bin_idx].real();
+            stft_flat[offset + 1] = stft_frames[frame_idx][bin_idx].imag();
+        }
     }
 
-    // ========== Compute STFT for hift_part2 input ==========
-    // Python equivalent:
-    //   stft_opt = torch.stft(stft_ipt, 16, 4, 16, window=hann_window,
-    //                         onesided=True, center=False, return_complex=False)
-    //   # Output shape: [1, 122881, 9, 2]
-
-    constexpr int kNfft = 16;
-    constexpr int kHopLength = 4;
-
-    LOG_DEBUG("Compute STFT for hift_part2 input");
-
-    // Create STFT cache (sin/cos tables for 16-point FFT)
-    hlie_audio_cache stft_cache;
-    stft_cache.fill_sin_cos_table(kNfft);
-
-    // Create 16-point Hann window
-    std::vector<float> hann_window(kNfft);
-    for (int i = 0; i < kNfft; i++) {
-        hann_window[i] = 0.5f * (1.0f - std::cos(2.0f * M_PI * i / kNfft));
-    }
-
-    // Calculate output dimensions
-    int input_len = static_cast<int>(hift_part1_size);  // 491536
-    int n_frames = (input_len - kNfft) / kHopLength + 1;  // 122881
-    int n_freq_bins = kNfft / 2 + 1;  // 9
-    size_t stft_output_size = (size_t)n_frames * n_freq_bins * 2;  // 2211858
-
-    // Prepare output buffer
-    std::vector<float> stft_output(stft_output_size);
-
-    // Call STFT
-    size_t written = STFTUtil::hlie_audio_stft(
-        stft_cache,                    // cache with sin/cos tables
-        hift_part1_float.data(),       // input signal [491536]
-        input_len,                     // 491536
-        kNfft,                         // 16
-        kHopLength,                    // 4
-        hann_window.data(),            // 16-point Hann window
-        kNfft,                         // window_len = 16
-        stft_output.data(),            // output buffer
-        stft_output.size()             // buffer capacity
-    );
-
-    if (written == 0) {
-        LOG_ERROR("STFT computation failed");
-        return {};
-    }
-
-
-    // Run hift_part2
-    // Inputs: [1, 122881, 9, 2] and [1, 80, 1024]
-    // Output: [1, 491520]
-    LOG_DEBUG("Run hift_part2, stft_output.size: {}", stft_output.size());
-    //  Todo: input shape 不对，hift_part1_float 的shape还是 419536
-    CHECK_TCIM_STATUS(TcimUtil::set_module_input(cosyvoice3_hift_part2_model_, hift_part2_input_names_[0], stft_output.data()));
-    CHECK_TCIM_STATUS(TcimUtil::set_module_input(cosyvoice3_hift_part2_model_, hift_part2_input_names_[1], speech_feat.data()));
-
+    auto stft_tensor = TcimUtil::float_to_tensor_vec(stft_flat);
+    CHECK_TCIM_STATUS(hift_part2_input_maps_.at(hift_part2_input_name).Buffer().CopyFromHost(
+        stft_tensor.data(), hift_part2_input_maps_.at(hift_part2_input_name).MemSize()));
+    CHECK_TCIM_STATUS(cosyvoice3_hift_part2_model_->SetInput(hift_part2_input_name, hift_part2_input_maps_.at(hift_part2_input_name)));
     CHECK_TCIM_STATUS(cosyvoice3_hift_part2_model_->Run());
     CHECK_TCIM_STATUS(cosyvoice3_hift_part2_model_->Sync());
 
-    // Get output from hift_part2
-    auto hift_part2_output = cosyvoice3_hift_part2_model_->GetOutput(hift_part2_output_names_[0]);
-    auto hift_part2_output_info = hift_part2_output.Info().AsContiguous();
+    auto hift_part2_output = cosyvoice3_hift_part2_model_->GetDevOutput(cosyvoice3_hift_part2_model_->GetOutputName(0)).ToHost(true);
+    const auto hift_part2_output_shape = cosyvoice3_hift_part2_model_->GetOutputInfo(cosyvoice3_hift_part2_model_->GetOutputName(0)).Shape();
+    std::vector<float> utterance_audio = TcimUtil::tensor_to_float_vec(hift_part2_output.Buffer().Data(), TcimUtil::numel(hift_part2_output_shape));
 
-    // Convert to host tensor
-    tcim::Tensor hift_part2_host_tensor = tcim::Tensor::CreateHostTensor(hift_part2_output_info);
-    hift_part2_output.CastTo(hift_part2_host_tensor);
-
-    // Get final waveform
-    LOG_DEBUG("Get final waveform");
-    const auto* waveform_data = static_cast<const TensorFP16*>(hift_part2_host_tensor.Buffer().Data());
-    size_t waveform_size = hift_part2_host_tensor.MemSize() / sizeof(TensorFP16);
-
-    std::vector<float> waveform(waveform_size);
-    for (size_t i = 0; i < waveform_size; ++i) {
-        waveform[i] = static_cast<float>(waveform_data[i]);
-    }
-
-    // Truncate to expected length
-    // Equivalent Python: tts_speech = tts_speech[:, : 480 * mel_len2]
-    int expected_len = 480 * mel_len2;
-    if (waveform.size() > static_cast<size_t>(expected_len)) {
-        waveform.resize(expected_len);
+    const size_t expected_samples = static_cast<size_t>(std::max(mel_len2_voc, 0) * waveform_hop_);
+    if (utterance_audio.size() > expected_samples) {
+        utterance_audio.resize(expected_samples);
     }
 
     auto t_end = high_resolution_clock::now();
     auto duration = duration_cast<milliseconds>(t_end - t_start);
     LOG_INFO("token2wav completed in {} ms", duration.count());
-
-    return waveform;
+    
+    return utterance_audio;
 }
 
 HLIE_NAMESPACE_END

@@ -36,6 +36,7 @@ xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software
 
 uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-linux_${ARCH}.tar.gz"
 libsamplerate_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/libsamplerate-linux_${ARCH}.tar.gz"
+eigen3_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/eigen3.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {
@@ -88,6 +89,16 @@ deploy_libsamplerate() {
     rm libsamplerate.tar.gz
 }
 
+deploy_eigen3() {
+  local eigen3_url=$1
+  mkdir -p third_party/eigen3
+  rm -rf third_party/eigen3/*
+
+  download_file "$eigen3_url" "eigen3.tar.gz"
+  tar -xzf eigen3.tar.gz -C third_party/eigen3 --strip-components=1
+  rm eigen3.tar.gz
+}
+
 deploy_whisper_cpp_sdk() {
     local whisper_cpp_sdk_url=$1
     mkdir -p third_party/whisper.cpp
@@ -138,6 +149,7 @@ main() {
     deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"
     deploy_uwebsockets "$uwebsockets_url"
     deploy_libsamplerate "$libsamplerate_url"
+    deploy_eigen3 "$eigen3_url"
 
     echo "Deployed Dadao SDK and System SDK for $ARCH."
 }

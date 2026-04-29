@@ -7,7 +7,7 @@
 #include "tcim/tcim_runtime.h"
 #include "hlie_base/hlie_tcim_util.h"
 
-HLIE_NAMESPACE_BEGIN
+HLIE_NAMESPACE_BEGIN class HLIESampler;
 
 class HLIETokenizer;
 
@@ -308,6 +308,10 @@ private:
     std::map<std::string, tcim::Tensor> llm_qwen2_prefill_input_map_;
     std::map<std::string, tcim::Tensor> llm_qwen2_decode_input_map_;
 
+    std::map<std::string, tcim::Tensor> flow_decoder_input_maps_;
+    std::map<std::string, tcim::Tensor> hift_part1_input_maps_;
+    std::map<std::string, tcim::Tensor> hift_part2_input_maps_;
+
     std::map<std::string, tcim::Tensor> cosyvoice3_speech_tokenizer_input_map_;
 
     // Model dimension info
@@ -318,6 +322,8 @@ private:
 
     // Stop token IDs (speech_token_size + 0..199)
     std::vector<int> stop_token_ids_;
+
+    std::shared_ptr<HLIESampler> hlie_sampler_;
 };
 
 

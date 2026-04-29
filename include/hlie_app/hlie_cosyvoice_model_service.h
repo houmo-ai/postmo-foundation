@@ -102,7 +102,7 @@ public:
 
     std::vector<float> handle_stream(const WhisperStreamRequest& request);
 
-    void handle_transcriptions(const httplib::Request& req, httplib::Response& res);
+    void handle_speech(const httplib::Request& req, httplib::Response& res);
 
     [[nodiscard]] std::string get_model_key() const {
         return model_key_;
@@ -124,10 +124,10 @@ public:
                  const std::vector<float>& llm_embedding, const std::string& uuid);
 
 private:
-    std::future<CosyVoiceResult> transcription_async(const CosyVoiceRequest& request) const;
-    CosyVoiceResult transcription_sync(const CosyVoiceRequest& request) const;
+    std::future<CosyVoiceResult> speech_async(const CosyVoiceRequest& request) const;
+    CosyVoiceResult speech_sync(const CosyVoiceRequest& request) const;
 
-    std::vector<float> transcription(const CosyVoiceRequest& request);
+    std::vector<float> speech(const CosyVoiceRequest& request);
 
     /**
      * Normalize text and optionally split it into synthesis segments.
