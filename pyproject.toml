@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hliepython"
-version = "0.1.1"
+version = "3.0.0"
 description = "A multi-process multi-instance OpenAI API server"
 authors = [
-    {name = "Your Name", email = "your.email@example.com"},
+    {name = "wenhao.yang", email = "wenhao.yang@houmo.ai"},
 ]
 dependencies = [
     "fastapi",

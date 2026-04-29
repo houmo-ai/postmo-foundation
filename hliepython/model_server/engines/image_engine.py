@@ -10,6 +10,10 @@ from PIL import Image
 
 from typing import Dict, Any
 from hliepython.model_server.engines.base_engine import InferenceEngine
+from hliepython.model_server.engines.utils import (
+    merge_additional_config,
+    normalize_vllm_engine_args,
+)
 
 try:
     from vllm import AsyncLLMEngine, SamplingParams
@@ -28,22 +32,26 @@ class ImageEngine(InferenceEngine):
             raise RuntimeError("vLLM not available")
 
         try:
-            # 获取配置参数（vLLM参数优先从 vllm_extra_config 读取）
-            vllm_extra_config = self.config.get("vllm_extra_config", self.config.get("extra_config", {}))
-            max_model_len = vllm_extra_config.get("max_model_len", 2048)
-            gpu_memory_utilization = vllm_extra_config.get("gpu_memory_utilization", 0.9)
-            tensor_parallel_size = vllm_extra_config.get("tensor_parallel_size", 1)
+            # vLLM 参数从 vllm_config 透传到底层 AsyncEngineArgs。
+            vllm_config = self.config.get(
+                "vllm_config",
+                self.config.get("vllm_extra_config", {}),
+            )
+            vllm_engine_args = normalize_vllm_engine_args(vllm_config)
+            user_additional_config = vllm_engine_args.pop("additional_config", None)
+            additional_config = merge_additional_config(
+                dict(self.additional_config),
+                user_additional_config,
+            )
+            additional_config.setdefault("device_ids", self.device_ids)
 
             # 配置 vLLM 引擎参数（适用于多模态模型）
-            engine_args = AsyncEngineArgs(
-                model=self.model_path,
-                tensor_parallel_size=tensor_parallel_size,
-                max_model_len=max_model_len,
-                max_num_seqs=16,
-                max_num_batched_tokens=1024,
-                gpu_memory_utilization=gpu_memory_utilization,
-                enforce_eager=True,
-            )
+            engine_arg_kwargs = {
+                **vllm_engine_args,
+                "model": self.model_path,
+                "additional_config": additional_config,
+            }
+            engine_args = AsyncEngineArgs(**engine_arg_kwargs)
 
             self.engine = AsyncLLMEngine.from_engine_args(engine_args)
             logger.info(f"ImageEngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")

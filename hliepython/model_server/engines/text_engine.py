@@ -17,7 +17,11 @@ from typing import Dict, Any
 
 from qwen_vl_utils import process_vision_info
 
-from hliepython.model_server.engines.utils import should_include_usage
+from hliepython.model_server.engines.utils import (
+    merge_additional_config,
+    normalize_vllm_engine_args,
+    should_include_usage,
+)
 from hliepython.model_server.engines.base_engine import InferenceEngine
 from hliepython.model_server.engines.protocol.chat_completions import (
     ChatCompletionRequest,
@@ -51,11 +55,15 @@ class TextEngine(InferenceEngine):
     def __init__(self, instance_config: Dict[str, Any]):
         
         self.model_name = instance_config.get("model_name", "")
-        self.device_ids = instance_config.get("device_ids", [])
         self.model_path = instance_config.get("model_path", "")
         self.model_type = instance_config.get("model_type", "text")
-        self.vllm_extra_config = instance_config.get("vllm_extra_config", {})
-        self.extra_config = instance_config.get("extra_config", {})
+        self.vllm_config = instance_config.get(
+            "vllm_config",
+            instance_config.get("vllm_extra_config", {}),
+        )
+        self.additional_config = instance_config.get(
+            "additional_config", {}
+        ) or {}
 
         self.tokenizer = None
 
@@ -89,23 +97,27 @@ class TextEngine(InferenceEngine):
             raise RuntimeError("vLLM not available")
 
         try:
-            # 获取配置参数（vLLM参数优先从 vllm_extra_config 读取）
-            max_model_len = self.vllm_extra_config.get("max_model_len", 2048)
-            gpu_memory_utilization = self.vllm_extra_config.get("gpu_memory_utilization", 0.5)
-            tensor_parallel_size = self.vllm_extra_config.get("tensor_parallel_size", 1)
+            vllm_engine_args = normalize_vllm_engine_args(self.vllm_config)
+            additional_config = dict(self.additional_config)
+            vit_model_name = additional_config.pop("vit_model_name", None)
 
-            if self.extra_config.get("vit_model_name"):
-                vit_model_name = os.path.join(
-                    self.model_path, self.extra_config["vit_model_name"]
+            if vit_model_name:
+                additional_config.update(
+                    {
+                        "visual_model_path": os.path.join(
+                            self.model_path, vit_model_name
+                        ),
+                        "visual_model_w": 448,
+                        "visual_model_h": 448,
+                    }
                 )
 
-            additional_config = {
-                "visual_model_path": vit_model_name,
-                "visual_model_w": 448,
-                "visual_model_h": 448,
-            } if self.extra_config.get("vit_model_name") else {}
-
-            additional_config["device_ids"] = self.device_ids
+            additional_config.setdefault("device_ids", self.device_ids)
+            user_additional_config = vllm_engine_args.pop("additional_config", None)
+            additional_config = merge_additional_config(
+                additional_config,
+                user_additional_config,
+            )
 
             parse_gguf(self.model_path)
 
@@ -115,20 +127,21 @@ class TextEngine(InferenceEngine):
             )
 
             # 配置 vLLM 引擎参数
-            engine_args = AsyncEngineArgs(
-                model=self.model_path,
-                max_num_seqs=1,     # 限制最大并发序列数
-                max_model_len=max_model_len,
-                gpu_memory_utilization=gpu_memory_utilization,
-                limit_mm_per_prompt={"image": 10},
-                tensor_parallel_size=tensor_parallel_size,
-                disable_log_stats=True,
-                enforce_eager=True,     # 禁用 CUDA 图以节省内存
-                additional_config=additional_config
-            )
+            engine_arg_kwargs = {
+                **vllm_engine_args,
+                "model": self.model_path,
+                "additional_config": additional_config,
+            }
+
+            logger.info(f"vllm 启动参数: {engine_arg_kwargs}")
+
+            engine_args = AsyncEngineArgs(**engine_arg_kwargs)
 
             # 创建异步引擎
             self.engine = AsyncLLMEngine.from_engine_args(engine_args)
+            logger.info(f"vllm 实际启动参数：{self.engine.vllm_config}")
+            logger.info(f"模型配置：{self.engine.vllm_config.model_config}")
+            logger.info(f"并行配置：{self.engine.vllm_config.parallel_config}")
             logger.info(f"TextEngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
 
         except Exception as e:
@@ -209,7 +222,8 @@ class TextEngine(InferenceEngine):
             repetition_penalty=request.repetition_penalty,
 
             # 停止条件
-            max_tokens=request.max_completion_tokens,
+            max_tokens=request.max_completion_tokens if request.max_completion_tokens \
+                is not None else (request.max_tokens if request.max_tokens is not None else 2048),
             min_tokens=request.min_tokens if request.min_tokens is not None else 0,
             stop=request.stop,
             stop_token_ids=request.stop_token_ids,
@@ -801,3 +815,34 @@ class TextEngine(InferenceEngine):
                 )
 
         return ChatCompletionLogProbs(content=logprobs_content)
+
+    def _get_top_logprobs(
+        self,
+        logprobs: dict[int, Logprob],
+        top_logprobs: int | None,
+        should_return_as_token_id: bool,
+    ) -> list[ChatCompletionLogProb]:
+        results: list[ChatCompletionLogProb] = []
+
+        logger.info(f"logprobs: {logprobs}")
+
+        for index, (token_id, logprob_obj) in enumerate(logprobs.items()):
+            # 是否需要截断 top_logprobs
+            if top_logprobs is not None:
+                if top_logprobs == -1:
+                    pass  # -1 表示返回全部
+                elif index >= top_logprobs:
+                    break
+
+            # 解码 token（或直接返回 token_id）
+            token = logprob_obj.decoded_token
+
+            results.append(
+                ChatCompletionLogProb(
+                    token=token,
+                    logprob=max(logprob_obj.logprob, -9999.0),
+                    bytes=list(token.encode("utf-8", errors="replace")),
+                )
+            )
+
+        return results

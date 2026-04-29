@@ -1679,8 +1679,15 @@ class TTSEngine(InferenceEngine):
     """文本到语音推理引擎（集成 CosyVoice3 demo）。"""
 
     def __init__(self, instance_config: Dict[str, Any]):
-        self.extra_config = instance_config.get("extra_config", {}) or {}
-        self.device_ids = instance_config.get("device_ids", [])
+        self.additional_config = instance_config.get(
+            "additional_config",
+            instance_config.get("extra_config", {}),
+        ) or {}
+        self.extra_config = self.additional_config
+        self.device_ids = instance_config.get(
+            "device_ids",
+            self.additional_config.get("device_ids", []),
+        )
         self._model_lock = threading.Lock()
         self._demo_module: ModuleType | None = None
         self.tts_model: Any = None

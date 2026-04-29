@@ -306,7 +306,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
     server_config: dict[str, Any] | None = Field(
         default=None,
         description=(
-            "这里用于配置服务端的启动参数，例如启动的设备ID、端口、vllm_extra_config等。"
+            "这里用于配置服务端的启动参数，例如启动的设备ID、端口、vllm_config等。"
         ),
     )
     # --8<-- [end:houmo-chat-completion-params]

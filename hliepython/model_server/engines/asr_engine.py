@@ -19,6 +19,10 @@ from typing import Callable, Literal, Optional, TypeVar, Union, cast
 from collections.abc import AsyncGenerator
 
 from hliepython.model_server.engines.base_engine import InferenceEngine
+from hliepython.model_server.engines.utils import (
+    merge_additional_config,
+    normalize_vllm_engine_args,
+)
 
 from collections.abc import Mapping, Sequence
 from vllm.multimodal.audio import get_audio_duration, split_audio
@@ -99,7 +103,10 @@ class ASREngine(InferenceEngine):
     """ASR 推理引擎（对齐 OpenAI /v1/audio/transcriptions）。"""
 
     def __init__(self, instance_config: Dict[str, Any]):
-        self.vllm_extra_config = instance_config.get("vllm_extra_config", {})
+        self.vllm_config = instance_config.get(
+            "vllm_config",
+            instance_config.get("vllm_extra_config", {}),
+        )
         super().__init__(instance_config)
 
         self.max_audio_clip_s = MAX_AUDIO_CLIP_SECONDS
@@ -115,17 +122,22 @@ class ASREngine(InferenceEngine):
             raise RuntimeError("vLLM not available")
 
         try:
-            additional_config = {}
-            additional_config["device_ids"] = self.device_ids
+            vllm_engine_args = normalize_vllm_engine_args(self.vllm_config)
+            user_additional_config = vllm_engine_args.pop("additional_config", None)
+            additional_config = merge_additional_config(
+                dict(self.additional_config),
+                user_additional_config,
+            )
+            additional_config.setdefault("device_ids", self.device_ids)
 
             parse_gguf(self.model_path)
 
-            engine_args = AsyncEngineArgs(
-                model=self.model_path,
-                trust_remote_code=True,
-                limit_mm_per_prompt={"audio": 1},
-                additional_config=additional_config,
-            )
+            engine_arg_kwargs = {
+                **vllm_engine_args,
+                "model": self.model_path,
+                "additional_config": additional_config,
+            }
+            engine_args = AsyncEngineArgs(**engine_arg_kwargs)
 
             self.engine = AsyncLLMEngine.from_engine_args(engine_args)
             logger.info(f"ASREngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")

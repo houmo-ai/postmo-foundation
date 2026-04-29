@@ -24,7 +24,14 @@ class InferenceEngine(ABC):
     def __init__(self, instance_config: Dict[str, Any]):
         self.config = instance_config
         self.model_name = instance_config.get("model_name", "")
-        self.device_ids = instance_config.get("device_ids", [])
+        self.additional_config = instance_config.get(
+            "additional_config",
+            instance_config.get("extra_config", {}),
+        ) or {}
+        self.device_ids = instance_config.get(
+            "device_ids",
+            self.additional_config.get("device_ids", []),
+        )
         self.model_path = instance_config.get("model_path", "")
         self._setup_environment()
         self._load_model()

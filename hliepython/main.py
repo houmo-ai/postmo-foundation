@@ -177,17 +177,29 @@ def _normalize_server_config(
     if not isinstance(server_config_raw, dict):
         raise ValueError("请求中必须包含对象类型的 server_config 字段")
 
-    device_ids = server_config_raw.get("device_ids", [0])
+    vllm_config = server_config_raw.get("vllm_config", {})
+    if not isinstance(vllm_config, dict):
+        raise ValueError("server_config.vllm_config 必须是对象")
+
+    additional_config = server_config_raw.get("additional_config", {})
+    if not isinstance(additional_config, dict):
+        raise ValueError("server_config.additional_config 必须是对象")
+
+    if "device_ids" not in additional_config and "device_ids" in server_config_raw:
+        additional_config = dict(additional_config)
+        additional_config["device_ids"] = server_config_raw["device_ids"]
+
+    device_ids = additional_config.get("device_ids", [0])
     if not isinstance(device_ids, list):
-        raise ValueError("server_config.device_ids 必须是数组")
+        raise ValueError("server_config.additional_config.device_ids 必须是数组")
+    additional_config = dict(additional_config)
+    additional_config["device_ids"] = device_ids
 
-    vllm_extra_config = server_config_raw.get("vllm_extra_config", {})
-    if not isinstance(vllm_extra_config, dict):
-        raise ValueError("server_config.vllm_extra_config 必须是对象")
-
-    extra_config = server_config_raw.get("extra_config", {})
-    if not isinstance(extra_config, dict):
-        raise ValueError("server_config.extra_config 必须是对象")
+    if "enable_cacheprompt" in additional_config and not isinstance(
+        additional_config["enable_cacheprompt"], str
+    ):
+        raise ValueError("server_config.additional_config.enable_cacheprompt 必须是字符串")
+    additional_config.setdefault("enable_cacheprompt", "")
 
     model_type = server_config_raw.get("model_type")
     if model_type is not None and not isinstance(model_type, str):
@@ -196,9 +208,8 @@ def _normalize_server_config(
     port = server_config_raw.get("port")
 
     normalized: Dict[str, Any] = {
-        "device_ids": device_ids,
-        "vllm_extra_config": vllm_extra_config,
-        "extra_config": extra_config,
+        "vllm_config": vllm_config,
+        "additional_config": additional_config,
         "model_type": model_type,
     }
     if port is not None:
@@ -378,10 +389,9 @@ def _build_instance_config(model_name: str, server_config: Dict[str, Any]) -> Di
     return {
         "port": int(port),
         "model_path": model_path,
-        "device_ids": server_config.get("device_ids"),
         "model_type": server_config.get("model_type", "text"),
-        "vllm_extra_config": server_config.get("vllm_extra_config", {}),
-        "extra_config": server_config.get("extra_config", {}),
+        "vllm_config": server_config.get("vllm_config", {}),
+        "additional_config": server_config.get("additional_config", {}),
     }
 
 
@@ -389,10 +399,9 @@ def _build_preload_instance_config(model_name: str, instance, fallback_model_typ
     return {
         "port": int(instance.port),
         "model_path": instance.model_path,
-        "device_ids": instance.device_ids,
         "model_type": instance.model_type or fallback_model_type,
-        "vllm_extra_config": instance.vllm_extra_config or {},
-        "extra_config": instance.extra_config or {},
+        "vllm_config": instance.vllm_config or {},
+        "additional_config": instance.additional_config or {},
     }
 
 
@@ -508,9 +517,9 @@ def start_workers(config: AppConfig):
             p = inst.port
             PORT_MODEL_MAP[p] = name
             model_path = inst.model_path
-            device_ids = inst.device_ids
-            vllm_extra_config = inst.vllm_extra_config or inst.extra_config
-            extra_config = inst.extra_config
+            additional_config = inst.additional_config
+            device_ids = additional_config.get("device_ids", [])
+            vllm_config = inst.vllm_config
             model_type = inst.model_type or model.model_type
 
             proc = multiprocessing.Process(
@@ -518,10 +527,9 @@ def start_workers(config: AppConfig):
                 args=(
                     name,
                     p,
-                    device_ids,
                     model_path,
-                    vllm_extra_config,
-                    extra_config,
+                    vllm_config,
+                    additional_config,
                     model_type,
                 ),
                 daemon=False,
@@ -554,10 +562,9 @@ def start_dynamic_worker(model_name: str, server_config: Dict[str, Any]):
         args=(
             model_name,
             port,
-            instance_cfg.get("device_ids"),
             instance_cfg.get("model_path"),
-            instance_cfg.get("vllm_extra_config", {}),
-            instance_cfg.get("extra_config", {}),
+            instance_cfg.get("vllm_config", {}),
+            instance_cfg.get("additional_config", {}),
             instance_cfg.get("model_type", "text"),
         ),
         daemon=False,

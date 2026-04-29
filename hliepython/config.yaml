@@ -10,50 +10,49 @@ preload_models_on_startup: true  # 改为 false 可只启动服务端，按请�
 
 # 模型配置
 models:
-  # Qwen3-8B 模型（多实例）
+  # Qwen3.5-9B 模型
   - name: "Houmo/Qwen3.5-9B"
     instances:
       - port: 7801
-        model_path: "/home/useradmin/houmo/models/v1.2.0/qwen3.5_9B"
-        model_type: "text"    # llm、image、asr、tts
-        device_ids: [0]
-        vllm_extra_config:
-          max_model_len: 1024  # 降低最大序列长度以节省内存
-          gpu_memory_utilization: 0.2  # 降低GPU内存利用率
+        model_path: "qwen3.5_9B"
+        model_type: "text"    # text、image、asr、tts
+        vllm_config:
+          max-model-len: 65536
+          max-num-seqs: 1
           tensor_parallel_size: 1
-        extra_config: {}
-      - port: 7802
-        model_path: "/home/useradmin/houmo/models/v1.2.0/qwen3.5_9B"
-        model_type: "text"
-        device_ids: [0]
-        vllm_extra_config:
-          max_model_len: 1024  # 降低最大序列长度以节省内存
-          gpu_memory_utilization: 0.2  # 降低GPU内存利用率
-          tensor_parallel_size: 1
-        extra_config: {}
+          no-enable-prefix-caching: true
+          max-num-batched-tokens: 65536
+        additional_config:
+          device_ids: [0]
+          enable_cacheprompt: "True"
 
-  # # Qwen3-VL 模型
-  # - name: "Qwen3.5-VL_4B"
+  # # Qwen3.5-VL 模型
+  # - name: "Houmo/Qwen3.5-VL_4B"
   #   instances:
   #     - port: 7802
-  #       model_path: "/home/useradmin/houmo/models/v1.2.0/Qwen3.5-VL_4B"
+  #       model_path: "Qwen3.5-VL_4B"
   #       model_type: "text"
-  #       device_ids: [0]  # device id 0
-  #       extra_config:
+  #       additional_config:
+  #         device_ids: [0]
+  #         enable_cacheprompt: ""
   #         "vit_model_name": "qwen3.5-4b-mmproj.gguf"
 
   # # whisper-medium 模型
   # - name: "whisper-medium"
   #   instances:
   #     - port: 7803
-  #       model_path: "/home/useradmin/houmo/models/v1.2.0/whisper-medium"
+  #       model_path: "whisper-medium"
   #       model_type: "asr"
-  #       device_ids: [0]
+  #       additional_config:
+  #         device_ids: [0]
+  #         enable_cacheprompt: ""
 
-  # CosyVoice3 模型
-  - name: "Fun-CosyVoice3-0.5B"
-    instances:
-      - port: 7804
-        model_path: "/home/useradmin/houmo/models/v1.2.0/cosyvoice3"
-        model_type: "tts"
-        device_ids: [0]
+  # # CosyVoice3 模型
+  # - name: "Fun-CosyVoice3-0.5B"
+  #   instances:
+  #     - port: 7804
+  #       model_path: "cosyvoice3"
+  #       model_type: "tts"
+  #       additional_config:
+  #         device_ids: [0]
+  #         enable_cacheprompt: ""

@@ -193,15 +193,18 @@ async def images_generations(request: Request):
 # 子进程实例配置
 INSTANCE_CONFIG = {}
 
-def run_worker(model_name: str, port: int, device_ids=None, model_path=None, extra_config=None):
+def run_worker(model_name: str, port: int, model_path=None, additional_config=None):
     import uvicorn
     global MODEL_NAME, PORT, INSTANCE_CONFIG
     MODEL_NAME = model_name
     PORT = port
+    additional_config = additional_config or {}
+    device_ids = additional_config.get("device_ids", [])
     INSTANCE_CONFIG = {
         "device_ids": device_ids or [],
         "model_path": model_path,
-        "extra_config": extra_config or {}
+        "additional_config": additional_config,
+        "extra_config": additional_config,
     }
 
     # 为该子进程设置 GPU 设备
@@ -211,7 +214,7 @@ def run_worker(model_name: str, port: int, device_ids=None, model_path=None, ext
 
     print(f"🚀 启动子进程, 模型={MODEL_NAME} 端口={PORT} 设备={device_ids} 路径={model_path}")
 
-    # 通用配置可根据 model_path/extra_config 动态设置
+    # 通用配置可根据 model_path/additional_config 动态设置
     # 这里可扩展为加载本地模型路径或专用调参
 
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
