@@ -2,8 +2,6 @@
 
 #include <regex>
 
-#include "ggml-cpp.h"
-#include "gguf.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_tcim_util.h"
 

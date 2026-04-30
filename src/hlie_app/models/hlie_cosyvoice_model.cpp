@@ -32,165 +32,6 @@ namespace {
 
     // LLM constants
     constexpr int SPEECH_TOKEN_SIZE = 6561;
-    constexpr int MAX_SILENT_TOKEN_NUM = 5;
-    constexpr int INPUT_SEQUENCE_LENGTH = 256;
-
-    // RAS sampling constants
-    constexpr float DEFAULT_TOP_P = 0.8f;
-    constexpr int DEFAULT_TOP_K = 25;
-    constexpr int DEFAULT_WIN_SIZE = 10;
-    constexpr float DEFAULT_TAU_R = 0.1f;
-
-    // Default random engine
-    std::mt19937 g(std::random_device{}());
-
-    /**
-     * Compute softmax of weighted_scores.
-     */
-    std::vector<float> softmax(const float* weighted_scores, int size) {
-        std::vector<float> exp_scores(size);
-        float max_score = weighted_scores[0];
-        for (int i = 1; i < size; ++i) {
-            if (weighted_scores[i] > max_score) {
-                max_score = weighted_scores[i];
-            }
-        }
-
-        float sum_exp = 0.0f;
-        for (int i = 0; i < size; ++i) {
-            exp_scores[i] = std::exp(weighted_scores[i] - max_score);
-            sum_exp += exp_scores[i];
-        }
-
-        for (int i = 0; i < size; ++i) {
-            exp_scores[i] /= sum_exp;
-        }
-        return exp_scores;
-    }
-
-    /**
-     * Random sampling - sample one token from the full probability distribution.
-     * Equivalent to Python: weighted_scores.softmax(dim=0).multinomial(1, replacement=True).item()
-     */
-    int random_sampling(const float* weighted_scores, int token_size) {
-        std::vector<float> probs = softmax(weighted_scores, token_size);
-
-        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-        float r = dist(g);
-
-        float cum_prob = 0.0f;
-        for (int i = 0; i < token_size; ++i) {
-            cum_prob += probs[i];
-            if (r <= cum_prob) {
-                return i;
-            }
-        }
-        return token_size - 1; // fallback
-    }
-
-    /**
-     * Nucleus sampling - sample one token from the truncated top-p and top-k candidate set.
-     * Equivalent to Python's nucleus_sampling function.
-     */
-    int nucleus_sampling(const float* weighted_scores, float top_p = DEFAULT_TOP_P, int top_k = DEFAULT_TOP_K) {
-        std::vector<float> probs = softmax(weighted_scores, SPEECH_TOKEN_SIZE);
-
-        // Sort by probability descending, keeping track of indices
-        std::vector<std::pair<float, int>> sorted;
-        sorted.reserve(SPEECH_TOKEN_SIZE);
-        for (int i = 0; i < SPEECH_TOKEN_SIZE; ++i) {
-            sorted.emplace_back(probs[i], i);
-        }
-
-        std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-
-        // Select candidates based on top_p and top_k
-        std::vector<float> cand_probs;
-        std::vector<int> cand_indices;
-        float cum_prob = 0.0f;
-
-        for (int i = 0; i < static_cast<int>(sorted.size()); ++i) {
-            if (cum_prob < top_p && static_cast<int>(cand_probs.size()) < top_k) {
-                cum_prob += sorted[i].first;
-                cand_probs.push_back(sorted[i].first);
-                cand_indices.push_back(sorted[i].second);
-            } else {
-                break;
-            }
-        }
-
-        // Sample from candidates using multinomial
-        if (cand_probs.empty()) {
-            return sorted[0].second;
-        }
-
-        // Normalize probabilities for multinomial sampling
-        float total = 0.0f;
-        for (float p : cand_probs) {
-            total += p;
-        }
-        for (float& p : cand_probs) {
-            p /= total;
-        }
-
-        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-        float r = dist(g);
-
-        float cum = 0.0f;
-        for (size_t i = 0; i < cand_probs.size(); ++i) {
-            cum += cand_probs[i];
-            if (r <= cum) {
-                return cand_indices[i];
-            }
-        }
-        return cand_indices.back();
-    }
-
-    /**
-     * RAS (Repetition-Aware Sampling) - applies repetition-aware logic on top of nucleus sampling.
-     * Equivalent to Python's ras_sampling function.
-     */
-    int ras_sampling(const float* weighted_scores, const std::vector<int>& decoded_tokens, int sampling, float top_p = DEFAULT_TOP_P,
-                     int top_k = DEFAULT_TOP_K, int win_size = DEFAULT_WIN_SIZE, float tau_r = DEFAULT_TAU_R) {
-        // Step 1: Get top candidate using nucleus sampling
-        int top_ids = nucleus_sampling(weighted_scores, top_p, top_k);
-
-        // Step 2: Count repetitions in the last win_size tokens
-        int rep_num = 0;
-        int start_idx = static_cast<int>(decoded_tokens.size()) - win_size;
-        if (start_idx < 0) {
-            start_idx = 0;
-        }
-        for (int i = start_idx; i < static_cast<int>(decoded_tokens.size()); ++i) {
-            if (decoded_tokens[i] == top_ids) {
-                ++rep_num;
-            }
-        }
-
-        // Step 3: If repetition rate exceeds threshold, fall back to random sampling
-        if (rep_num >= win_size * tau_r) {
-            top_ids = random_sampling(weighted_scores, SPEECH_TOKEN_SIZE);
-        }
-
-        return top_ids;
-    }
-
-
-    /**
-     * Simple argmax sampling - select the token with highest score.
-     * For testing purposes.
-     */
-    int argmax_sampling(const float* weighted_scores, int token_size = SPEECH_TOKEN_SIZE) {
-        int max_idx = 0;
-        float max_score = weighted_scores[0];
-        for (int i = 1; i < token_size; ++i) {
-            if (weighted_scores[i] > max_score) {
-                max_score = weighted_scores[i];
-                max_idx = i;
-            }
-        }
-        return max_idx;
-    }
 
     std::vector<float> TransposeSeqFeatToFeatSeq(const std::vector<float>& input, int seq_len, int feat_dim) {
         std::vector<float> out(static_cast<size_t>(seq_len * feat_dim), 0.0f);
@@ -654,7 +495,6 @@ std::pair<std::vector<int>, int> HLIECosyVoiceModel::speech_tokenizer(const std:
     auto output_shape = output.Info().Shape();
 
     LOG_INFO("Speech tokenizer output shape: [{}, {}]", output_shape[0], output_shape[1]);
-    LOG_INFO("Output data type: {}", static_cast<int>(output.Info().DataType()));
 
     // Step 4: 计算实际的 token 长度
     // feat_len = padded_input 实际非零长度，token_len = feat_len / 4
@@ -664,26 +504,17 @@ std::pair<std::vector<int>, int> HLIECosyVoiceModel::speech_tokenizer(const std:
     LOG_INFO("Expected speech token len: {}", speech_token_len);
 
     // Step 5: 复制输出到 host (直接就是 token ID)
-    // 输出可能是 INT32, INT16 或其他类型
-    std::vector<int> speech_tokens{
-        490,  499,  495,  243,  273,  273,  30,   27,   273,  27,   27,   27,   27,   30,   246,  492,  501,  5092, 2904, 4856, 5956,
-        4948, 2760, 3652, 3808, 6316, 6040, 4816, 5060, 3976, 6236, 5992, 3320, 2104, 2096, 4236, 2160, 1928, 1685, 1823, 3950, 5424,
-        1532, 3720, 1588, 2043, 5660, 4928, 5864, 5864, 987,  492,  4228, 5656, 3712, 3692, 1477, 19,   1,    17,   404,  2180, 6044,
-        2368, 831,  2730, 3410, 5816, 6276, 1624, 1385, 5032, 4600, 2168, 1086, 4600, 4432, 3400, 105,  1311, 6008, 5848, 6036, 579,
-        3430, 2025, 1648, 1648, 4352, 4028, 4432, 4432, 2244, 1271, 1271, 6104, 5128, 5308, 5080, 5052, 4052, 3810, 3828, 128,  73,
-        73,   316,  45,   27,   27,   27,   243,  244,  252,  243,  243,  243,  243,  243,  243,  243,  244,  244,  244};
-    /*
-        // 直接复制 INT32 token IDs
-        std::vector<int32_t> buffer(output_shape[1]);
-        output.Buffer().CopyToHost(buffer.data(), output.MemSize());
+    std::vector<int32_t> buffer(output_shape[1]);
+    output.Buffer().CopyToHost(buffer.data(), output.MemSize());
 
-        // 转换为 int 并截取实际长度
-        speech_tokens.resize(speech_token_len);
-        for (int64_t i = 0; i < speech_token_len; ++i) {
-            speech_tokens[i] = static_cast<int>(buffer[i]);
-            LOG_DEBUG("speech_tokens[{}]: {}", i, speech_tokens[i]);
-        }
-    */
+    // 转换为 int 并截取实际长度
+    std::vector<int> speech_tokens;
+    speech_tokens.resize(speech_token_len);
+    for (int64_t i = 0; i < speech_token_len; ++i) {
+        speech_tokens[i] = buffer[i];
+        LOG_DEBUG("speech_tokens[{}]: {}", i, speech_tokens[i]);
+    }
+
     LOG_INFO("Extracted speech tokens: count={}", speech_tokens.size());
 
     return {std::move(speech_tokens), static_cast<int>(speech_tokens.size())};
@@ -724,27 +555,6 @@ std::vector<float> HLIECosyVoiceModel::campplus(const std::vector<TensorFP16>& i
     }
 
     return std::move(embedding);
-}
-
-int HLIECosyVoiceModel::sampling_ids(const float* weighted_scores, const std::vector<int>& decoded_tokens, const int sampling,
-                                     const bool ignore_eos) {
-    int num_trials = 0;
-    constexpr int max_trials = 100;
-    int top_ids = 0;
-    while (true) {
-        top_ids = ras_sampling(weighted_scores, decoded_tokens, sampling);
-        if (!ignore_eos || top_ids != SPEECH_TOKEN_SIZE) {
-            break;
-        }
-
-        num_trials++;
-        if (num_trials > max_trials) {
-            LOG_ERROR("sampling reaches max_trials {} and still get eos", max_trials);
-            throw std::runtime_error("sampling reaches max_trials and still get eos");
-        }
-    }
-
-    return top_ids;
 }
 
 std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text, int text_len, const std::vector<int>& prompt_text,

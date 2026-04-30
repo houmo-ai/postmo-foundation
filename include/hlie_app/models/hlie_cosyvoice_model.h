@@ -255,14 +255,6 @@ public:
     static int pad_token_id() { return 151645; }
 
 private:
-    // Sampling function - picks top-k tokens based on weighted scores
-    static int sampling_ids(
-        const float* weighted_scores,
-        const std::vector<int>& decoded_tokens,
-        int sampling,
-        bool ignore_eos);
-
-
     std::shared_ptr<HLIETokenizer> tokenizer_;
 
     std::shared_ptr<tcim::Module> cosyvoice3_campplus_model_;
