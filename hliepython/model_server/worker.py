@@ -27,6 +27,9 @@ from hliepython.model_server.engines.protocol.chat_completions import (
     ChatCompletionResponse,
     ErrorResponse
 )
+from hliepython.model_server.engines.protocol.embeddings import (
+    EmbeddingRequest,
+)
 
 # 初始化子进程服务
 app = FastAPI()
@@ -44,6 +47,7 @@ engine: Optional[InferenceEngine] = None
 # 路由注册表
 routes: Dict[str, str] = {
     "/v1/chat/completions": "create_chat_completions",
+    "/v1/embeddings": "create_embeddings",
     "/v1/images/generations": "create_images_generations",
     "/v1/audio/speech": "create_audio_speech",
     "/v1/audio/transcriptions": "create_audio_transcriptions",
@@ -445,6 +449,8 @@ def create_route_handler(method_name: str):
             method_input: Any = req_data
             if method_name == "create_chat_completions":
                 method_input = ChatCompletionRequest(**req_data)
+            elif method_name == "create_embeddings":
+                method_input = EmbeddingRequest(**req_data)
             elif method_name == "create_audio_speech":
                 method_input = AudioSpeechRequest(**req_data)
             elif method_name == "create_audio_transcriptions":

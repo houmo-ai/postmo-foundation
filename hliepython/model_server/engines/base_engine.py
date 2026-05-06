@@ -110,6 +110,14 @@ class InferenceEngine(ABC):
         """语音转写（子类按需实现）"""
         return self._unsupported("create_audio_transcriptions")
 
+    def create_embeddings(
+        self,
+        request: Dict[str, Any],
+        raw_request: Request | None = None,
+    ) -> Dict[str, Any]:
+        """文本向量化（子类按需实现）"""
+        return self._unsupported("create_embeddings")
+
     def health_check(self) -> bool:
         """健康检查"""
         return True

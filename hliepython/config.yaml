@@ -2,8 +2,8 @@
 server:
   main_port: 7800
   log_level: "info"
-  vllm_log_level: "debug"
-  model_root_dir: "/home/useradmin/houmo/models/v1.2.0"
+  vllm_log_level: "warning"
+  model_root_dir: "/home/useradmin/workspaces/models/v1.2.0"
 
 # 服务启动方式
 preload_models_on_startup: true  # 改为 false 可只启动服务端，按请求动态加载
@@ -15,7 +15,7 @@ models:
     instances:
       - port: 7801
         model_path: "qwen3.5_9B"
-        model_type: "text"    # text、image、asr、tts
+        model_type: "text"    # text、embedding、image、asr、tts
         vllm_config:
           max-model-len: 65536
           max-num-seqs: 1
@@ -30,12 +30,12 @@ models:
   # - name: "Houmo/Qwen3.5-VL_4B"
   #   instances:
   #     - port: 7802
-  #       model_path: "Qwen3.5-VL_4B"
+  #       model_path: "qwen3.5_35b"
   #       model_type: "text"
   #       additional_config:
   #         device_ids: [0]
   #         enable_cacheprompt: ""
-  #         "vit_model_name": "qwen3.5-4b-mmproj.gguf"
+  #         "vit_model_name": "mmproj-qwen3.5-35b-a3b-p256-256K-b1-2core-1d-xh2-v1.3.0-20260420210756.gguf"
 
   # # whisper-medium 模型
   # - name: "whisper-medium"
@@ -56,3 +56,12 @@ models:
   #       additional_config:
   #         device_ids: [0]
   #         enable_cacheprompt: ""
+
+  # # text embedding 模型
+  # - name: "qwen3-embedding-8b"
+  #   instances:
+  #     - port: 7805
+  #       model_path: "qwen3-embedding-8b"
+  #       model_type: "embedding"
+  #       additional_config:
+  #         device_ids: [0]

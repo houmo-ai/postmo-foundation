@@ -1007,7 +1007,7 @@ def _parse_chat_message_content_mm_part(
                 "'image_url.detail' is currently not supported and will be ignored."
             )
 
-        logger.debug(f"content: {content}")
+        # logger.debug(f"content: {content}")
 
         return part_type, content
 
@@ -1106,9 +1106,9 @@ def _parse_chat_message_content_parts(
     content = list[_ContentPart]()
 
     for part in parts:
-        logger.debug(f"part: {part}")
+        # logger.debug(f"part: {part}")
         parse_res = _parse_chat_message_content_part(part, wrap_dicts=wrap_dicts)
-        logger.debug(f"res: {parse_res}")
+        # logger.debug(f"res: {parse_res}")
         if parse_res is not None:
             content.append(parse_res)
 
@@ -1138,7 +1138,7 @@ def parse_chat_message_content(
         wrap_dicts=False,
     )
 
-    logger.debug(f"result: {result}")
+    # logger.debug(f"result: {result}")
 
     return result
 
@@ -1148,12 +1148,12 @@ def parse_chat_messages(
     conversation: list[ConversationMessage] = []
 
     for msg in messages:
-        logger.debug(f"msg: {msg}")
+        # logger.debug(f"msg: {msg}")
         sub_messages = parse_chat_message_content(msg)
 
         conversation.extend(sub_messages)
 
-    logger.info(f"conversation: {conversation}")
+    # logger.info(f"conversation: {conversation}")
     return conversation
 
 

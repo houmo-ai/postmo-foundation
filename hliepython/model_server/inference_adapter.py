@@ -25,5 +25,9 @@ class InferenceEngineFactory:
             from hliepython.model_server.engines.tts_engine import TTSEngine
 
             return TTSEngine(instance_config)
+        elif model_type == "embedding":
+            from hliepython.model_server.engines.embedding_engine import EmbeddingEngine
+
+            return EmbeddingEngine(instance_config)
         else:
             raise ValueError(f"未知的模型类型: {model_type}")

@@ -20,6 +20,9 @@ from hliepython.model_server.engines.protocol.chat_completions import (
 from hliepython.model_server.engines.protocol.audio_speech import (
     AudioSpeechRequest,
 )
+from hliepython.model_server.engines.protocol.embeddings import (
+    EmbeddingRequest,
+)
 from hliepython.model_server.worker import run_worker
 
 from vllm.entrypoints.openai.speech_to_text.protocol import (
@@ -210,7 +213,7 @@ def _normalize_server_config(
     normalized: Dict[str, Any] = {
         "vllm_config": vllm_config,
         "additional_config": additional_config,
-        "model_type": model_type,
+        "model_type": model_type or endpoint_model_type,
     }
     if port is not None:
         normalized["port"] = int(port)
@@ -220,6 +223,7 @@ def _normalize_server_config(
 def _resolve_model_type_from_path(path: str) -> Optional[str]:
     path_alias = {
         "/v1/chat/completions": "text",
+        "/v1/embeddings": "embedding",
         "/v1/images/generations": "image",
         "/v1/audio/speech": "tts",
         "/v1/audio/transcriptions": "asr",
@@ -810,6 +814,13 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
     if stream:
         return await _forward_stream(worker_url, request=req_body, raw_request=raw_request)
 
+    return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+
+
+@main_app.post("/v1/embeddings", dependencies=[Depends(validate_json_request)])
+async def create_embeddings(request: EmbeddingRequest, raw_request: Request):
+    req_body = await _build_req_body(request=request, raw_request=raw_request)
+    worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
     return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
 
 

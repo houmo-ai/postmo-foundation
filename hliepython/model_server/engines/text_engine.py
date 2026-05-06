@@ -824,7 +824,7 @@ class TextEngine(InferenceEngine):
     ) -> list[ChatCompletionLogProb]:
         results: list[ChatCompletionLogProb] = []
 
-        logger.info(f"logprobs: {logprobs}")
+        # logger.info(f"logprobs: {logprobs}")
 
         for index, (token_id, logprob_obj) in enumerate(logprobs.items()):
             # 是否需要截断 top_logprobs
