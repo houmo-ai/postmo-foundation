@@ -177,7 +177,7 @@ POST http://localhost:7901/v1/embeddings
 Content-Type: application/json
 
 {
-  "model": "HiModel_xh2_bge_0.5b_0.5k_b10_1chip_2cores_v1.0.0_20260211",
+  "model": "HiModel_xh2_gte_1.5b_256_1chip_2cores_v1.1.0_20260329",
   "input": "这是一段测试的文笔",
   "n_tokens": 5
 }

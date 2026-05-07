@@ -121,9 +121,12 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         params_.kv_unified = true;
     }
 
-    if (model_info.is_embedding_model()) {
+    if (model_info.is_embedding_model() || model_info.is_rerank_model()) {
         params_.embedding = true;
         is_embedding_ = true;
+        if (model_info.is_rerank_model()) {
+            params_.pooling_type = LLAMA_POOLING_TYPE_RANK;
+        }
     }
 
     params_.model.name = model_info.get_model_name();
@@ -138,7 +141,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         params_.model.path = HlieUtil::join_paths(model_dir, params_.model.path);
     }
 
-    if (model_info.get_is_multi_model() && !model_info.get_mm_proj_path().empty()) {
+    if (!model_info.get_mm_proj_path().empty()) {
         params_.mmproj.path = model_info.get_mm_proj_path();
         if (HlieUtil::is_relative_path(params_.mmproj.path)) {
             params_.mmproj.path = HlieUtil::join_paths(model_dir, params_.mmproj.path);
@@ -326,6 +329,10 @@ server_http_res_ptr LLModelService::handle_embeddings_oai(const server_http_req&
 
 server_http_res_ptr LLModelService::handle_embeddings(const server_http_req& req) const {
     return llama_server_routes_->post_embeddings(req);
+}
+
+server_http_res_ptr LLModelService::handle_rerank(const server_http_req& req) const {
+    return llama_server_routes_->post_rerank(req);
 }
 
 server_http_res_ptr LLModelService::handle_props(const server_http_req& req) const {

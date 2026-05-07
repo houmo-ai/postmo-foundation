@@ -57,6 +57,7 @@ public:
     [[nodiscard]] int get_device_num() const { return device_num_; }
 
     bool is_embedding_model() const;
+    bool is_rerank_model() const;
 
     // ===== 模型类型 =====
     bool is_llm_ = true;

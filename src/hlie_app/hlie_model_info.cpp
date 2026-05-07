@@ -236,7 +236,12 @@ std::string HLIEModelInfo::parse_mmproj_vl_spec(const std::string& name) {
 }
 
 bool HLIEModelInfo::is_embedding_model() const {
-    return HlieUtil::contains_ignore_case(model_name_, "bge") || HlieUtil::contains_ignore_case(model_name_, "gte");
+    return HlieUtil::contains_ignore_case(model_name_, "bge") || HlieUtil::contains_ignore_case(model_name_, "gte") ||
+        HlieUtil::contains_ignore_case(model_name_, "embedding");
+}
+
+bool HLIEModelInfo::is_rerank_model() const {
+    return HlieUtil::contains_ignore_case(model_name_, "rerank");
 }
 
 void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, const std::string& dir) {

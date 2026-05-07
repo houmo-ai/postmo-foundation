@@ -325,6 +325,14 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                 whisper_model_service_.reset();
                 return -1;
             }
+        } else if (HlieUtil::contains_ignore_case(default_model_info.get_model_name(), HLIEModelType::COSYVOICE)) {
+            LOG_INFO("Initializing CosyVoiceModelService");
+            cosy_voice_model_service_ = std::make_shared<CosyVoiceModelService>();
+            if (cosy_voice_model_service_->init(model_dir, default_model_info, device_service_) < 0) {
+                LOG_ERROR("failed to init the cosyvoice model service");
+                cosy_voice_model_service_.reset();
+                return -1;
+            }
         } else {
             LOG_INFO("Initializing LLModelService");
             if (const std::string default_mmproj = Singleton<HLIEConfigService>::instance()->get_string("model", "default_mmproj");
@@ -403,6 +411,18 @@ void HLIEWorkflow::run() {
                 model_instances_[whisper_model_service_->get_model_key()].meta.port = port_;
                 std::this_thread::sleep_for(std::chrono::seconds(3));
                 update_status(master_port_, whisper_model_service_->get_model_key(), port_);
+            }).detach();
+        }
+    }
+
+    if (cosy_voice_model_service_) {
+        cosy_voice_model_service_->run();
+        model_instances_[cosy_voice_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_LOADED;
+        if (is_slave_ && !replicas_mode_) {
+            std::thread([&] {
+                model_instances_[cosy_voice_model_service_->get_model_key()].meta.port = port_;
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                update_status(master_port_, cosy_voice_model_service_->get_model_key(), port_);
             }).detach();
         }
     }
@@ -1204,6 +1224,16 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 [this](const server_http_req& req) -> server_http_res_ptr {
                     return route_llm_request(
                         req, std::bind(&LLModelService::handle_embeddings_oai, llm_model_service_, std::placeholders::_1));
+                },
+                true,
+                LLM // LLM模型类型
+            },
+            {
+                {"/rerank", "/reranking", "/v1/rerank", "/v1/reranking"},
+                POST,
+                [this](const server_http_req& req) -> server_http_res_ptr {
+                    return route_llm_request(req,
+                                             std::bind(&LLModelService::handle_rerank, llm_model_service_, std::placeholders::_1));
                 },
                 true,
                 LLM // LLM模型类型
