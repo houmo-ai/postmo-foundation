@@ -57,6 +57,7 @@ from enum import Enum
 TOKENS_FILE_PATH = os.path.join(os.path.dirname(__file__), "files/special_tokens.json")
 mel_basis = {}
 hann_window = {}
+TTS_MAX_INPUT_CHARS = 45
 
 
 
@@ -305,6 +306,48 @@ def split_paragraph(
             final_utts.append(cur_utt)
 
     return final_utts
+
+
+def enforce_text_chunk_limit(texts: List[str], max_chars: int = TTS_MAX_INPUT_CHARS) -> List[str]:
+    """Ensure each TTS input chunk stays within the model's text-length limit."""
+    limited_chunks: List[str] = []
+    for text in texts:
+        normalized = text.strip()
+        if not normalized:
+            continue
+        if len(normalized) <= max_chars:
+            limited_chunks.append(normalized)
+            continue
+        limited_chunks.extend(_split_text_by_char_limit(normalized, max_chars))
+    return limited_chunks
+
+
+def _split_text_by_char_limit(text: str, max_chars: int) -> List[str]:
+    """Split long text into chunks, preferring punctuation boundaries."""
+    punctuation = {"。", "？", "！", "；", "：", "，", "、", ".", "?", "!", ";", ":", ","}
+    chunks: List[str] = []
+    remaining = text.strip()
+
+    while len(remaining) > max_chars:
+        window = remaining[:max_chars]
+        split_idx = -1
+        for idx in range(len(window) - 1, -1, -1):
+            if window[idx] in punctuation:
+                split_idx = idx + 1
+                break
+
+        if split_idx <= 0:
+            split_idx = max_chars
+
+        chunk = remaining[:split_idx].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_idx:].strip()
+
+    if remaining:
+        chunks.append(remaining)
+
+    return chunks
 
 
 def make_pad_mask(lengths: torch.Tensor, max_len: int = 0) -> torch.Tensor:
@@ -1576,6 +1619,8 @@ class CosyVoiceFrontEnd:
                 )
             )
         texts = [i for i in texts if not is_only_punctuation(i)]
+        texts = enforce_text_chunk_limit(texts, max_chars=TTS_MAX_INPUT_CHARS)
+        texts = [i for i in texts if i and not is_only_punctuation(i)]
         return texts if split is True else text
 
     def frontend_instruct2(
