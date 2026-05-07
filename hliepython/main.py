@@ -25,13 +25,6 @@ from hliepython.model_server.engines.protocol.embeddings import (
 )
 from hliepython.model_server.worker import run_worker
 
-from vllm.entrypoints.openai.speech_to_text.protocol import (
-    TranscriptionRequest,
-    TranscriptionResponseVariant,
-    TranslationRequest,
-    TranslationResponseVariant,
-)
-
 main_app = FastAPI(title="主进程 8000")
 
 # 全局映射
@@ -122,6 +115,42 @@ async def _parse_json_body(request: Request) -> Dict[str, Any]:
     if not isinstance(req_body, dict):
         raise ValueError("请求体必须是 JSON 对象")
     return req_body
+
+
+def _request_media_type(raw_request: Request) -> str:
+    content_type = raw_request.headers.get("content-type", "").lower()
+    return content_type.split(";", maxsplit=1)[0].strip()
+
+
+def _parse_form_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
+async def _parse_form_body(raw_request: Request) -> Dict[str, Any]:
+    form = await raw_request.form()
+    payload: Dict[str, Any] = {}
+    for key, value in form.multi_items():
+        payload[key] = value
+
+    server_config = payload.get("server_config")
+    if isinstance(server_config, str) and server_config.strip():
+        try:
+            payload["server_config"] = json.loads(server_config)
+        except json.JSONDecodeError:
+            pass
+
+    if "stream" in payload:
+        payload["stream"] = _parse_form_bool(payload["stream"])
+
+    return payload
 
 
 def get_runtime_settings(cfg: AppConfig) -> Dict[str, Any]:
@@ -475,17 +504,23 @@ async def _build_req_body(request: Any, raw_request: Request) -> Dict[str, Any]:
 
 
 async def _build_audio_transcriptions_meta(
-    request: TranscriptionRequest,
     raw_request: Request
 ) -> Dict[str, Any]:
-    raw_body = await _parse_json_body(raw_request)
-
-    if request is None:
-        req_body = dict(raw_body)
-    elif hasattr(request, "model_dump"):
-        req_body = request.model_dump(exclude_none=True)
+    media_type = _request_media_type(raw_request)
+    if media_type == "application/json":
+        raw_body = await _parse_json_body(raw_request)
+    elif media_type in {"multipart/form-data", "application/x-www-form-urlencoded"}:
+        raw_body = await _parse_form_body(raw_request)
     else:
-        req_body = request.dict(exclude_none=True)
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                "Unsupported Media Type: Only 'application/json', "
+                "'multipart/form-data' and 'application/x-www-form-urlencoded' are allowed"
+            ),
+        )
+
+    req_body = dict(raw_body)
 
     if "server_config" in raw_body:
         req_body["server_config"] = raw_body["server_config"]
@@ -736,6 +771,52 @@ async def _forward_multipart(url: str, raw_request: Request):
     )
 
 
+async def _forward_multipart_stream(url: str, raw_request: Request):
+    form = await raw_request.form()
+    data: Dict[str, str] = {}
+    files: list[tuple[str, tuple[str, bytes, str]]] = []
+
+    for key, value in form.multi_items():
+        if isinstance(value, UploadFile):
+            file_bytes = await value.read()
+            files.append(
+                (
+                    key,
+                    (
+                        value.filename or "upload.bin",
+                        file_bytes,
+                        value.content_type or "application/octet-stream",
+                    ),
+                )
+            )
+        else:
+            data[key] = str(value)
+
+    async def event_generator():
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream(
+                "POST",
+                url,
+                data=data,
+                files=files,
+                timeout=None,
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    if body:
+                        yield body
+                    return
+
+                async for chunk in resp.aiter_bytes():
+                    if await raw_request.is_disconnected():
+                        logger.warning(f"客户端断开流式连接，停止转发: {url}")
+                        return
+                    if chunk:
+                        yield chunk
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 async def _forward_stream(url: str, request, raw_request: Request):
     async def event_generator():
         async with httpx.AsyncClient(timeout=None) as client:
@@ -839,13 +920,24 @@ async def create_audio_speech(request: AudioSpeechRequest, raw_request: Request)
 
 
 @main_app.post("/v1/audio/transcriptions")
-async def create_audio_transcriptions(request: TranscriptionRequest, raw_request: Request):
-    req_body = await _build_req_body(request=request, raw_request=raw_request)
+async def create_audio_transcriptions(raw_request: Request):
+    media_type = _request_media_type(raw_request)
+
+    if media_type == "application/json":
+        req_body = await _build_req_body(request=None, raw_request=raw_request)
+        worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
+
+        stream = bool(req_body.get("stream", False))
+        if stream:
+            return await _forward_stream(worker_url, request=req_body, raw_request=raw_request)
+        return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+
+    req_body = await _build_audio_transcriptions_meta(raw_request=raw_request)
     worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
-    
+
     stream = bool(req_body.get("stream", False))
     if stream:
-        return await _forward_stream(worker_url, request=req_body, raw_request=raw_request)
+        return await _forward_multipart_stream(worker_url, raw_request=raw_request)
     return await _forward_multipart(worker_url, raw_request=raw_request)
 
 

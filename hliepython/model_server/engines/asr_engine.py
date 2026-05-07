@@ -1,4 +1,5 @@
 import io
+import os
 import json
 import time
 import asyncio
@@ -91,6 +92,7 @@ ResponseType: TypeAlias = (
     | TranslationResponseVerbose
 )
 
+os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 # As per https://platform.openai.com/docs/guides/speech-to-text#overview.
 # TODO configurable
@@ -451,7 +453,7 @@ class ASREngine(InferenceEngine):
         seed = getattr(request, "seed", None)
         max_completion_tokens = getattr(request, "max_completion_tokens", None)
 
-        output_kind = RequestOutputKind.DELTA \
+        output_kind = RequestOutputKind.CUMULATIVE \
             if stream else RequestOutputKind.FINAL_ONLY
 
         # 如果request.xxx 为None，那么就使用SamplingParams.from_optional的默认值
