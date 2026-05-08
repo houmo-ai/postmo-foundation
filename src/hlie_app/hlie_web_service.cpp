@@ -54,6 +54,25 @@ namespace {
                     }
                 }
             }
+
+            // response - wav bytes
+            if (body_json.contains("wav") && body_json["wav"].is_object() && body_json["wav"].contains("bytes") &&
+                body_json["wav"]["bytes"].is_array()) {
+                auto& wav_bytes = body_json["wav"]["bytes"];
+                LOG_TRACE("Response wav bytes array size: {}", wav_bytes.size());
+                if (wav_bytes.size() > 100) {
+                    // Keep first 50 and last 50 elements
+                    nlohmann::json truncated = nlohmann::json::array();
+                    for (size_t i = 0; i < 50 && i < wav_bytes.size(); ++i) {
+                        truncated.push_back(wav_bytes[i]);
+                    }
+                    truncated.push_back("... " + std::to_string(wav_bytes.size() - 100) + " elements truncated ...");
+                    for (size_t i = wav_bytes.size() - 50; i < wav_bytes.size(); ++i) {
+                        truncated.push_back(wav_bytes[i]);
+                    }
+                    body_json["wav"]["bytes"] = truncated;
+                }
+            }
             return body_json.dump();
         } catch (const json::exception& e) {
             LOG_WARN("Failed to parse body as JSON: {}", e.what());

@@ -830,8 +830,11 @@ std::vector<float> CosyVoiceModelService::speech(const CosyVoiceRequest& request
         LOG_INFO("text_normalize prompt done");
         auto tts_text = text_normalize(request.content, false, true);
         LOG_INFO("text_normalize request done");
-        const std::string prompt_wav = R"(..\samples\zero_shot_prompt.wav)";
-
+#ifdef WIN32
+        const std::string prompt_wav = R"(../samples/zero_shot_prompt.wav)";
+#else
+        const std::string prompt_wav = R"(samples/zero_shot_prompt.wav)";
+#endif
         for (auto text : tts_text) {
             // Get frontend input (tokens, embeddings, etc.)
             auto model_input = frontend_zero_shot(text, prompt_text[0], prompt_wav);

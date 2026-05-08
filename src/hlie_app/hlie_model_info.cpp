@@ -1,7 +1,9 @@
 #include "hlie_app/hlie_model_info.h"
 
+#include <algorithm>
 #include <fstream>
 #include <regex>
+#include <unordered_map>
 
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
@@ -24,7 +26,8 @@ namespace {
     const std::regex kContextRegex(R"((\d+)\s*[kK])");
     const std::regex kBatchRegex(R"(b(\d+))", std::regex::icase);
     const std::regex kCoreRegex(R"((\d+)\s*core)", std::regex::icase);
-    const std::regex kVlFamilyRegex(R"(qwen2\.5-vl|qwen3-vl)", std::regex::icase);
+    const std::regex kVlFamilyRegex(R"(qwen2\.5-vl|qwen3-vl|qwen3\.5|qwen3\.6)", std::regex::icase);
+    const std::regex kOptionalMmprojVlFamilyRegex(R"(qwen3\.5|qwen3\.6)", std::regex::icase);
     const std::regex kVlResRegex(R"(vit_(\d+)(?:[_x](\d+))?)", std::regex::icase);
     const std::regex kBuildTimeRegex(R"((\d{8}|\d{14}))");
 
@@ -52,13 +55,22 @@ namespace {
             build_time = m.str(); // 20251228 or 20251228103045
         }
 
-        // xh2_qwen3-vl_4b_v0.7.0_20251228
-        if (!build_time.empty()) {
+        // qwen3.5/qwen3.6 mmproj files can be built at a different time from
+        // their base model, so build time is not part of their match key.
+        if (!std::regex_search(name, kOptionalMmprojVlFamilyRegex) && !build_time.empty()) {
             return xh + "_" + vl_family + "_" + param + "_" + version + "_" + build_time;
         }
 
         // 兼容老模型（没 build time）
         return xh + "_" + vl_family + "_" + param + "_" + version;
+    }
+
+    bool is_optional_mmproj_vl_model(const std::string& name) {
+        return std::regex_search(name, kOptionalMmprojVlFamilyRegex);
+    }
+
+    bool is_vl_main_model_name(const std::string& name) {
+        return name.find("mmproj") == std::string::npos && std::regex_search(name, kVlFamilyRegex);
     }
 
 } // namespace
@@ -82,8 +94,14 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
         batch_num_ = config.value("BatchNum", 1);
         xh_version_ = config.value("XHVersion", 2);
         is_multi_model_ = config.value("IsMM", false);
+        if (std::regex_search(model_type_, kVlFamilyRegex)) {
+            is_multi_model_ = true;
+        }
         params_ = config.value("Params", "");
         mm_proj_path_ = config.value("MMProj", "");
+        if (!mm_proj_path_.empty()) {
+            vl_spec_ = parse_mmproj_vl_spec(mm_proj_path_);
+        }
         model_version_ = config.value("Version", "");
         clip_model_ = config.value("ClipModel", "");
         clip_l_model_ = config.value("ClipLModel", "");
@@ -111,6 +129,9 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
             model_name_.clear();
         }
         model_key_ = model_name_;
+        if (!mm_proj_path_.empty()) {
+            model_key_ += "_" + vl_spec_;
+        }
     } catch (const nlohmann::json::exception& ex) {
         LOG_ERROR("JSON Error: {}", ex.what());
         return -2;
@@ -187,7 +208,7 @@ int HLIEModelInfo::parse_from_gguf_filename(const std::string& file_path) {
 
     // ===== VL family 判断 =====
     if (find(kVlFamilyRegex, m)) {
-        model_type_ = m.str(); // qwen2.5-vl / qwen3-vl
+        model_type_ = m.str(); // qwen2.5-vl / qwen3-vl / qwen3.5 / qwen3.6
         is_multi_model_ = true;
     } else {
         // 非 VL：尽量提 family
@@ -264,7 +285,7 @@ void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, c
 
         if (const std::string name = to_lower(path.filename().string()); name.find("mmproj") != std::string::npos) {
             mmproj_files.push_back(path);
-        } else if (name.find("vl") != std::string::npos) {
+        } else if (is_vl_main_model_name(name)) {
             vl_main_files.push_back(path);
         } else {
             llm_files.push_back(path);
@@ -287,10 +308,26 @@ void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, c
 
         if (key.empty()) { // 名称不规范，直接用最简陋的方式构建info
             LOG_WARN("{} parse info failed, use basic path only ",filename);
+            if (is_optional_mmproj_vl_model(filename)) {
+                HLIEModelInfo base;
+                if (base.parse_from_gguf_filename(p.string()) == 0) {
+                    base.is_multi_model_ = true;
+                    base.mm_proj_path_.clear();
+                    base.vl_spec_.clear();
+                    result.push_back(base);
+                }
+            }
+            continue;
+        }
+
+        if (is_optional_mmproj_vl_model(filename) && mmproj_index.find(key) == mmproj_index.end()) {
             HLIEModelInfo base;
-            base.is_multi_model_ = true;
-            base.model_path_ = filename;
-            result.push_back(base);
+            if (base.parse_from_gguf_filename(p.string()) == 0) {
+                base.is_multi_model_ = true;
+                base.mm_proj_path_.clear();
+                base.vl_spec_.clear();
+                result.push_back(base);
+            }
             continue;
         }
 
@@ -322,12 +359,11 @@ void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, c
         } else {
             LOG_WARN("{} parse info failed, use basic path only ",p.string());
             HLIEModelInfo base;
-            base.is_multi_model_ = true;
+            base.is_multi_model_ = false;
             base.model_path_ = p.string();
             base.model_name_ = p.stem().string();
-            model.is_multi_model_ = false;
-            model.mm_proj_path_.clear();
-            model.vl_spec_.clear();
+            base.mm_proj_path_.clear();
+            base.vl_spec_.clear();
             result.push_back(base);
         }
     }
