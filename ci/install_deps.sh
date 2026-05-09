@@ -37,6 +37,8 @@ xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software
 uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-linux_${ARCH}.tar.gz"
 libsamplerate_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/libsamplerate-linux_${ARCH}.tar.gz"
 eigen3_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/eigen3.tar.gz"
+kaldi_native_fbank_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/kaldi-native-fbank-linux_${ARCH}.tar.gz"
+
 
 # 下载文件并检查是否成功
 download_file() {
@@ -87,6 +89,16 @@ deploy_libsamplerate() {
     download_file "$libsamplerate_url" "libsamplerate.tar.gz"
     tar -xzf libsamplerate.tar.gz -C third_party/samplerate --strip-components=1
     rm libsamplerate.tar.gz
+}
+
+deploy_kaldi_native_fbank() {
+    local kaldi_native_fbank_url=$1
+    mkdir -p third_party/kaldi-native-fbank
+    rm -rf third_party/kaldi-native-fbank/*
+
+    download_file "$kaldi_native_fbank_url" "kaldi_native_fbank.tar.gz"
+    tar -xzf kaldi_native_fbank.tar.gz -C third_party/kaldi-native-fbank --strip-components=1
+    rm kaldi_native_fbank.tar.gz
 }
 
 deploy_eigen3() {
@@ -150,6 +162,7 @@ main() {
     deploy_uwebsockets "$uwebsockets_url"
     deploy_libsamplerate "$libsamplerate_url"
     deploy_eigen3 "$eigen3_url"
+    deploy_kaldi_native_fbank "$kaldi_native_fbank_url"
 
     echo "Deployed Dadao SDK and System SDK for $ARCH."
 }

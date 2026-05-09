@@ -1,173 +1,183 @@
-#pragma once
+#ifndef HLIE_AUDIO_H
+#define HLIE_AUDIO_H
 
 #include <cstddef>
 #include <cstdint>
 #include <vector>
 
-#include "hlie_base.h"
+#include "half.hpp"
+#include "hlie_tcim_util.h"
 
 #define hlie_INTERNAL_HEADER
 
+HLIE_NAMESPACE_BEGIN
 
-struct audio_hparams {
-    // audio
-    int32_t n_mel_bins = 0; // whisper preprocessor
-
-    // audio-to-mel preprocessor params
-    int32_t audio_chunk_len = -1; // in seconds
-    int32_t audio_sample_rate = -1;
-    int32_t audio_n_fft = -1;
-    int32_t audio_window_len = -1;
-    int32_t audio_hop_len = -1;
+/**
+ * @brief Mel spectrogram features for Flow/Vocoder (80-bin at 24kHz)
+ */
+struct MelFeatures80 {
+    std::vector<float> data; ///< Mel features [n_mels * n_frames] float16
+    int n_mels; ///< Number of mel bins (80)
+    int n_frames; ///< Number of time frames
 };
 
-struct hlie_audio_mel {
-    int n_len;
-    int n_len_org;
-    int n_mel;
-
-    std::vector<float> data;
+/**
+ * @brief Mel spectrogram features for Speech Tokenizer (128-bin at 16kHz)
+ */
+struct MelFeatures128 {
+    std::vector<TensorFP16> data; ///< Mel features [n_mels * n_frames] float16
+    int n_mels; ///< Number of mel bins (128)
+    int n_frames; ///< Number of time frames
 };
 
-struct hlie_audio_mel_filters {
-    int32_t n_mel;
-    int32_t n_fft;
-
-    std::vector<float> data;
+/**
+ * @brief FBANK features for CampPlus (80-bin at 16kHz)
+ */
+struct FbankFeatures {
+    std::vector<float> data; ///< FBANK features [n_frames * n_mels] float32
+    int n_mels; ///< Number of mel bins (80)
+    int n_frames; ///< Number of time frames
 };
 
-// cache for audio processing, each processor instance owns its own cache
-struct hlie_audio_cache {
-    std::vector<float> sin_vals;
-    std::vector<float> cos_vals;
-
-    std::vector<float> hann_window;
-
-    hlie_audio_mel_filters filters;
-
-    void fill_sin_cos_table(int n);
-
-    void fill_hann_window(int length, bool periodic);
-
-    // Build mel filterbank matrix [n_mel × n_fft_bins] at runtime.
-    // n_fft_bins must be (N_fft / 2 + 1). Example: if N_fft=512 -> n_fft_bins=257.
-    void fill_mel_filterbank_matrix(int n_mel, int n_fft,
-                                    int sample_rate, // e.g. 16000
-                                    float fmin = 0.0f, // e.g. 0.0
-                                    float fmax = -1.0f, // e.g. sr/2; pass -1 for auto
-                                    bool slaney_area_norm = true,
-                                    float scale = 1.0f // optional extra scaling
-    );
-};
-
-struct hlie_audio_preprocessor {
-    audio_hparams hparams;
-
-    hlie_audio_preprocessor(const audio_hparams& ctx) : hparams(ctx) {
-    }
-
-    virtual ~hlie_audio_preprocessor() = default;
-    virtual void initialize() = 0; // NOT thread-safe
-    virtual bool preprocess(const float* samples, size_t n_samples, std::vector<hlie_audio_mel>& output) = 0;
-};
-
-struct hlie_audio_preprocessor_whisper : hlie_audio_preprocessor {
-    hlie_audio_preprocessor_whisper(const audio_hparams& ctx) : hlie_audio_preprocessor(ctx) {
-    }
-    void initialize() override;
-    bool preprocess(const float* samples, size_t n_samples, std::vector<hlie_audio_mel>& output) override;
-
-private:
-    hlie_audio_cache cache;
-};
-
-// NEW: Match librosa/speech specific mel_spectrogram implementation
-// Key differences from whisper:
-// - Uses magnitude (sqrt) instead of power
-// - Symmetric reflect padding: pad = (n_fft - hop_size) / 2
-// - Librosa-style mel filterbank with Slaney normalization
-struct hlie_audio_preprocessor_librosa : hlie_audio_preprocessor {
-    hlie_audio_preprocessor_librosa(const audio_hparams& ctx) : hlie_audio_preprocessor(ctx) {
-    }
-    void initialize() override;
-    bool preprocess(const float* samples, size_t n_samples, std::vector<hlie_audio_mel>& output) override;
-
-private:
-    hlie_audio_cache cache;
-};
-
-// struct hlie_audio_preprocessor_conformer : hlie_audio_preprocessor {
-//     hlie_audio_preprocessor_conformer(const clip_ctx * ctx) : hlie_audio_preprocessor(ctx) {}
-//     void initialize() override;
-//     bool preprocess(const float * samples, size_t n_samples, std::vector<hlie_audio_mel> & output) override;
-//
-//   private:
-//     hlie_audio_cache cache;
-// };
-
-//
-// streaming ISTFT - converts spectrogram frames back to audio one frame at a time
-//
-struct hlie_audio_streaming_istft {
-    hlie_audio_streaming_istft(int n_fft, int hop_length);
-
-    // reset streaming state
-    void reset();
-
-    // process a single STFT frame (streaming)
-    // frame_spectrum: [n_fft_bins x 2] interleaved real/imag
-    // returns: up to hop_length samples
-    std::vector<float> process_frame(const float* frame_spectrum);
-
-    // flush remaining samples at end of stream
-    std::vector<float> flush();
-
-private:
-    int n_fft;
-    int hop_length;
-    int n_fft_bins;
-
-    // Own cache for output processing
-    hlie_audio_cache cache;
-
-    // Streaming state
-    std::vector<float> overlap_buffer;
-    std::vector<float> window_sum_buffer;
-    int padding_to_remove;
-
-    // Working buffers for IFFT
-    std::vector<float> ifft_in;
-    std::vector<float> ifft_out;
-};
-
-class HLIE_API STFTUtil {
+/**
+ * @brief Audio preprocessing class for CosyVoice3 TTS
+ *
+ * Handles:
+ * - Audio file loading (any format via miniaudio)
+ * - Automatic resampling to target sample rate (16kHz or 24kHz)
+ * - Mono conversion
+ * - Mel spectrogram computation (80-bin for Flow/Vocoder at 24kHz)
+ * - Mel spectrogram computation (128-bin for Speech Tokenizer at 16kHz)
+ * - FBANK feature computation (80-bin for CampPlus at 16kHz)
+ */
+class HLIEAudio {
 public:
-    // =============================================================================
-    // STFT utilities - computes Short-Time Fourier Transform for a single sequence
-    // =============================================================================
+    // CosyVoice3 audio processing constants
+
+    // Sample rates
+    static constexpr int kSampleRate16k = 16000; ///< Sample rate for tokenizer/campplus
+    static constexpr int kSampleRate24k = 24000; ///< Sample rate for vocoder
+
+    // Mel params for 24kHz (Flow/Vocoder)
+    static constexpr int kNFFT24k = 1920; ///< FFT size for 24kHz mel
+    static constexpr int kHopSize24k = 480; ///< Hop size for 24kHz mel (20ms stride)
+    static constexpr int kWinSize24k = 1920; ///< Window size for 24kHz mel
+    static constexpr int kNMels80 = 80; ///< Mel bins for Flow/Vocoder
+    static constexpr int kNFFTBins24k = 961; ///< FFT output bins (n_fft/2 + 1)
+
+    // Mel params for 16kHz (Speech Tokenizer - Whisper style)
+    static constexpr int kNFFT16k = 400; ///< FFT size for 16kHz mel
+    static constexpr int kHopSize16k = 160; ///< Hop size for 16kHz mel (10ms stride)
+    static constexpr int kNMels128 = 128; ///< Mel bins for Speech Tokenizer
+    static constexpr int kNFFTBins16k = 201; ///< FFT output bins (n_fft/2 + 1)
+
+    // FBANK params for 16kHz (CampPlus)
+    static constexpr int kFbankNMels = 80; ///< FBANK mel bins
+    static constexpr int kFbankFixedT = 1000; ///< Fixed time frames for CampPlus
 
     /**
-     * Compute STFT (Short-Time Fourier Transform) for a single long sequence.
-     * Matches PyTorch torch.stft behavior:
-     *   torch.stft(x, n_fft, hop_length, n_fft, window, onesided=True, center=False, return_complex=False)
-     *
-     * @param cache Pre-computed sin/cos tables (use fill_sin_cos_table(n_fft))
-     * @param input Input signal (real-valued), length = input_len
-     * @param input_len Length of input signal
-     * @param n_fft FFT size (e.g., 16, 512, 1024)
-     * @param hop_length Hop length between frames (e.g., 4, 256)
-     * @param window Window function array (e.g., Hann window of length n_fft)
-     * @param window_len Length of window (should equal n_fft)
-     * @param output Output buffer [n_frames, n_freq_bins, 2] where 2 = [real, imag]
-     *              Layout: [frame0_freq0_real, frame0_freq0_imag, frame0_freq1_real, ...]
-     * @param output_size Output buffer capacity (in float elements)
-     *
-     * @return Number of float elements written to output, or 0 on error
-     *
-     * Output dimensions:
-     *   n_frames = (input_len - n_fft) / hop_length + 1  (when center=False)
-     *   n_freq_bins = n_fft / 2 + 1  (when onesided=True)
+     * @brief Default constructor
      */
-    static size_t hlie_audio_stft(const hlie_audio_cache& cache, const float* input, int input_len, int n_fft, int hop_length,
-                                  const float* window, int window_len, float* output, size_t output_size);
+    HLIEAudio() : sample_rate_(0), total_samples_(0), audio_loaded_(false) {
+    }
+
+    // Non-copyable
+    HLIEAudio(const HLIEAudio&) = delete;
+    HLIEAudio& operator=(const HLIEAudio&) = delete;
+
+    // Moveable
+    HLIEAudio(HLIEAudio&&) noexcept = default;
+    HLIEAudio& operator=(HLIEAudio&&) noexcept = default;
+
+    ~HLIEAudio() = default;
+
+    /**
+     * @brief Load audio file, convert to mono, resample to target sample rate
+     * @param audio_path Path to audio file (WAV/MP3/FLAC etc.)
+     * @param target_sr Target sample rate (16000 or 24000)
+     * @return true if successful
+     */
+    bool LoadAudio(const std::string& audio_path, int target_sr);
+
+    /**
+     * @brief Get loaded PCM data
+     * @return PCM samples as float32 vector
+     */
+    [[nodiscard]] const std::vector<float>& GetPcmData() const {
+        return pcm_data_;
+    }
+
+    /**
+     * @brief Get sample rate of loaded audio
+     */
+    [[nodiscard]] int GetSampleRate() const {
+        return sample_rate_;
+    }
+
+    /**
+     * @brief Get number of samples
+     */
+    [[nodiscard]] int GetNumSamples() const {
+        return total_samples_;
+    }
+
+    /**
+     * @brief Get audio duration in seconds
+     */
+    [[nodiscard]] float GetDuration() const;
+
+    /**
+     * @brief Compute 80-bin mel spectrogram for Flow/Vocoder (24kHz)
+     * @param pcm_data Input PCM samples (24kHz mono)
+     * @return MelFeatures80 with mel spectrogram [n_mels, n_frames]
+     */
+    [[nodiscard]] static MelFeatures80 ComputeMelSpectrogram80(const std::vector<float>& pcm_data);
+
+    /**
+     * @brief Compute 128-bin mel spectrogram for Speech Tokenizer (16kHz)
+     *        Uses Whisper-style parameters
+     * @param pcm_data Input PCM samples (16kHz mono)
+     * @return MelFeatures128 with mel spectrogram [n_mels, n_frames]
+     */
+    [[nodiscard]] static MelFeatures128 ComputeMelSpectrogram128(const std::vector<float>& pcm_data);
+
+    /**
+     * @brief Compute FBANK features for CampPlus (16kHz)
+     * @param pcm_data Input PCM samples (16kHz mono)
+     * @return FbankFeatures with FBANK features [n_frames, n_mels]
+     */
+    [[nodiscard]] static FbankFeatures ComputeFbank(const std::vector<float>& pcm_data);
+
+    /**
+     * @brief Get mel features for loaded audio (80-bin, 24kHz)
+     */
+    [[nodiscard]] MelFeatures80 GetMelFeatures80() const;
+
+    /**
+     * @brief Get mel features for loaded audio (128-bin, 16kHz)
+     */
+    [[nodiscard]] MelFeatures128 GetMelFeatures128() const;
+
+    /**
+     * @brief Get FBANK features for loaded audio (16kHz)
+     */
+    [[nodiscard]] FbankFeatures GetFbankFeatures() const;
+
+private:
+    std::vector<float> pcm_data_;
+    int sample_rate_;
+    int total_samples_;
+    bool audio_loaded_;
+
+    // Helper functions
+    [[nodiscard]] static std::vector<float> ComputeHannWindow(int win_size);
+    [[nodiscard]] static std::vector<float> ApplyReflectionPadding(const std::vector<float>& audio, int pad_len);
+
+    // Hz to mel conversion
+    [[nodiscard]] static float HzToMel(float hz);
+    [[nodiscard]] static float MelToHz(float mel);
 };
+
+HLIE_NAMESPACE_END
+
+#endif

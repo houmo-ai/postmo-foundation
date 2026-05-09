@@ -7,6 +7,7 @@ set(LLAMA_CPP_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo")
 set(UWEBSOCKET_PATH "${PROJECT_SOURCE_DIR}/third_party/uwebsockets")
 set(INIH_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/inih")
 set(SAMPLERATE_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/samplerate")
+set(KALDI_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/kaldi-native-fbank")
 
 find_library(TCIM_LIBRARY NAMES tcim_runtime_lite ai_core hdplrt riscv PATHS ${TCIM_RUNTIME_PATH}/lib NO_DEFAULT_PATH REQUIRED)
 find_library(LLAMA_CPP_LIBRARY_LLAMA NAMES llama PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
@@ -40,6 +41,10 @@ include_directories(${UWEBSOCKET_PATH}/include)
 find_library(SAMPLERATE_LIBRARY NAMES samplerate PATHS ${SAMPLERATE_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
 message("SAMPLERATE_LIBRARY=${SAMPLERATE_LIBRARY}")
 include_directories(${SAMPLERATE_LIBRARY_PATH}/include)
+
+find_library(KALDI_LIBRARY NAMES kaldi-native-fbank-core PATHS ${KALDI_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
+message("KALDI_LIBRARY=${KALDI_LIBRARY}")
+include_directories(${KALDI_LIBRARY_PATH})
 
 
 find_library(LLAMA_CPP_LIBRARY_MTMD NAMES mtmd PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)

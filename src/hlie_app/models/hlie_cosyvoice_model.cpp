@@ -1,5 +1,6 @@
 #include "hlie_app/models/hlie_cosyvoice_model.h"
 
+#include <cstring>
 #include <random>
 #include <regex>
 
@@ -32,6 +33,20 @@ namespace {
 
     // LLM constants
     constexpr int SPEECH_TOKEN_SIZE = 6561;
+
+    bool IsLlmKCacheInput(const std::string& input_name) {
+        static const std::regex pattern(R"(^model_layers_(\d+)_self_attn_kcache_input$)");
+        return std::regex_match(input_name, pattern);
+    }
+
+    bool IsLlmVCacheInput(const std::string& input_name) {
+        static const std::regex pattern(R"(^model_layers_(\d+)_self_attn_vcache_input$)");
+        return std::regex_match(input_name, pattern);
+    }
+
+    bool IsLlmCacheInput(const std::string& input_name) {
+        return IsLlmKCacheInput(input_name) || IsLlmVCacheInput(input_name);
+    }
 
     std::vector<float> TransposeSeqFeatToFeatSeq(const std::vector<float>& input, int seq_len, int feat_dim) {
         std::vector<float> out(static_cast<size_t>(seq_len * feat_dim), 0.0f);
@@ -379,20 +394,28 @@ int HLIECosyVoiceModel::load_model(const std::string& model) {
 
 
         std::vector<std::string> llm_qwen2_docode_dummy_tensor_names;
+        std::vector<std::string> llm_qwen2_kcache_input_names;
+        std::vector<std::string> llm_qwen2_vcache_input_names;
         prefill_input_names_ = TcimUtil::get_module_input_names(llm_qwen2_prefill_model_);
         for (const auto& input_name : prefill_input_names_) {
-            if (input_name.find("model_layers") != std::string::npos) {
-                llm_qwen2_docode_dummy_tensor_names.push_back(input_name);
+            if (IsLlmKCacheInput(input_name)) {
+                llm_qwen2_kcache_input_names.push_back(input_name);
+            } else if (IsLlmVCacheInput(input_name)) {
+                llm_qwen2_vcache_input_names.push_back(input_name);
             }
         }
+        llm_qwen2_docode_dummy_tensor_names.reserve(llm_qwen2_kcache_input_names.size() + llm_qwen2_vcache_input_names.size());
+        llm_qwen2_docode_dummy_tensor_names.insert(llm_qwen2_docode_dummy_tensor_names.end(), llm_qwen2_kcache_input_names.begin(),
+                                                   llm_qwen2_kcache_input_names.end());
+        llm_qwen2_docode_dummy_tensor_names.insert(llm_qwen2_docode_dummy_tensor_names.end(), llm_qwen2_vcache_input_names.begin(),
+                                                   llm_qwen2_vcache_input_names.end());
 
-        // Todo: Decode need init dummy and cache
         if (!load_model_by_name(std::string(cosyvoice3_llm_qwen2_decode), llm_qwen2_decode_model_, llm_qwen2_docode_dummy_tensor_names))
             return -1;
 
         for (const auto& input_name : llm_qwen2_docode_dummy_tensor_names) {
             auto cache = llm_qwen2_prefill_model_->GetDevInput(input_name);
-            llm_qwen2_decode_model_->SetInput(input_name, cache);
+            llm_qwen2_decode_model_->SetDevInput(input_name, cache);
         }
 
         if (!load_model_by_name(std::string(cosyvoice3_speech_tokenizer), cosyvoice3_speech_tokenizer_model_))
@@ -436,11 +459,15 @@ int HLIECosyVoiceModel::load_model(const std::string& model) {
             LOG_INFO("Prefill model input shape: [{}, {}, {}]", prefill_shape[0], prefill_shape[1], prefill_shape[2]);
         }
 
-        if (!decode_input_names_.empty()) {
-            // decode_input_names[3] should be the context max length
-            const auto decode_input_info = llm_qwen2_decode_model_->GetInputInfo(decode_input_names_[3]);
-            context_max_length_ = decode_input_info.AsContiguous().Shape()[2];
+        for (const auto& input_name : prefill_input_names_) {
+            if (IsLlmCacheInput(input_name)) {
+                const auto cache_input_info = llm_qwen2_prefill_model_->GetInputInfo(input_name);
+                context_max_length_ = cache_input_info.AsContiguous().Shape()[2];
+                break;
+            }
+        }
 
+        if (!decode_input_names_.empty()) {
             auto decode_batch_info = llm_qwen2_decode_model_->GetInputInfo(decode_input_names_[0]);
             batch_size_ = decode_batch_info.AsContiguous().Shape()[0];
             LOG_INFO("Decode model context_max_length: {}, batch_size: {}", context_max_length_, batch_size_);
@@ -472,7 +499,10 @@ int HLIECosyVoiceModel::extract_text_token(const std::string& tts_text, std::vec
 std::pair<std::vector<int>, int> HLIECosyVoiceModel::speech_tokenizer(const std::vector<TensorFP16>& padded_input,
                                                                       const std::vector<TensorFP16>& mask,
                                                                       const std::vector<TensorFP16>& mask1, int feat_len) {
-
+    // Set inputs to module
+    // Input 0: padded_mel [1, 128, 3000]
+    // Input 1: mask [1, 20, 750, 750]
+    // Input 2: mask1 [1, 750, 1280]
 
     auto padded_input_tensor = cosyvoice3_speech_tokenizer_input_map_.at(speech_tokenizer_input_names_[0]);
     CHECK_TCIM_STATUS(padded_input_tensor.Buffer().CopyFromHost(padded_input.data(), padded_input.size() * sizeof(TensorFP16)));
@@ -735,7 +765,7 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
 
     int top_ids =  hlie_sampler_->SamplingIds(llm_host_output_opt, out_tokens, 6761, sampling, ignore_eos);
     auto t_first_token = high_resolution_clock::now();
-
+    /*
     // Check if first token is stop token
     bool is_first_stop = false;
     for (int stop_id : stop_token_ids_) {
@@ -754,7 +784,7 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
             perf->llm_total_s = duration<float>(t_first_token - t_start).count();
         }
         return out_tokens;
-    }
+    }*/
 
     out_tokens.push_back(top_ids);
     context_length += seq_length;
@@ -765,6 +795,8 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
 
     const std::string& decode_input_name = decode_input_names_[0];
     const std::string& decode_valid_length_name = decode_input_names_[1];
+    const std::string& decode_current_length_name = decode_input_names_[2];
+    const int32_t decode_current_length = 1;
 
     LOG_DEBUG("CosyVoice3 llm decode start, top_ids: {}, context_length: {}, max_len: {}", top_ids, context_length, max_len);
     for (int i = 1; i < max_len; ++i) {
@@ -779,6 +811,10 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
         const auto decode_valid_length_tensor = llm_qwen2_decode_input_map_.at(decode_valid_length_name);
         CHECK_TCIM_STATUS(decode_valid_length_tensor.Buffer().CopyFromHost(valid_len_vec.data(), valid_len_vec.size() * sizeof(int32_t)));
         CHECK_TCIM_STATUS(llm_qwen2_decode_model_->SetInput(decode_valid_length_name, decode_valid_length_tensor));
+
+        const auto decode_current_length_tensor = llm_qwen2_decode_input_map_.at(decode_current_length_name);
+        CHECK_TCIM_STATUS(decode_current_length_tensor.Buffer().CopyFromHost(&decode_current_length, sizeof(decode_current_length)));
+        CHECK_TCIM_STATUS(llm_qwen2_decode_model_->SetInput(decode_current_length_name, decode_current_length_tensor));
 
         CHECK_TCIM_STATUS(llm_qwen2_decode_model_->Run());
         CHECK_TCIM_STATUS(llm_qwen2_decode_model_->Sync());
@@ -798,7 +834,7 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
         // ========== STEP 7: Get logp output and squeeze Sample ==========
         ignore_eos = (i < min_len);
         auto llm_dev_output_opt1 = cosyvoice3_llm_decoder_model_->GetDevOutput(llm_decoder_output_names_[0]);
-        auto llm_host_output_opt1 = llm_dev_output_opt.ToHost(true);
+        auto llm_host_output_opt1 = llm_dev_output_opt1.ToHost(true);
         top_ids = hlie_sampler_->SamplingIds(llm_host_output_opt1, out_tokens, 6761, sampling, ignore_eos);
 
         context_length += 1;
@@ -831,6 +867,7 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
     }
 
     LOG_INFO("LLM inference complete: {} tokens generated", out_tokens.size());
+
     return out_tokens;
 }
 

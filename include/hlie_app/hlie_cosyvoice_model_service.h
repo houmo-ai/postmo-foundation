@@ -21,6 +21,8 @@ class HLIECosyVoiceModel;
 
 struct CosyVoiceRequest {
     std::string content;
+    std::string prompt_text;
+    std::string prompt_wav_path;
 };
 
 struct CosyVoiceResult {
@@ -49,7 +51,6 @@ struct FrontendInput {
     std::vector<int> flow_prompt_speech_token;
     int flow_prompt_speech_token_len;
     std::vector<float> prompt_speech_feat;
-    int prompt_speech_feat_len;
     std::vector<float> embedding;
 };
 
@@ -137,8 +138,11 @@ private:
      * @param text_frontend Whether to use text frontend normalization
      * @return Vector of normalized text segments, or single text if split=false
      */
-    std::vector<std::string> text_normalize(const std::string& text, bool split = true, bool text_frontend = true);
+    std::vector<std::string> text_normalize(const std::string& text, bool split = true) const;
+    int CalcUttLength(const std::string& text, bool is_chinese) const;
+    bool ShouldMerge(const std::string& text, bool is_chinese, int merge_len) const;
 
+    std::vector<std::string> SplitParagraph(const std::string& text, int max_tokens, int min_tokens) const;
     /**
      * Process text for zero-shot synthesis.
      *
@@ -156,17 +160,15 @@ private:
      * @param prompt_wav Path to prompt audio file
      * @return Pair of (speech_token, token_len)
      */
-    std::pair<SpeechToken, int> extract_speech_token(const std::string& prompt_wav) const;
-    std::pair<std::vector<float>, int> extract_speech_feat(const std::string& prompt_wav) const;
+    std::pair<SpeechToken, int> extract_speech_token(const std::vector<float>& pcm_data_16k) const;
 
-    std::vector<float> extract_spk_embedding(const std::string& prompt_wav) const;
+    std::vector<float> extract_spk_embedding(const std::vector<float>& pcm_data_16k) const;
 
     std::string model_key_;
 
     std::shared_ptr<HLIECosyVoiceModel> cosyvoice_model_;
 
-    std::unique_ptr<hlie_audio_preprocessor_whisper> audio_preprocessor_;
-    std::unique_ptr<hlie_audio_preprocessor_librosa> audio_spec_preprocessor_;
+    std::shared_ptr<HLIEAudio> audio_processor_;
 
     // Shared state for multi-threaded inference
     std::mutex lock_;
