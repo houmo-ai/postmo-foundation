@@ -215,7 +215,7 @@ package_service() {
     cp third_party/whisper.cpp/lib/libwhisper.so "$release_dir/lib/" || true
     cp third_party/uwebsockets/bin/libuv.so "$release_dir/lib/" || true
     cp third_party/samplerate/lib/libsamplerate.so.* "$release_dir/lib/" || true
-    cp third_party/kaldi-native-fbank/lib/libkaldi-native-fbank-core.so.* "$release_dir/lib/" || true
+    cp third_party/kaldi-native-fbank/lib/libkaldi-native-fbank-core.so "$release_dir/lib/" || true
     cp third_party/houmo/lib/libhal_xh2a.so.1.0 "$release_dir/lib/" || true
 
     if [[ -f /lib/x86_64-linux-gnu/libstdc++.so.6 && "$ARCH" == "x86_64" ]]; then
