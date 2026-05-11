@@ -1,0 +1,18 @@
+services:
+  hliepython:
+    image: harbor.houmo.ai/application_software/infer:v3.0.0
+    container_name: hliepython_server_container
+    privileged: true
+    restart: always
+    working_dir: /opt/hliepython
+    volumes:
+      - ./config.yaml:/opt/hliepython/config.yaml
+      - ../models:/opt/hliepython/models
+    command:
+      - python
+      - -m
+      - hliepython.main
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    network_mode: "host"
+    pid: host

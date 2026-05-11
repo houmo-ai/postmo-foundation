@@ -1,0 +1,14 @@
+# 构建镜像时忽略的文件和目录
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+app.log
+docker/logs/
+examples/

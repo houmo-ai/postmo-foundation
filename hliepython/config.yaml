@@ -11,7 +11,7 @@ models:
     instances:
       - port: 7801
         model_path: "qwen3.5_9B"
-        model_type: "text"    # text、embedding、image、asr、tts
+        model_type: "text"    # text、embedding、asr、tts
         vllm_config:
           max-model-len: 65536
           max-num-seqs: 1

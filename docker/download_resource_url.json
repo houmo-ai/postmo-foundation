@@ -1,0 +1,7 @@
+{
+    "driver": "http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.2.0/2026/04/10/1639/ubuntu1804/houmo-drv-xh2_v1.2.0_linux_x86_64.run",
+    "tcim_runtime": "http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.2.0/2026/04/10/1639/ubuntu2004/houmo_tcim_runtime_xh2_linux_x86_64-1.2.0.tar.gz",
+    "hlievllm": "http://10.10.1.53:8082/artifactory/application_software/release/hlievllm/HLIEvLLM-1.3.0.zip",
+    "hlievllm-plugin": "http://10.10.1.53:8082/artifactory/application_software/release/hlievllm/hlievllmplugin-1.3.0-py3-none-any.whl",
+    "hliepython": "http://10.10.1.53:8082/artifactory/application_software/release/hi.py/hliepython-3.0.0.tar.gz"
+}
