@@ -4,7 +4,7 @@ import glob
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
-from loguru import logger
+from hliepython.utils.logging import async_logger as logger
 from gguf import GGUFReader
 
 @dataclass

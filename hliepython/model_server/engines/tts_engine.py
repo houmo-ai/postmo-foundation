@@ -34,7 +34,7 @@ import struct
 from transformers import AutoTokenizer
 from fastapi import Request
 from fastapi.responses import Response
-from loguru import logger
+from hliepython.utils.logging import async_logger as logger
 import inflect
 from functools import partial
 

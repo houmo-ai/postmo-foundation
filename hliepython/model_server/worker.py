@@ -5,7 +5,7 @@ import base64
 from http import HTTPStatus
 from collections.abc import AsyncGenerator
 from inspect import isawaitable
-from loguru import logger
+from hliepython.utils.logging import configure_logging, get_async_logger, get_sync_logger
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response, StreamingResponse, JSONResponse
@@ -33,6 +33,8 @@ from hliepython.model_server.engines.protocol.embeddings import (
 
 # 初始化子进程服务
 app = FastAPI()
+logger = get_async_logger("worker")
+sync_logger = get_sync_logger("worker")
 
 # 子进程绑定的模型和端口
 MODEL_NAME = ""
@@ -59,7 +61,7 @@ async def startup_event():
     global engine
     INSTANCE_CONFIG["model_name"] = MODEL_NAME
     engine = InferenceEngineFactory.get_engine(INSTANCE_CONFIG)
-    logger.info(f"✅ Worker {MODEL_NAME}:{PORT} 推理引擎初始化完成")
+    sync_logger.info(f"Worker {MODEL_NAME}:{PORT} 推理引擎初始化完成")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -74,7 +76,7 @@ async def shutdown_event():
                     torch.cuda.empty_cache()
             except Exception:
                 pass
-            logger.info(f"🛑 Worker {MODEL_NAME}:{PORT} 推理引擎关闭")
+            sync_logger.info(f"Worker {MODEL_NAME}:{PORT} 推理引擎关闭")
         finally:
             engine = None
 
@@ -495,11 +497,20 @@ def run_worker(
     vllm_config=None,
     additional_config=None,
     model_type="text",
+    logging_config=None,
 ):
     import uvicorn
-    global MODEL_NAME, PORT, INSTANCE_CONFIG
+    global MODEL_NAME, PORT, INSTANCE_CONFIG, logger, sync_logger
+    configure_logging(
+        logging_config,
+        process_role="worker",
+        port=int(port),
+        model_name=model_name,
+    )
     MODEL_NAME = model_name
     PORT = port
+    logger = get_async_logger(f"worker:{model_name}:{port}")
+    sync_logger = get_sync_logger(f"worker:{model_name}:{port}")
     additional_config = additional_config or {}
     device_ids = additional_config.get("device_ids", [])
     INSTANCE_CONFIG = {
@@ -518,7 +529,9 @@ def run_worker(
     #     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(d) for d in device_ids)
     #     os.environ["NVIDIA_VISIBLE_DEVICES"] = ",".join(str(d) for d in device_ids)
 
-    logger.info(f"🚀 启动子进程, 模型={MODEL_NAME} 端口={PORT} 设备={device_ids} 路径={model_path}")
+    sync_logger.info(
+        f"启动子进程, 模型={MODEL_NAME} 端口={PORT} 设备={device_ids} 路径={model_path}"
+    )
 
     # 通用配置可根据 model_path/additional_config 动态设置
     # 这里可扩展为加载本地模型路径或专用调参

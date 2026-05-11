@@ -13,7 +13,7 @@ import numpy as np
 from math import ceil
 from fastapi import Request
 from fastapi.responses import Response
-from loguru import logger
+from hliepython.utils.logging import async_logger as logger
 
 from typing import Final, Literal, TypeAlias, TypeVar, cast
 from typing import Callable, Literal, Optional, TypeVar, Union, cast

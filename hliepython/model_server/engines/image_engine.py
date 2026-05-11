@@ -3,7 +3,7 @@ import json
 import asyncio
 import base64
 from io import BytesIO
-from loguru import logger
+from hliepython.utils.logging import async_logger as logger
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from PIL import Image

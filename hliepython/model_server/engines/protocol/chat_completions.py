@@ -9,7 +9,7 @@ from pydantic import (
     BaseModel, ConfigDict, Field, TypeAdapter,
     ValidationInfo, field_validator, model_validator)
 from typing import List, Literal, ClassVar, Optional, Union, Tuple, Dict, Any, Callable, cast
-from loguru import logger
+from hliepython.utils.logging import async_logger as logger
 
 from typing import Union, Iterable
 from typing_extensions import Literal, Required, TypedDict, TypeAlias

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 import importlib.resources
 
 import yaml
-from loguru import logger
+from hliepython.utils.logging import async_logger as logger
 
 
 def _read_config_yaml(config_path: Optional[str] = None) -> Dict[str, Any]:
@@ -55,6 +55,20 @@ def _normalize_model_root_dir(model_root_dir: Any) -> str:
     return str(Path(str(model_root_dir)).expanduser())
 
 
+def _as_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
 def _resolve_model_path(model_path: Any, model_root_dir: str) -> str:
     normalized_path = str(model_path).strip()
     if not normalized_path:
@@ -68,22 +82,85 @@ def _resolve_model_path(model_path: Any, model_root_dir: str) -> str:
 
 
 @dataclass
+class LoggingConfig:
+    level: str = "INFO"
+    directory: str = "logs"
+    sync_enabled: bool = True
+    sync_level: str = "INFO"
+    sync_filename: str = "sync.log"
+    console_enabled: bool = True
+    rotation: str = "100 MB"
+    retention: str = "14 days"
+    compression: Optional[str] = None
+    serialize: bool = False
+    backtrace: bool = False
+    diagnose: bool = False
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Optional[Dict[str, Any]],
+        legacy_level: str = "info",
+    ) -> "LoggingConfig":
+        cfg = _as_dict(data or {}, "server")
+        legacy_logging = _as_dict(cfg.get("logging", {}), "server.logging")
+
+        def pick(key: str, legacy_key: Optional[str] = None, default: Any = None) -> Any:
+            if key in cfg:
+                return cfg.get(key)
+            lookup_key = legacy_key or key
+            if lookup_key in legacy_logging:
+                return legacy_logging.get(lookup_key)
+            return default
+
+        level = str(pick("log_level", "level", legacy_level or "info")).upper()
+        sync_level = str(pick("sync_log_level", default=level)).upper()
+        return cls(
+            level=level,
+            directory=str(pick("log_dir", "directory", "logs")),
+            sync_enabled=_as_bool(pick("sync_log_enabled", default=True), True),
+            sync_level=sync_level,
+            sync_filename=str(pick("sync_log_filename", "sync_filename", "sync.log")),
+            console_enabled=_as_bool(pick("console_log_enabled", "console_enabled", True), True),
+            rotation=str(pick("log_rotation", "rotation", "100 MB")),
+            retention=str(pick("log_retention", "retention", "14 days")),
+            compression=(
+                str(pick("log_compression", "compression"))
+                if pick("log_compression", "compression") not in (None, "")
+                else None
+            ),
+            serialize=_as_bool(pick("log_serialize", "serialize", False), False),
+            backtrace=_as_bool(pick("log_backtrace", "backtrace", False), False),
+            diagnose=_as_bool(pick("log_diagnose", "diagnose", False), False),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class ServerConfig:
     main_port: int = 8000
     log_level: str = "info"
-    vllm_log_level: str = "info"
+    vllm_log_level: str = "warning"
     model_root_dir: str = "/houmo/llm/models"
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ServerConfig":
         cfg = _as_dict(data, "server")
+        logging_config = LoggingConfig.from_dict(
+            cfg,
+            legacy_level=str(cfg.get("log_level", "info")),
+        )
         return cls(
             main_port=_as_int(cfg.get("main_port"), 8000, "server.main_port"),
-            log_level=str(cfg.get("log_level", "info")).lower(),
-            vllm_log_level=str(cfg.get("vllm_log_level", "info")).lower(),
+            log_level=logging_config.level.lower(),
+            vllm_log_level=str(cfg.get("vllm_log_level", "warning")).lower(),
             model_root_dir=_normalize_model_root_dir(
                 cfg.get("model_root_dir", "/houmo/llm/models")
             ),
+            logging=logging_config,
         )
 
 

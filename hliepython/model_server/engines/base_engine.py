@@ -4,7 +4,7 @@ import json
 import uuid
 import hashlib
 from typing import Dict, Any, NoReturn
-from loguru import logger
+from hliepython.utils.logging import async_logger as logger
 from fastapi import Request
 from abc import ABC, abstractmethod
 

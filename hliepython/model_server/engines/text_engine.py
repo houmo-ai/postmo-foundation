@@ -6,7 +6,7 @@ import uuid
 import time
 import hashlib
 from http import HTTPStatus
-from loguru import logger
+from hliepython.utils.logging import async_logger as logger
 from collections.abc import AsyncGenerator
 from collections.abc import Sequence as GenericSequence
 from fastapi import Request
@@ -330,7 +330,7 @@ class TextEngine(InferenceEngine):
         # Schedule the request and get the result generator.
         generator: AsyncGenerator[RequestOutput, None]
 
-        logger.info(f"\n\n\n\n\n\n\n\nengine_input: {engine_input}")
+        logger.info(f"engine_input: {engine_input}")
 
         try:
             generator = self.engine.generate(
@@ -347,7 +347,6 @@ class TextEngine(InferenceEngine):
             return self.create_error_response(str(e))
 
         if request.stream:
-            logger.info(f"走这条路呦~ ~ ~ ")
             return StreamingResponse(
                 self.chat_completion_stream_generator(
                     request,
@@ -639,9 +638,9 @@ class TextEngine(InferenceEngine):
 
         try:
             async for res in result_generator:
-                logger.info(f" ---------------------------------- ")
-                logger.info(f"res: {res}")
-                logger.info(f" ---------------------------------- ")
+                logger.debug(f" ---------------------------------- ")
+                logger.debug(f"res: {res}")
+                logger.debug(f" ---------------------------------- ")
                 final_res = res
         except EngineDeadError:
             logger.critical(f"Engine dead, abort {request_id}")

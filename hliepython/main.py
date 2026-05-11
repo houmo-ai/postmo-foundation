@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response, StreamingResponse, JSONResponse
 from starlette.datastructures import UploadFile
-from loguru import logger
+from hliepython.utils.logging import configure_logging, get_async_logger, get_sync_logger
 from hliepython.config import AppConfig, load_app_config
 
 from hliepython.model_server.engines.protocol.chat_completions import (
@@ -26,6 +26,8 @@ from hliepython.model_server.engines.protocol.embeddings import (
 from hliepython.model_server.worker import run_worker
 
 main_app = FastAPI(title="主进程 8000")
+logger = get_async_logger("main")
+sync_logger = get_sync_logger("main")
 
 # 全局映射
 MODEL_PORT_MAP: Dict[str, list[int]] = {}
@@ -37,7 +39,7 @@ APP_CONFIG = AppConfig()
 RUNTIME_SETTINGS: Dict[str, Any] = {
     "main_port": 8000,
     "log_level": "info",
-    "vllm_log_level": "info",
+    "vllm_log_level": "warning",
     "model_root_dir": "/houmo/llm/models",
 }
 AVAILABLE_MODEL_PATHS: Dict[str, str] = {}
@@ -58,6 +60,7 @@ async def validate_json_request(raw_request: Request):
 @main_app.exception_handler(HTTPException)
 async def http_exception_handler(_: Request, exc: HTTPException):
     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    logger.warning(f"HTTP 异常: status={exc.status_code} detail={detail}")
     error_response = {
         "detail": detail,
         "message": "请求错误" if exc.status_code < 500 else "服务器错误",
@@ -72,6 +75,7 @@ async def validation_exception_handler(_: Request, exc: RequestValidationError):
     first_error = exc.errors()[0] if exc.errors() else {}
     error_type = first_error.get("type", "")
     message = first_error.get("msg", "请求参数校验失败")
+    logger.warning(f"请求校验失败: type={error_type} message={message}")
     error_response = {
         "detail": first_error,
         "message": message,
@@ -86,6 +90,7 @@ async def validation_exception_handler(_: Request, exc: RequestValidationError):
 
 @main_app.exception_handler(ValueError)
 async def value_error_exception_handler(_: Request, exc: ValueError):
+    logger.warning(f"值错误: {exc}")
     error_response = {
         "detail": str(exc),
         "message": "请求参数不合法",
@@ -97,6 +102,7 @@ async def value_error_exception_handler(_: Request, exc: ValueError):
 
 @main_app.exception_handler(Exception)
 async def unhandled_exception_handler(_: Request, exc: Exception):
+    sync_logger.exception(f"未处理异常: {exc}")
     error_response = {
         "detail": str(exc),
         "message": "服务器内部错误",
@@ -535,7 +541,7 @@ async def _build_audio_transcriptions_meta(
 
 def start_workers(config: AppConfig):
     os.environ["VLLM_LOGGING_LEVEL"] = str(
-        RUNTIME_SETTINGS.get("vllm_log_level", "info")
+        RUNTIME_SETTINGS.get("vllm_log_level", "warning")
     )
 
     if not config.preload_models_on_startup:
@@ -570,6 +576,7 @@ def start_workers(config: AppConfig):
                     vllm_config,
                     additional_config,
                     model_type,
+                    config.server.logging.to_dict(),
                 ),
                 daemon=False,
             )
@@ -585,7 +592,9 @@ def start_workers(config: AppConfig):
                     fallback_model_type=model.model_type,
                 ),
             )
-            logger.info(f"预加载模型成功: model={name} port={p} device={device_ids} pid={proc.pid}")
+            sync_logger.info(
+                f"预加载模型成功: model={name} port={p} device={device_ids} pid={proc.pid}"
+            )
 
 
 def start_dynamic_worker(model_name: str, server_config: Dict[str, Any]):
@@ -605,6 +614,7 @@ def start_dynamic_worker(model_name: str, server_config: Dict[str, Any]):
             instance_cfg.get("vllm_config", {}),
             instance_cfg.get("additional_config", {}),
             instance_cfg.get("model_type", "text"),
+            APP_CONFIG.server.logging.to_dict(),
         ),
         daemon=False,
     )
@@ -623,7 +633,9 @@ def start_dynamic_worker(model_name: str, server_config: Dict[str, Any]):
         unload_worker(port=port)
         raise
 
-    logger.info(f"动态启动模型成功: model={model_name} port={port} config={instance_cfg}")
+    sync_logger.info(
+        f"动态启动模型成功: model={model_name} port={port} config={instance_cfg}"
+    )
     return instance_cfg
 
 
@@ -942,23 +954,39 @@ async def create_audio_transcriptions(raw_request: Request):
 
 
 def main():
-    global APP_CONFIG, RUNTIME_SETTINGS
+    global APP_CONFIG, RUNTIME_SETTINGS, logger, sync_logger
     APP_CONFIG = load_app_config()
+    logging_settings = configure_logging(
+        APP_CONFIG.server.logging,
+        process_role="main",
+        port=int(APP_CONFIG.server.main_port),
+    )
+    logger = get_async_logger(f"main:{APP_CONFIG.server.main_port}")
+    sync_logger = get_sync_logger(f"main:{APP_CONFIG.server.main_port}")
     RUNTIME_SETTINGS = get_runtime_settings(APP_CONFIG)
     refresh_available_models()
 
     logger.debug(
         f"加载配置:\n{json.dumps(APP_CONFIG.to_dict(), ensure_ascii=False, indent=2)}"
     )
-    logger.info(
+    sync_logger.info(
         "运行时配置: "
         f"main_port={RUNTIME_SETTINGS['main_port']}, "
         f"log_level={RUNTIME_SETTINGS['log_level']}, "
         f"vllm_log_level={RUNTIME_SETTINGS['vllm_log_level']}"
     )
+    sync_logger.info(
+        "日志配置: "
+        f"log_dir={APP_CONFIG.server.logging.directory}, "
+        f"sync_enabled={APP_CONFIG.server.logging.sync_enabled}, "
+        f"sync_level={APP_CONFIG.server.logging.sync_level}, "
+        f"sync_file={logging_settings.get('resolved_sync_filename')}, "
+        f"rotation={APP_CONFIG.server.logging.rotation}, "
+        f"retention={APP_CONFIG.server.logging.retention}"
+    )
 
     start_workers(APP_CONFIG)
-    logger.info(f"主进程启动: http://127.0.0.1:{RUNTIME_SETTINGS['main_port']}")
+    sync_logger.info(f"主进程启动: http://127.0.0.1:{RUNTIME_SETTINGS['main_port']}")
     uvicorn.run(
         main_app,
         host="0.0.0.0",

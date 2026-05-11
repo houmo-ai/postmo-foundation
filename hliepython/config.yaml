@@ -2,11 +2,7 @@
 server:
   main_port: 7800
   log_level: "info"
-  vllm_log_level: "warning"
   model_root_dir: "/home/useradmin/workspaces/models/v1.2.0"
-
-# 服务启动方式
-preload_models_on_startup: true  # 改为 false 可只启动服务端，按请求动态加载
 
 # 模型配置
 models:
@@ -19,22 +15,27 @@ models:
         vllm_config:
           max-model-len: 65536
           max-num-seqs: 1
-          tensor_parallel_size: 1
           no-enable-prefix-caching: true
           max-num-batched-tokens: 65536
         additional_config:
           device_ids: [0]
-          enable_cacheprompt: "True"
+          enable_cacheprompt: "False"
 
-  # # Qwen3.5-VL 模型
-  # - name: "Houmo/Qwen3.5-VL_4B"
+  # # Qwen3.5_VL-35B 模型
+  # - name: "Houmo/Qwen3.5-VL_35B"
   #   instances:
   #     - port: 7802
   #       model_path: "qwen3.5_35b"
   #       model_type: "text"
+  #       vllm_config:
+  #         max-model-len: 262144
+  #         max-num-seqs: 1
+  #         no-enable-prefix-caching: true
+  #         max-num-batched-tokens: 262144
+  #         enable_mm_embeds: true
   #       additional_config:
   #         device_ids: [0]
-  #         enable_cacheprompt: ""
+  #         enable_cacheprompt: "False"
   #         "vit_model_name": "mmproj-qwen3.5-35b-a3b-p256-256K-b1-2core-1d-xh2-v1.3.0-20260420210756.gguf"
 
   # # whisper-medium 模型
