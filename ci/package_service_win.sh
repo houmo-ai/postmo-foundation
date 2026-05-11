@@ -178,6 +178,7 @@ package_service() {
     cp third_party/whisper.cpp/bin/whisper.dll "$release_dir/bin/"
     cp third_party/uwebsockets/bin/uv.dll "$release_dir/bin/"
     cp third_party/samplerate/bin/samplerate.dll "$release_dir/bin/"
+    cp third_party/kaldi-native-fbank/bin/kaldi-native-fbank-core.dll "$release_dir/bin/" || true
 
     echo "Release files have been organized under: $release_dir"
     # 显示打包内容摘要

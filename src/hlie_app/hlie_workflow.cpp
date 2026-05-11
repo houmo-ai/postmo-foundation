@@ -168,6 +168,12 @@ namespace {
             const std::string before_vit = full_name.substr(0, pos);
             return before_vit == name;
         }
+
+        if (const size_t pos = full_name.find("_unknown"); pos != std::string::npos) {
+            const std::string before_unknown = full_name.substr(0, pos);
+            return before_unknown == name;
+        }
+
         // 如果没有 _vit_，直接比较全名
         return full_name == name;
     }
