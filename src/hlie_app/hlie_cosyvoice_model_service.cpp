@@ -1072,7 +1072,11 @@ std::vector<float> CosyVoiceModelService::speech(const CosyVoiceRequest& request
 
         LOG_INFO("TTS text_normalize request done, segment count: {}", tts_text.size());
 #ifdef WIN32
-        const std::string default_prompt_wav = R"(../samples/zero_shot_prompt.wav)";
+        char exePath[260];
+        GetModuleFileName(nullptr, exePath, MAX_PATH); // 获取exe绝对路径
+        const auto program_path = std::string(exePath);
+        const auto program_dir = std::string(exePath).substr(0, std::string(exePath).find_last_of('\\') + 1);
+        const std::string default_prompt_wav = HlieUtil::join_paths(program_dir, "..", R"(samples/zero_shot_prompt.wav)");
 #else
         const std::string default_prompt_wav = R"(samples/zero_shot_prompt.wav)";
 #endif
