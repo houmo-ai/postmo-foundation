@@ -244,7 +244,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
             model_key += "_" + model_info.vl_spec_;
         }
 
-        model_instance.meta.name = model_key;
         model_info.model_key_ = model_key;
         model_instance.key = model_key;
         model_instance.model_info = model_info;
@@ -362,7 +361,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                 if (model_instances_.find(default_model_info.model_key_) == model_instances_.end()) {
                     ModelInstance model_instance;
                     server_model_meta meta;
-                    meta.name = default_model_info.model_key_;
                     model_instance.path = default_model_info.get_model_path();
                     model_instance.path_mmproj = default_model_info.get_mm_proj_path();
                     model_instance.meta = std::move(meta);
@@ -510,6 +508,10 @@ int HLIEWorkflow::get_model_service_state() const {
 
     if (whisper_model_service_) {
         return whisper_model_service_->get_state();
+    }
+
+    if (cosy_voice_model_service_) {
+        return cosy_voice_model_service_->get_state();
     }
 
     LOG_WARN("model service not initialized");
@@ -679,7 +681,6 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             if (!model_info_tmp.get_mm_proj_path().empty()) {
                 model_key += "_" + model_info_tmp.vl_spec_;
             }
-            model_instance.meta.name = model_key;
             model_info_tmp.model_key_ = model_key;
             model_instance.model_info = model_info_tmp;
             model_instance.key = model_key;
@@ -850,7 +851,6 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         model_instance.path = model_info_tmp.get_model_path();
         model_instance.meta = std::move(model_meta);
         auto model_key = model_info_tmp.get_model_name();
-        model_instance.meta.name = model_key;
         model_info_tmp.model_key_ = model_key;
         model_instance.model_info = model_info_tmp;
         model_instance.key = model_key;
@@ -946,7 +946,6 @@ int HLIEWorkflow::start_cosyvoice(std::optional<server_model_meta>& meta, std::u
         model_instance.path = model_info_tmp.get_model_path();
         model_instance.meta = std::move(model_meta);
         auto model_key = model_info_tmp.get_model_name();
-        model_instance.meta.name = model_key;
         model_info_tmp.model_key_ = model_key;
         model_instance.model_info = model_info_tmp;
         model_instance.key = model_key;

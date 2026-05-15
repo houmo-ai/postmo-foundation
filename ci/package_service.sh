@@ -27,12 +27,12 @@ case "$ARCH" in
 esac
 
 # SDK URLs
-xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/12/2005/ubuntu2004/houmo_tcim_runtime_xh2_linux_${ARCH}-1.1.0.tar.gz"
+xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.3.0/2026/05/11/2348/ubuntu2004/houmo_tcim_runtime_xh2_linux_${ARCH}-1.3.0.tar.gz"
 
-xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/12/2005/ubuntu1804/houmo-drv-xh2_v1.1.0_linux_x86_64.run"
-xh2_sw_sdk_url_aarch64="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/12/2005/ubuntu2004/houmo-drv-xh2_v1.1.0_linux_aarch64.run"
+xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.3.0/2026/05/11/2348/ubuntu1804/houmo-drv-xh2_v1.3.0_linux_x86_64.run"
+xh2_sw_sdk_url_aarch64="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.3.0/2026/05/11/2348/ubuntu2004/houmo-drv-xh2_v1.3.0_linux_aarch64.run"
 
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh2_2.0.1_linux_${ARCH}.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/05/15/1829/linux/houmo-HLIELLama-xh2_2.1.0_linux_${ARCH}.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.3.0_linux_${ARCH}.tar.gz"
 xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.1.0_linux_${ARCH}.tar.gz"

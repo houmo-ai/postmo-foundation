@@ -2,8 +2,10 @@
 
 #include <string>
 
-#include <server/index.html.gz.hpp>
+#include <server/index.html.hpp>
 #include <server/loading.html.hpp>
+#include <server/bundle.js.hpp>
+#include <server/bundle.css.hpp>
 #include <server/server-common.h>
 #include <server/server-http.h>
 
@@ -153,8 +155,9 @@ namespace {
                 std::string chunk;
                 bool has_next = response->next(chunk);
                 if (!chunk.empty()) {
-                    // TODO: maybe handle sink.write unsuccessful? for now, we rely on is_connection_closed()
-                    sink.write(chunk.data(), chunk.size());
+                    if (!sink.write(chunk.data(), chunk.size())) {
+                        return false;
+                    }
                     LOG_DEBUG("http: streamed chunk: {}", chunk.c_str());
                 }
                 if (!has_next) {
@@ -205,16 +208,20 @@ void HLIEWebService::init(int n_threads_http) {
     web_server_->set_pre_routing_handler(
         [this](const httplib::Request& req, httplib::Response& res) { return this->pre_routing_handler(req, res); });
 
-    web_server_->Get("/", [](const httplib::Request& req, httplib::Response& res) {
-        if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
-            res.set_content("Error: gzip is not supported by this browser", "text/plain");
-        } else {
-            res.set_header("Content-Encoding", "gzip");
-            // COEP and COOP headers, required by pyodide (python interpreter)
-            res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-            res.set_header("Cross-Origin-Opener-Policy", "same-origin");
-            res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
-        }
+    // using embedded static index.html
+    web_server_->Get("/", [](const httplib::Request & /*req*/, httplib::Response & res) {
+        // COEP and COOP headers, required by pyodide (python interpreter)
+        res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+        res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+        res.set_content(reinterpret_cast<const char*>(index_html), index_html_len, "text/html; charset=utf-8");
+        return false;
+    });
+    web_server_->Get("/bundle.js", [](const httplib::Request & /*req*/, httplib::Response & res) {
+        res.set_content(reinterpret_cast<const char*>(bundle_js), bundle_js_len, "application/javascript; charset=utf-8");
+        return false;
+    });
+    web_server_->Get("/bundle.css", [](const httplib::Request & /*req*/, httplib::Response & res) {
+        res.set_content(reinterpret_cast<const char*>(bundle_css), bundle_css_len, "text/css; charset=utf-8");
         return false;
     });
 
@@ -269,14 +276,13 @@ int HLIEWebService::run(const std::string& host_name, int port) {
 
 void HLIEWebService::get(const std::string& path, const server_http_context::handler_t& handler) const {
     web_server_->Get(path, [handler](const httplib::Request& req, httplib::Response& res) {
-        auto request = std::make_unique<server_http_req>(server_http_req{
-            get_params(req),
-            get_headers(req),
-            req.path,
-            build_query_string(req),
-            req.body,
-            req.is_connection_closed
-        });
+        auto request = std::make_unique<server_http_req>(server_http_req{get_params(req),
+                                                                         get_headers(req),
+                                                                         req.path,
+                                                                         build_query_string(req),
+                                                                         req.body,
+                                                                         {},
+                                                                         req.is_connection_closed});
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
 
@@ -290,12 +296,43 @@ void HLIEWebService::post(const std::string& path, const server_http_context::ha
             LOG_DEBUG("[Request-{}] come in", request_id);
         }
 
+        std::string body = req.body;
+        std::map<std::string, uploaded_file> files;
+
+        if (req.is_multipart_form_data()) {
+            // translate text fields to a JSON object and use it as the body
+            json form_json = json::object();
+            for (const auto & [key, field] : req.form.fields) {
+                if (form_json.contains(key)) {
+                    // if the key already exists, convert it to an array
+                    if (!form_json[key].is_array()) {
+                        json existing_value = form_json[key];
+                        form_json[key] = json::array({existing_value});
+                    }
+                    form_json[key].push_back(field.content);
+                } else {
+                    form_json[key] = field.content;
+                }
+            }
+            body = form_json.dump();
+
+            // populate files from multipart form
+            for (const auto & [key, file] : req.form.files) {
+                files[key] = uploaded_file{
+                    raw_buffer(file.content.begin(), file.content.end()),
+                    file.filename,
+                    file.content_type,
+                };
+            }
+        }
+
         auto request = std::make_unique<server_http_req>(server_http_req{
             get_params(req),
             get_headers(req),
             req.path,
             build_query_string(req),
             req.body,
+            std::move(files),
             req.is_connection_closed
         });
         server_http_res_ptr response = handler(*request);
@@ -427,30 +464,30 @@ httplib::Server::HandlerResponse HLIEWebService::pre_routing_handler(const httpl
 
 bool HLIEWebService::middleware_server_state(const httplib::Request& req, httplib::Response& res) const {
     LOG_TRACE("middleware_server_state called for path: {}", req.path);
-    HLIE_CHECK_NULL_RETURN(workflow_, 0);
-    const int state = workflow_->get_model_service_state();
-    if (req.path != "/health") {
-        const auto request_id = HlieUtil::uuid();
-        res.set_header("X-Request-ID", request_id);
-        LOG_INFO("Request[{}] come in, current state[0: LOADING_MODEL 1:READY]: {}", request_id, state);
-        if (const auto logger = HLIELogger::get_logger(HLIE_ACCESS)) {
-            logger->info("{} - - \"{} {}\" [RequestID={}]", req.remote_addr, req.method, req.path, request_id);
+    bool ready = is_ready.load();
+    if (!ready) {
+#ifdef LLAMA_BUILD_WEBUI
+        auto tmp = string_split<std::string>(req.path, '.');
+        if (req.path == "/" || tmp.back() == "html") {
+            res.status = 503;
+            res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
+        } else
+#endif
+        {
+            // no endpoints is allowed to be accessed when the server is not ready
+            // this is to prevent any data races or inconsistent states
+            res.status = 503;
+            res.set_content(
+                safe_json_to_str(json {
+                    {"error", {
+                        {"message", "Loading model"},
+                        {"type", "unavailable_error"},
+                        {"code", 503}
+                    }}
+                }),
+                "application/json; charset=utf-8"
+            );
         }
-    }
-
-    if (req.path == "/models" || req.path == "/v1/models" || req.path == "/api/tags" || req.path.rfind("/hlie", 0) == 0) {
-        // allow the models endpoint to be accessed during loading
-        return true;
-    }
-
-    if (state == SERVER_STATE_LOADING_MODEL) {
-        // auto tmp = string_split<std::string>(req.path, '.');
-        // if (req.path == "/" || tmp.back() == "html") {
-        //     res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
-        //     res.status = 503;
-        // }
-
-        res_error(res, format_error_response("Loading model", ERROR_TYPE_UNAVAILABLE));
         return false;
     }
     return true;
@@ -458,34 +495,72 @@ bool HLIEWebService::middleware_server_state(const httplib::Request& req, httpli
 
 bool HLIEWebService::middleware_validate_api_key(const httplib::Request& req, httplib::Response& res) const {
     HLIE_CHECK_NULL_RETURN(workflow_, 0);
-    static const std::unordered_set<std::string> public_endpoints = {"/health", "/v1/health", "/models", "/v1/models", "/api/tags"};
+    static const std::unordered_set<std::string> public_endpoints = {
+        "/health",
+        "/v1/health",
+        "/models",
+        "/v1/models",
+        "/",
+        "/index.html",
+        "/bundle.js",
+        "/bundle.css",
+    };
+
+    // If path is public or static file, skip validation
+    if (public_endpoints.find(req.path) != public_endpoints.end()) {
+        return true;
+    }
+
+    const int state = workflow_->get_model_service_state();
+    const auto request_id = HlieUtil::uuid();
+    res.set_header("X-Request-ID", request_id);
+    LOG_INFO("Request[{}] come in, current state[0: LOADING_MODEL 1:READY]: {}", request_id, state);
+    if (const auto logger = HLIELogger::get_logger(HLIE_ACCESS)) {
+        logger->info("{} - - \"{} {}\" [RequestID={}]", req.remote_addr, req.method, req.path, request_id);
+    }
+
+    if (state == SERVER_STATE_LOADING_MODEL) {
+        res_error(res, format_error_response("Loading model", ERROR_TYPE_UNAVAILABLE));
+        return false;
+    }
 
     // If API key is not set, skip validation
     if (workflow_->get_api_keys().empty()) {
         return true;
     }
 
-    // If path is public or is static file, skip validation
-    if (public_endpoints.find(req.path) != public_endpoints.end() || req.path == "/") {
-        return true;
+    // Check for API key in the Authorization header
+    std::string req_api_key = req.get_header_value("Authorization");
+    if (req_api_key.empty()) {
+        // retry with anthropic header
+        req_api_key = req.get_header_value("X-Api-Key");
     }
 
-    // Check for API key in the header
-    const auto auth_header = req.get_header_value("Authorization");
+    // remove the "Bearer " prefix if needed
+    std::string prefix = "Bearer ";
+    if (req_api_key.substr(0, prefix.size()) == prefix) {
+        req_api_key = req_api_key.substr(prefix.size());
+    }
 
-    if (const std::string prefix = "Bearer "; auth_header.substr(0, prefix.size()) == prefix) {
-        if (const std::string received_api_key = auth_header.substr(prefix.size());
-            std::find(workflow_->get_api_keys().begin(), workflow_->get_api_keys().end(), received_api_key) !=
-            workflow_->get_api_keys().end()) {
-            return true; // API key is valid
-        }
+    // validate the API key
+    if (std::find(workflow_->get_api_keys().begin(), workflow_->get_api_keys().end(), req_api_key) != workflow_->get_api_keys().end()) {
+        return true; // API key is valid
     }
 
     // API key is invalid or not provided
-    res_error(res, format_error_response("Invalid API Key", ERROR_TYPE_AUTHENTICATION));
+    res.status = 401;
+    res.set_content(
+        safe_json_to_str(json {
+            {"error", {
+                {"message", "Invalid API Key"},
+                {"type", "authentication_error"},
+                {"code", 401}
+            }}
+        }),
+        "application/json; charset=utf-8"
+    );
 
     LOG_WARN("Unauthorized: Invalid API Key");
-
     return false;
 }
 

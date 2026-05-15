@@ -283,10 +283,10 @@ void LLModelService::stop() {
         device_service_->release_mem_on_devices(devices_, mem_est);
     }
     devices_.clear();
-    if (is_embedding_) {
-        return;
-    }
-    llama_memory_breakdown_print(llama_server_->get_llama_context());
+    // if (is_embedding_) {
+    //     return;
+    // }
+    // llama_memory_breakdown_print(llama_server_->get_llama_context());
 }
 
 int LLModelService::get_batch_num() const {

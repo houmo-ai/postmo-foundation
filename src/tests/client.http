@@ -127,7 +127,7 @@ Content-Type: application/json
 
 {
   "model_type": "cosyvoice",
-  "model": "HiModel_CosyVoice3_1chip_2cores_v1.1.0_20260407"
+  "model": "HiModel_xh2_cosyvoice3_0.5b_1chip_2cores_v1.1.0-20260409"
 }
 
 ### try TTS
