@@ -1,6 +1,11 @@
 #include "hlie_app/hlie_web_service.h"
 
+#include <cstdlib>
+#include <cerrno>
+#include <algorithm>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 #include <server/index.html.hpp>
 #include <server/loading.html.hpp>
@@ -182,6 +187,211 @@ namespace {
         res.set_content(safe_json_to_str(data), MIMETYPE_JSON);
         res.status = 200;
     }
+
+    std::string config_json_value_to_string(const json& value) {
+        if (value.is_string()) {
+            return value.get<std::string>();
+        }
+
+        if (value.is_boolean()) {
+            return value.get<bool>() ? "true" : "false";
+        }
+
+        if (value.is_number_integer()) {
+            return std::to_string(value.get<long long>());
+        }
+
+        if (value.is_number_unsigned()) {
+            return std::to_string(value.get<unsigned long long>());
+        }
+
+        if (value.is_number_float()) {
+            return std::to_string(value.get<double>());
+        }
+
+        return value.dump();
+    }
+
+    json config_map_to_json(const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& config) {
+        const auto config_string_to_json_value = [](const std::string& section, const std::string& key, const std::string& value) -> json {
+            static const std::unordered_set<std::string> bool_keys = {
+                "log.open_console_window",
+                "model.auto_load",
+                "model.enable_sd3",
+                "model.llm_lazy_mode",
+                "server.memory_saving",
+            };
+            static const std::unordered_set<std::string> int_keys = {
+                "log.max_files",
+                "log.tcim_level",
+                "server.port",
+                "server.replica_delay_sec",
+                "server.replicas",
+            };
+
+            const std::string full_key = section + "." + key;
+            std::string lower_value = value;
+            std::transform(lower_value.begin(), lower_value.end(), lower_value.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+
+            if (bool_keys.find(full_key) != bool_keys.end()) {
+                return lower_value == "true" || lower_value == "1" || lower_value == "yes" || lower_value == "on";
+            }
+
+            if (int_keys.find(full_key) != int_keys.end()) {
+                char* end = nullptr;
+                errno = 0;
+                const long long int_value = std::strtoll(value.c_str(), &end, 10);
+                if (end != value.c_str() && *end == '\0' && errno != ERANGE) {
+                    return int_value;
+                }
+                return value;
+            }
+
+            if (lower_value == "true") {
+                return true;
+            }
+            if (lower_value == "false") {
+                return false;
+            }
+            if (value.empty()) {
+                return value;
+            }
+
+            char* end = nullptr;
+            errno = 0;
+            const long long int_value = std::strtoll(value.c_str(), &end, 10);
+            if (end != value.c_str() && *end == '\0' && errno != ERANGE) {
+                return int_value;
+            }
+
+            end = nullptr;
+            errno = 0;
+            const double double_value = std::strtod(value.c_str(), &end);
+            if (end != value.c_str() && *end == '\0' && errno != ERANGE) {
+                return double_value;
+            }
+
+            return value;
+        };
+
+        json result = json::object();
+        for (const auto& [section, values] : config) {
+            result[section] = json::object();
+            for (const auto& [key, value] : values) {
+                result[section][key] = config_string_to_json_value(section, key, value);
+            }
+        }
+        return result;
+    }
+
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> parse_config_updates(
+        const json& body, const std::string& path_section) {
+        std::unordered_map<std::string, std::unordered_map<std::string, std::string>> updates;
+        if (!body.is_object()) {
+            throw std::invalid_argument("config body must be a JSON object");
+        }
+
+        const std::string body_section = json_value(body, "section", std::string());
+        const std::string section = !path_section.empty() ? path_section : body_section;
+        if (!section.empty()) {
+            json values = json::object();
+            if (body.contains("values") && body["values"].is_object()) {
+                values = body["values"];
+            } else if (body.contains("config") && body["config"].is_object()) {
+                values = body["config"];
+            } else {
+                values = body;
+            }
+
+            for (const auto& [key, value] : values.items()) {
+                if (key == "section" || key == "values" || key == "config") {
+                    continue;
+                }
+                updates[section][key] = config_json_value_to_string(value);
+            }
+            return updates;
+        }
+
+        for (const auto& [section_key, section_value] : body.items()) {
+            if (!section_value.is_object()) {
+                throw std::invalid_argument("config section value must be a JSON object");
+            }
+
+            for (const auto& [key, value] : section_value.items()) {
+                updates[section_key][key] = config_json_value_to_string(value);
+            }
+        }
+
+        return updates;
+    }
+
+    std::string get_config_section_param(const httplib::Request& req) {
+        if (const auto it = req.path_params.find("section"); it != req.path_params.end()) {
+            return it->second;
+        }
+
+        if (const auto it = req.params.find("section"); it != req.params.end()) {
+            return it->second;
+        }
+
+        return "";
+    }
+
+    void handle_get_config(const httplib::Request& req, httplib::Response& res) {
+        const std::string section = get_config_section_param(req);
+        const auto& config_service = Singleton<HLIEConfigService>::instance();
+        const auto config = config_service->get_config(section);
+        json response = {
+            {"path", config_service->get_config_path()},
+            {"config", config_map_to_json(config)}
+        };
+        if (!section.empty()) {
+            response["section"] = section;
+        }
+        res_ok(res, response);
+    }
+
+    void handle_post_config(const httplib::Request& req, httplib::Response& res) {
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (const json::exception& e) {
+            res_error(res, format_error_response_ex(std::string("invalid json body: ") + e.what(), ERROR_TYPE_INVALID_REQUEST, 80007));
+            return;
+        }
+
+        const std::string section = get_config_section_param(req);
+        std::unordered_map<std::string, std::unordered_map<std::string, std::string>> updates;
+        try {
+            updates = parse_config_updates(body, section);
+        } catch (const std::invalid_argument& e) {
+            res_error(res, format_error_response_ex(e.what(), ERROR_TYPE_INVALID_REQUEST, 80007));
+            return;
+        }
+
+        if (updates.empty()) {
+            res_error(res, format_error_response_ex("config updates is empty", ERROR_TYPE_INVALID_REQUEST, 80007));
+            return;
+        }
+
+        const auto& config_service = Singleton<HLIEConfigService>::instance();
+        if (const int ret = config_service->update_config(updates); ret < 0) {
+            res_error(res, format_error_response_ex("failed to update sys config", ERROR_TYPE_INVALID_REQUEST, ret));
+            return;
+        }
+
+        json response = {
+            {"code", 0},
+            {"path", config_service->get_config_path()},
+            {"config", config_map_to_json(config_service->get_config(section))}
+        };
+        if (!section.empty()) {
+            response["section"] = section;
+        }
+        res_ok(res, response);
+    }
 } // namespace
 
 HLIEWebService::HLIEWebService(const std::shared_ptr<HLIEWorkflow>& workflow) {
@@ -196,6 +406,10 @@ void HLIEWebService::init(int n_threads_http) {
         const std::string json_response = R"({"Version": "v1.7.0"})";
         res.set_content(json_response, "application/json");
     });
+    web_server_->Get("/hlie/v1/config", handle_get_config);
+    web_server_->Get("/hlie/v1/config/:section", handle_get_config);
+    web_server_->Post("/hlie/v1/config", handle_post_config);
+    web_server_->Post("/hlie/v1/config/:section", handle_post_config);
 
     web_server_->set_logger(log_server_request);
     web_server_->set_exception_handler(exception_handler);

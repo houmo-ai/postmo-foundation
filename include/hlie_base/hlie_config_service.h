@@ -2,6 +2,7 @@
 #define HLIE_CONFIG_SERVICE_H
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -23,6 +24,10 @@ public:
     int parse(const std::string& config_path);
 
     [[nodiscard]] std::shared_ptr<INIReader> get_reader() const;
+    [[nodiscard]] std::string get_config_path() const;
+    [[nodiscard]] std::unordered_map<std::string, std::unordered_map<std::string, std::string>> get_config(
+        const std::string& section = "") const;
+    int update_config(const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& updates);
 
     [[nodiscard]] int get_int(const std::string& section, const std::string& key, int default_value, bool env_first = false) const;
     [[nodiscard]] std::string get_string(const std::string& section, const std::string& key, const std::string& default_value = "", bool env_first = false) const;
@@ -35,6 +40,7 @@ private:
 
     std::shared_ptr<INIReader> config_reader_;
     std::string file_path_;
+    mutable std::mutex mutex_;
 
     std::unordered_map<std::string, std::string> args_;
 };

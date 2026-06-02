@@ -56,6 +56,8 @@ public:
 
     server_http_res_ptr handle_rerank(const server_http_req& req) const;
 
+    server_http_res_ptr handle_transcriptions(const server_http_req& req) const;
+
     server_http_res_ptr handle_props(const server_http_req& req) const;
 
     [[nodiscard]] std::string get_model_key() const {

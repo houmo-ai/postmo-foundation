@@ -1,0 +1,54 @@
+@baseUrl = http://127.0.0.1:7901
+
+### Get full sys.cfg
+GET {{baseUrl}}/hlie/v1/config
+Content-Type: application/json
+
+### Get config by query section
+GET {{baseUrl}}/hlie/v1/config?section=server
+Content-Type: application/json
+
+### Get config by path section
+GET {{baseUrl}}/hlie/v1/config/server
+Content-Type: application/json
+
+### Update config by explicit section and values
+POST {{baseUrl}}/hlie/v1/config
+Content-Type: application/json
+
+{
+  "section": "config_test",
+  "values": {
+    "enabled": true,
+    "name": "http_test",
+    "count": 1
+  }
+}
+
+### Update config by path section
+POST {{baseUrl}}/hlie/v1/config/config_test
+Content-Type: application/json
+
+{
+  "enabled": false,
+  "name": "http_test_updated",
+  "count": 2
+}
+
+### Update multiple sections
+POST {{baseUrl}}/hlie/v1/config
+Content-Type: application/json
+
+{
+  "config_test": {
+    "enabled": true,
+    "name": "multi_section_test"
+  },
+  "config_test_extra": {
+    "value": "extra"
+  }
+}
+
+### Read test section after updates
+GET {{baseUrl}}/hlie/v1/config/config_test
+Content-Type: application/json

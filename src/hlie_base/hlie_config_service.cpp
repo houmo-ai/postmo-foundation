@@ -1,4 +1,7 @@
 #include <algorithm>
+#include <fstream>
+#include <set>
+#include <sstream>
 
 #include "hlie_base/hlie_config_service.h"
 
@@ -9,6 +12,102 @@
 HLIE_NAMESPACE_BEGIN
 
 namespace {
+    std::string trim(const std::string& str) {
+        const auto first = str.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) {
+            return "";
+        }
+
+        const auto last = str.find_last_not_of(" \t\r\n");
+        return str.substr(first, last - first + 1);
+    }
+
+    bool is_comment_or_empty(const std::string& line) {
+        const std::string value = trim(line);
+        return value.empty() || value[0] == '#' || value[0] == ';';
+    }
+
+    bool parse_section_line(const std::string& line, std::string& section) {
+        const std::string value = trim(line);
+        if (value.size() < 3 || value.front() != '[') {
+            return false;
+        }
+
+        const auto end_pos = value.find(']');
+        if (end_pos == std::string::npos || end_pos == 1) {
+            return false;
+        }
+
+        section = trim(value.substr(1, end_pos - 1));
+        return !section.empty();
+    }
+
+    bool parse_key_value_line(const std::string& line, std::string& key, std::string& value) {
+        if (is_comment_or_empty(line)) {
+            return false;
+        }
+
+        const auto eq_pos = line.find('=');
+        if (eq_pos == std::string::npos) {
+            return false;
+        }
+
+        key = trim(line.substr(0, eq_pos));
+        value = trim(line.substr(eq_pos + 1));
+        return !key.empty();
+    }
+
+    std::string format_config_line(const std::string& key, const std::string& value) {
+        return key + " = " + value;
+    }
+
+    std::string read_text_file(const std::string& path) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) {
+            return "";
+        }
+
+        std::ostringstream oss;
+        oss << in.rdbuf();
+        return oss.str();
+    }
+
+    std::vector<std::string> split_lines(const std::string& content) {
+        std::vector<std::string> lines;
+        std::istringstream iss(content);
+        std::string line;
+        while (std::getline(iss, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            lines.push_back(line);
+        }
+        return lines;
+    }
+
+    bool write_lines(const std::string& path, const std::vector<std::string>& lines) {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            return false;
+        }
+
+        for (size_t i = 0; i < lines.size(); ++i) {
+            out << lines[i];
+            if (i + 1 < lines.size()) {
+                out << '\n';
+            }
+        }
+        return true;
+    }
+
+    bool is_valid_section_name(const std::string& section) {
+        return !section.empty() && section.find_first_of("[]\r\n") == std::string::npos;
+    }
+
+    bool is_valid_key_name(const std::string& key) {
+        return !key.empty() && key.find_first_of("=\r\n") == std::string::npos;
+    }
+
     std::string to_upper(const std::string& str) {
         std::string result = str;
         std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) { return std::toupper(c); });
@@ -39,6 +138,7 @@ namespace {
 } // namespace
 
 int HLIEConfigService::parse(const std::string& config_path) {
+    std::lock_guard lock(mutex_);
     file_path_ = config_path;
     if (file_path_.empty()) {
         HLIELogger::get_logger()->info("file path is empty");
@@ -56,10 +156,169 @@ int HLIEConfigService::parse(const std::string& config_path) {
 }
 
 std::shared_ptr<INIReader> HLIEConfigService::get_reader() const {
+    std::lock_guard lock(mutex_);
     return config_reader_;
 }
 
+std::string HLIEConfigService::get_config_path() const {
+    std::lock_guard lock(mutex_);
+    return file_path_;
+}
+
+std::unordered_map<std::string, std::unordered_map<std::string, std::string>> HLIEConfigService::get_config(
+    const std::string& section) const {
+    std::lock_guard lock(mutex_);
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> config;
+    if (file_path_.empty()) {
+        return config;
+    }
+
+    const std::string content = read_text_file(file_path_);
+    if (content.empty()) {
+        return config;
+    }
+
+    std::string current_section;
+    for (const auto& line : split_lines(content)) {
+        std::string parsed_section;
+        if (parse_section_line(line, parsed_section)) {
+            current_section = parsed_section;
+            continue;
+        }
+
+        if (current_section.empty() || (!section.empty() && current_section != section)) {
+            continue;
+        }
+
+        std::string key;
+        std::string value;
+        if (parse_key_value_line(line, key, value)) {
+            config[current_section][key] = value;
+        }
+    }
+
+    if (!section.empty() && config.find(section) == config.end()) {
+        config[section] = {};
+    }
+    return config;
+}
+
+int HLIEConfigService::update_config(
+    const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& updates) {
+    std::lock_guard lock(mutex_);
+    if (file_path_.empty()) {
+        return -1;
+    }
+
+    for (const auto& [section, values] : updates) {
+        if (!is_valid_section_name(section)) {
+            return -2;
+        }
+
+        for (const auto& [key, value] : values) {
+            if (!is_valid_key_name(key) || value.find_first_of("\r\n") != std::string::npos) {
+                return -2;
+            }
+        }
+    }
+
+    const std::string content = read_text_file(file_path_);
+    std::vector<std::string> lines = split_lines(content);
+    std::unordered_map<std::string, std::set<std::string>> applied;
+    std::string current_section;
+
+    for (auto& line : lines) {
+        std::string parsed_section;
+        if (parse_section_line(line, parsed_section)) {
+            current_section = parsed_section;
+            continue;
+        }
+
+        const auto section_it = updates.find(current_section);
+        if (section_it == updates.end()) {
+            continue;
+        }
+
+        std::string key;
+        std::string old_value;
+        if (!parse_key_value_line(line, key, old_value)) {
+            continue;
+        }
+
+        const auto value_it = section_it->second.find(key);
+        if (value_it == section_it->second.end()) {
+            continue;
+        }
+
+        line = format_config_line(key, value_it->second);
+        applied[current_section].insert(key);
+    }
+
+    for (const auto& [section, values] : updates) {
+        if (values.empty()) {
+            continue;
+        }
+
+        size_t section_start = lines.size();
+        size_t section_end = lines.size();
+        current_section.clear();
+        for (size_t i = 0; i < lines.size(); ++i) {
+            std::string parsed_section;
+            if (!parse_section_line(lines[i], parsed_section)) {
+                continue;
+            }
+
+            if (parsed_section == section) {
+                section_start = i;
+                section_end = lines.size();
+                for (size_t j = i + 1; j < lines.size(); ++j) {
+                    std::string next_section;
+                    if (parse_section_line(lines[j], next_section)) {
+                        section_end = j;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+
+        std::vector<std::string> missing_lines;
+        for (const auto& [key, value] : values) {
+            if (applied[section].find(key) == applied[section].end()) {
+                missing_lines.push_back(format_config_line(key, value));
+            }
+        }
+
+        if (missing_lines.empty()) {
+            continue;
+        }
+
+        if (section_start == lines.size()) {
+            if (!lines.empty() && !lines.back().empty()) {
+                lines.emplace_back("");
+            }
+            lines.push_back("[" + section + "]");
+            lines.insert(lines.end(), missing_lines.begin(), missing_lines.end());
+        } else {
+            lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(section_end), missing_lines.begin(), missing_lines.end());
+        }
+    }
+
+    if (!write_lines(file_path_, lines)) {
+        return -3;
+    }
+
+    config_reader_ = std::make_shared<INIReader>(file_path_);
+    if (config_reader_->ParseError() < 0) {
+        config_reader_.reset();
+        return -4;
+    }
+
+    return 0;
+}
+
 int HLIEConfigService::get_int(const std::string& section, const std::string& key, const int default_value, const bool env_first) const {
+    std::lock_guard lock(mutex_);
     if (env_first || !config_reader_) {
         const std::string env_var = env_var_name(section, key);
         HLIELogger::get_logger()->info("Try to get {} from env", env_var);
@@ -84,6 +343,7 @@ int HLIEConfigService::get_int(const std::string& section, const std::string& ke
 
 std::string HLIEConfigService::get_string(const std::string& section, const std::string& key, const std::string& default_value,
                                           const bool env_first) const {
+    std::lock_guard lock(mutex_);
     if (env_first || !config_reader_) {
         const std::string env_var = env_var_name(section, key);
         if (HLIELogger::get_logger()) {
@@ -111,6 +371,7 @@ std::string HLIEConfigService::get_string(const std::string& section, const std:
 }
 
 bool HLIEConfigService::get_bool(const std::string& section, const std::string& key, const bool default_value, const bool env_first) const {
+    std::lock_guard lock(mutex_);
     if (env_first || !config_reader_) {
         const std::string env_var = env_var_name(section, key);
         HLIELogger::get_logger()->info("Try to get {} from env", env_var);

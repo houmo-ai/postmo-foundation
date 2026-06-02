@@ -335,6 +335,11 @@ server_http_res_ptr LLModelService::handle_rerank(const server_http_req& req) co
     return llama_server_routes_->post_rerank(req);
 }
 
+server_http_res_ptr LLModelService::handle_transcriptions(const server_http_req& req) const {
+    auto res = llama_server_routes_->post_transcriptions_oai(req);
+    return res;
+}
+
 server_http_res_ptr LLModelService::handle_props(const server_http_req& req) const {
     std::string name = req.get_param("model");
     if (name.empty()) {
