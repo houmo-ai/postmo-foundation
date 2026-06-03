@@ -317,6 +317,68 @@ int HLIEConfigService::update_config(
     return 0;
 }
 
+int HLIEConfigService::delete_config_keys(const std::string& section, const std::vector<std::string>& keys) {
+    std::lock_guard lock(mutex_);
+    if (file_path_.empty()) {
+        return -1;
+    }
+
+    if (!is_valid_section_name(section) || keys.empty()) {
+        return -2;
+    }
+
+    std::set<std::string> key_set;
+    for (const auto& key : keys) {
+        if (!is_valid_key_name(key)) {
+            return -2;
+        }
+        key_set.insert(key);
+    }
+
+    const std::string content = read_text_file(file_path_);
+    std::vector<std::string> lines = split_lines(content);
+    std::vector<std::string> kept_lines;
+    kept_lines.reserve(lines.size());
+
+    std::string current_section;
+    int deleted_count = 0;
+    for (const auto& line : lines) {
+        std::string parsed_section;
+        if (parse_section_line(line, parsed_section)) {
+            current_section = parsed_section;
+            kept_lines.push_back(line);
+            continue;
+        }
+
+        if (current_section == section) {
+            std::string key;
+            std::string value;
+            if (parse_key_value_line(line, key, value) && key_set.find(key) != key_set.end()) {
+                ++deleted_count;
+                continue;
+            }
+        }
+
+        kept_lines.push_back(line);
+    }
+
+    if (deleted_count == 0) {
+        return -5;
+    }
+
+    if (!write_lines(file_path_, kept_lines)) {
+        return -3;
+    }
+
+    config_reader_ = std::make_shared<INIReader>(file_path_);
+    if (config_reader_->ParseError() < 0) {
+        config_reader_.reset();
+        return -4;
+    }
+
+    return deleted_count;
+}
+
 int HLIEConfigService::get_int(const std::string& section, const std::string& key, const int default_value, const bool env_first) const {
     std::lock_guard lock(mutex_);
     if (env_first || !config_reader_) {

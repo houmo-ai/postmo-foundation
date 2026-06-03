@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "hlie_base.h"
 #include "hlie_singleton.h"
@@ -28,6 +29,7 @@ public:
     [[nodiscard]] std::unordered_map<std::string, std::unordered_map<std::string, std::string>> get_config(
         const std::string& section = "") const;
     int update_config(const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& updates);
+    int delete_config_keys(const std::string& section, const std::vector<std::string>& keys);
 
     [[nodiscard]] int get_int(const std::string& section, const std::string& key, int default_value, bool env_first = false) const;
     [[nodiscard]] std::string get_string(const std::string& section, const std::string& key, const std::string& default_value = "", bool env_first = false) const;

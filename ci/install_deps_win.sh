@@ -4,11 +4,9 @@
 ARCH=x86_64
 
 # SDK URLs
-xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.3.0/2026/05/11/2348/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-1.3.0.tar.gz"
+xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.3.0/2026/05/19/0015/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-1.3.0.tar.gz"
 
-xh2_sw_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/18/1632/windows11/houmo_drv_xh2_v0.7.0_windows11_x86_64.zip"
-
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/05/15/1829/windows11/houmo-HLIELLama-xh2_2.1.0_windows11_x86_64.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/06/02/2330/windows11/houmo-HLIELLama-xh2_2.1.0_windows11_x86_64.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.3.0_windows11_x86_64.tar.gz"
 xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.1.0_windows11_x86_64.tar.gz"
@@ -103,7 +101,6 @@ deploy_eigen3() {
 # 部署 Dadao SDK
 deploy_dadao_sdk() {
     local dadao_url=$1
-    local sw_url=$2
 
     # 创建或清理第三方库目录
     rm -rf third_party/houmo*
@@ -114,31 +111,12 @@ deploy_dadao_sdk() {
     tar -xzf dadao_sdk.tar.gz -C third_party/houmo --strip-components=1
     cp third_party/houmo/bin/*.dll third_party/houmo/lib/
     rm dadao_sdk.tar.gz
-
-    # 下载并解压 SystemWare SDK
-    download_file "$sw_url" "third_party/sw_sdk.zip"
-
-    # 提取SDK
-    unzip -o third_party/sw_sdk.zip -d third_party
-
-    cp third_party/houmo_drv_xh2/hal/lib/*.dll third_party/houmo/lib/
-    cp third_party/houmo_drv_xh2/hal/lib/*.dll.a third_party/houmo/lib/
-    cp third_party/houmo_drv_xh2/hal/export/include/*.h third_party/houmo/include/
-    cp third_party/houmo_drv_xh2/hal/include/*.h third_party/houmo/include/
-    mkdir -p third_party/houmo/lib/bin/
-
-    rm -rf third_party/sw_sdk.zip third_party/houmo_drv*
-
-    cp third_party/houmo_drv_xh1/hal/lib/libwinpthread-1.dll third_party/houmo/lib/
-
-    # 清理临时文件
-    rm -rf third_party/sw_sdk.zip third_party/houmo_drv*
 }
 
 # 主函数
 main() {
     # 确定使用的SDK URL
-    deploy_dadao_sdk "$xh2_dadao_sdk_url" "$xh2_sw_sdk_url"
+    deploy_dadao_sdk "$xh2_dadao_sdk_url"
     deploy_llama_sdk "$xh2_llama_sdk_url"
     deploy_sd_cpp_sdk "$xh2_sd_cpp_sdk_url"
     deploy_whisper_cpp_sdk "$xh2_whisper_cpp_sdk_url"

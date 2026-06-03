@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <server/index.html.hpp>
 #include <server/loading.html.hpp>
@@ -214,6 +215,10 @@ namespace {
 
     json config_map_to_json(const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& config) {
         const auto config_string_to_json_value = [](const std::string& section, const std::string& key, const std::string& value) -> json {
+            if (section == "llm_params") {
+                return value;
+            }
+
             static const std::unordered_set<std::string> bool_keys = {
                 "log.open_console_window",
                 "model.auto_load",
@@ -339,6 +344,37 @@ namespace {
         return "";
     }
 
+    std::vector<std::string> get_delete_config_keys(const httplib::Request& req) {
+        std::vector<std::string> keys;
+        if (const auto it = req.path_params.find("key"); it != req.path_params.end()) {
+            keys.push_back(it->second);
+        }
+
+        const auto key_range = req.params.equal_range("key");
+        for (auto it = key_range.first; it != key_range.second; ++it) {
+            keys.push_back(it->second);
+        }
+
+        if (!req.body.empty()) {
+            const json body = json::parse(req.body);
+            if (body.contains("key") && body["key"].is_string()) {
+                keys.push_back(body["key"].get<std::string>());
+            }
+            if (body.contains("keys") && body["keys"].is_array()) {
+                for (const auto& key : body["keys"]) {
+                    if (!key.is_string()) {
+                        throw std::invalid_argument("keys must be string array");
+                    }
+                    keys.push_back(key.get<std::string>());
+                }
+            }
+        }
+
+        std::sort(keys.begin(), keys.end());
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        return keys;
+    }
+
     void handle_get_config(const httplib::Request& req, httplib::Response& res) {
         const std::string section = get_config_section_param(req);
         const auto& config_service = Singleton<HLIEConfigService>::instance();
@@ -392,6 +428,47 @@ namespace {
         }
         res_ok(res, response);
     }
+
+    void handle_delete_config(const httplib::Request& req, httplib::Response& res) {
+        const std::string section = get_config_section_param(req);
+        if (section != "llm_params") {
+            res_error(res, format_error_response_ex("delete config only supports llm_params section", ERROR_TYPE_PERMISSION, 80008));
+            return;
+        }
+
+        std::vector<std::string> keys;
+        try {
+            keys = get_delete_config_keys(req);
+        } catch (const json::exception& e) {
+            res_error(res, format_error_response_ex(std::string("invalid json body: ") + e.what(), ERROR_TYPE_INVALID_REQUEST, 80007));
+            return;
+        } catch (const std::invalid_argument& e) {
+            res_error(res, format_error_response_ex(e.what(), ERROR_TYPE_INVALID_REQUEST, 80007));
+            return;
+        }
+
+        if (keys.empty()) {
+            res_error(res, format_error_response_ex("delete config keys is empty", ERROR_TYPE_INVALID_REQUEST, 80007));
+            return;
+        }
+
+        const auto& config_service = Singleton<HLIEConfigService>::instance();
+        const int ret = config_service->delete_config_keys(section, keys);
+        if (ret < 0) {
+            res_error(res, format_error_response_ex("failed to delete sys config keys", ERROR_TYPE_INVALID_REQUEST, ret));
+            return;
+        }
+
+        const json response = {
+            {"code", 0},
+            {"deleted", ret},
+            {"section", section},
+            {"keys", keys},
+            {"path", config_service->get_config_path()},
+            {"config", config_map_to_json(config_service->get_config(section))}
+        };
+        res_ok(res, response);
+    }
 } // namespace
 
 HLIEWebService::HLIEWebService(const std::shared_ptr<HLIEWorkflow>& workflow) {
@@ -410,6 +487,8 @@ void HLIEWebService::init(int n_threads_http) {
     web_server_->Get("/hlie/v1/config/:section", handle_get_config);
     web_server_->Post("/hlie/v1/config", handle_post_config);
     web_server_->Post("/hlie/v1/config/:section", handle_post_config);
+    web_server_->Delete("/hlie/v1/config/:section", handle_delete_config);
+    web_server_->Delete("/hlie/v1/config/:section/:key", handle_delete_config);
 
     web_server_->set_logger(log_server_request);
     web_server_->set_exception_handler(exception_handler);
@@ -659,7 +738,7 @@ httplib::Server::HandlerResponse HLIEWebService::pre_routing_handler(const httpl
     // If this is OPTIONS request, skip validation because browsers don't include Authorization header
     if (req.method == "OPTIONS") {
         res.set_header("Access-Control-Allow-Credentials", "true");
-        res.set_header("Access-Control-Allow-Methods", "GET, POST");
+        res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE");
         res.set_header("Access-Control-Allow-Headers", "*");
         res.set_content("", "text/html"); // blank response, no data
         return httplib::Server::HandlerResponse::Handled; // skip further processing

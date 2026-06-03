@@ -1,8 +1,21 @@
 #include "hlie_app/hlie_device_service.h"
 
+#include <cstdlib>
+#include <cstdint>
+#include <string>
 #include <unordered_set>
 
-#include "hm_sys.h"
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_base/hlie_common_define.h"
@@ -15,6 +28,164 @@ HLIE_NAMESPACE_BEGIN
 
 namespace {
     constexpr auto BACK_UP_MEM = 200;
+
+    constexpr uint32_t HM_SYS_MAX_DEVICES = 32;
+
+    struct hm_device_info {
+        uint32_t num_devices;
+        uint32_t device_ids[HM_SYS_MAX_DEVICES];
+    };
+
+    struct hm_mem_info {
+        uint32_t mem_total;
+        uint32_t mem_used;
+        uint32_t mem_avail;
+    };
+
+    using hm_sys_get_device_info_t = uint32_t (*)(hm_device_info* info);
+    using hm_sys_get_mem_info_t = int (*)(int dev_index, hm_mem_info* mem_info);
+
+    struct HmSysSdk {
+        void* handle = nullptr;
+        hm_sys_get_device_info_t get_device_info = nullptr;
+        hm_sys_get_mem_info_t get_mem_info = nullptr;
+        bool load_attempted = false;
+
+        static const char* library_name() {
+#ifdef _WIN32
+            return "libhal_xh2a.dll";
+#else
+            return "libhal_xh2a.so";
+#endif
+        }
+
+        bool load() {
+            if (handle) {
+                return true;
+            }
+
+            if (load_attempted) {
+                return false;
+            }
+            load_attempted = true;
+
+            LOG_INFO("loading Houmo HAL library {}", library_name());
+
+#ifdef _WIN32
+            const char* env_paths[] = {
+                std::getenv("HOUMO_SDK_PATH"),
+                std::getenv("HOUMO_DRV_PATH"),
+                std::getenv("TCIM_RUNTIME_PATH"),
+                ".",
+                nullptr,
+            };
+
+            for (const char** env_path = env_paths; *env_path != nullptr; ++env_path) {
+                if (!*env_path || !**env_path) {
+                    continue;
+                }
+
+                const std::string base_path = *env_path;
+                const std::string candidate_paths[] = {
+                    base_path + "/hal/lib/" + library_name(),
+                    base_path + "/lib/" + library_name(),
+                    base_path + "/" + library_name(),
+                };
+
+                for (const auto& path : candidate_paths) {
+                    handle = LoadLibraryA(path.c_str());
+                    if (handle) {
+                        LOG_INFO("loaded Houmo HAL library from {}", path);
+                        break;
+                    }
+                }
+
+                if (handle) {
+                    break;
+                }
+            }
+
+            if (!handle) {
+                handle = LoadLibraryA(library_name());
+                if (!handle) {
+                    LOG_ERROR("failed to load Houmo HAL library {}, error {}", library_name(), GetLastError());
+                    return false;
+                }
+                LOG_INFO("loaded Houmo HAL library from system path");
+            }
+
+            get_device_info =
+                reinterpret_cast<hm_sys_get_device_info_t>(GetProcAddress(static_cast<HMODULE>(handle), "hm_sys_get_device_info"));
+            get_mem_info =
+                reinterpret_cast<hm_sys_get_mem_info_t>(GetProcAddress(static_cast<HMODULE>(handle), "hm_sys_get_mem_info"));
+#else
+            const char* env_paths[] = {
+                std::getenv("HOUMO_SDK_PATH"),
+                std::getenv("HOUMO_DRV_PATH"),
+                std::getenv("TCIM_RUNTIME_PATH"),
+                "/usr/local/houmo-sdk/hal/lib",
+                "/usr/local/houmo-drv/hal/lib",
+                ".",
+                nullptr,
+            };
+
+            for (const char** env_path = env_paths; *env_path != nullptr; ++env_path) {
+                if (!*env_path || !**env_path) {
+                    continue;
+                }
+
+                const std::string path = std::string(*env_path) + "/" + library_name();
+                handle = dlopen(path.c_str(), RTLD_LAZY | RTLD_LOCAL);
+                if (handle) {
+                    LOG_INFO("loaded Houmo HAL library from {}", path);
+                    break;
+                }
+            }
+
+            if (!handle) {
+                handle = dlopen(library_name(), RTLD_LAZY | RTLD_LOCAL);
+                if (!handle) {
+                    LOG_ERROR("failed to load Houmo HAL library {}, error {}", library_name(), dlerror());
+                    return false;
+                }
+                LOG_INFO("loaded Houmo HAL library from system path");
+            }
+
+            get_device_info = reinterpret_cast<hm_sys_get_device_info_t>(dlsym(handle, "hm_sys_get_device_info"));
+            get_mem_info = reinterpret_cast<hm_sys_get_mem_info_t>(dlsym(handle, "hm_sys_get_mem_info"));
+#endif
+
+            if (!get_device_info || !get_mem_info) {
+                LOG_ERROR("Houmo HAL library missing required symbols");
+#ifdef _WIN32
+                FreeLibrary(static_cast<HMODULE>(handle));
+#else
+                dlclose(handle);
+#endif
+                handle = nullptr;
+                get_device_info = nullptr;
+                get_mem_info = nullptr;
+                return false;
+            }
+
+            return true;
+        }
+
+        ~HmSysSdk() {
+            if (handle) {
+#ifdef _WIN32
+                FreeLibrary(static_cast<HMODULE>(handle));
+#else
+                dlclose(handle);
+#endif
+            }
+        }
+    };
+
+    HmSysSdk& hm_sys_sdk() {
+        static HmSysSdk sdk;
+        return sdk;
+    }
 }
 
 int HLIEDeviceService::init() {
@@ -46,8 +217,14 @@ int HLIEDeviceService::init() {
     }
 
     // 2. query system devices
+    auto& sdk = hm_sys_sdk();
+    if (!sdk.load()) {
+        LOG_ERROR("failed to load Houmo HAL SDK");
+        return -1;
+    }
+
     hm_device_info sys_info{};
-    const uint32_t ret = hm_sys_get_device_info(&sys_info);
+    const uint32_t ret = sdk.get_device_info(&sys_info);
     const uint32_t dev_count = sys_info.num_devices ? sys_info.num_devices : ret;
 
     if (dev_count == 0) {
@@ -68,7 +245,7 @@ int HLIEDeviceService::init() {
         }
 
         hm_mem_info mem{};
-        if (hm_sys_get_mem_info(dev, &mem) < 0) {
+        if (sdk.get_mem_info(dev, &mem) < 0) {
             LOG_WARN("failed to query mem info of {}, skip", dev);
             continue;
         }
@@ -195,8 +372,14 @@ int HLIEDeviceService::acquire_mem_on_devices(const std::vector<int>& devices, c
 
 int HLIEDeviceService::get_device_infos(std::vector<HLIEDeviceInfo>& device_infos) {
     std::unique_lock lock(mutex_);
+    auto& sdk = hm_sys_sdk();
+    if (!sdk.load()) {
+        LOG_ERROR("failed to load Houmo HAL SDK");
+        return -1;
+    }
+
     hm_device_info info = {};
-    const uint32_t ret_code = hm_sys_get_device_info(&info);
+    const uint32_t ret_code = sdk.get_device_info(&info);
     /* prefer info.num_devices if filled, otherwise use return value */
     const uint32_t dev_count = info.num_devices ? info.num_devices : ret_code;
     if (dev_count <= 0) {
@@ -210,7 +393,7 @@ int HLIEDeviceService::get_device_infos(std::vector<HLIEDeviceInfo>& device_info
         int dev = static_cast<int>(info.device_ids[i]);
         LOG_INFO("try to get mem info of device {}", dev);
         hm_mem_info mem_info{};
-        if (const auto ret = hm_sys_get_mem_info(dev, &mem_info); ret < 0) {
+        if (const auto ret = sdk.get_mem_info(dev, &mem_info); ret < 0) {
             LOG_ERROR("failed to get mem info of device {}, ret: {}", dev, ret);
         }
 
@@ -278,8 +461,14 @@ void HLIEDeviceService::refresh_device_usage(uint32_t device) {
     if (it == devices_.end())
         return;
 
+    auto& sdk = hm_sys_sdk();
+    if (!sdk.load()) {
+        LOG_WARN("refresh_device_usage: Houmo HAL SDK unavailable");
+        return;
+    }
+
     hm_mem_info mem{};
-    if (hm_sys_get_mem_info(device, &mem) == 0) {
+    if (sdk.get_mem_info(device, &mem) == 0) {
         it->second.mem_used = mem.mem_used;
         it->second.mem_avail = mem.mem_avail;
         it->second.mem_total = mem.mem_total;
@@ -307,8 +496,13 @@ server_http_res_ptr HLIEDeviceService::handle_devices(const server_http_req& req
 }
 
 bool HLIEDeviceService::check_mem_available(const uint32_t device, const uint32_t size) {
+    auto& sdk = hm_sys_sdk();
+    if (!sdk.load()) {
+        return false;
+    }
+
     hm_mem_info mem_info{};
-    if (hm_sys_get_mem_info(device, &mem_info) < 0)
+    if (sdk.get_mem_info(device, &mem_info) < 0)
         return false;
 
     return mem_info.mem_avail > size + BACK_UP_MEM;

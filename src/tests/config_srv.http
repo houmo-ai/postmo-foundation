@@ -52,3 +52,51 @@ Content-Type: application/json
 ### Read test section after updates
 GET {{baseUrl}}/hlie/v1/config/config_test
 Content-Type: application/json
+
+### Add llm_params test key before delete
+POST {{baseUrl}}/hlie/v1/config/llm_params
+Content-Type: application/json
+
+{
+  "--config-test-delete": "1"
+}
+
+### Delete llm_params key by query
+DELETE {{baseUrl}}/hlie/v1/config/llm_params?key=--config-test-delete
+Content-Type: application/json
+
+### Add llm_params test keys before batch delete
+POST {{baseUrl}}/hlie/v1/config/llm_params
+Content-Type: application/json
+
+{
+  "--config-test-delete-a": "a",
+  "--config-test-delete-b": "b"
+}
+
+### Delete llm_params keys by body
+DELETE {{baseUrl}}/hlie/v1/config/llm_params
+Content-Type: application/json
+
+{
+  "keys": [
+    "--config-test-delete-a",
+    "--config-test-delete-b"
+  ]
+}
+
+### Add llm_params test key before path delete
+POST {{baseUrl}}/hlie/v1/config/llm_params
+Content-Type: application/json
+
+{
+  "--config-test-delete-path": "path"
+}
+
+### Delete llm_params key by path
+DELETE {{baseUrl}}/hlie/v1/config/llm_params/--config-test-delete-path
+Content-Type: application/json
+
+### Read llm_params after delete tests
+GET {{baseUrl}}/hlie/v1/config/llm_params
+Content-Type: application/json
