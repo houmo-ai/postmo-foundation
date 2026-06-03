@@ -1,10 +1,14 @@
 #include "hlie_app/hlie_model_info.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <regex>
 #include <unordered_map>
 
+#include "gguf.h"
+#include "hlie_base/hlie_gguf_util.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
 #include "json.hpp"
@@ -26,6 +30,7 @@ namespace {
     const std::regex kContextRegex(R"((\d+)\s*[kK])");
     const std::regex kBatchRegex(R"(b(\d+))", std::regex::icase);
     const std::regex kCoreRegex(R"((\d+)\s*core)", std::regex::icase);
+    const std::regex kSizeLabelRegex(R"((\d+(?:\.\d+)?)\s*([bBmM]))", std::regex::icase);
     const std::regex kVlFamilyRegex(R"(qwen2\.5-vl|qwen3-vl|qwen3\.5|qwen3\.6)", std::regex::icase);
     const std::regex kOptionalMmprojVlFamilyRegex(R"(qwen3\.5|qwen3\.6)", std::regex::icase);
     const std::regex kVlResRegex(R"(vit_(\d+)(?:[_x](\d+))?)", std::regex::icase);
@@ -73,6 +78,57 @@ namespace {
         return name.find("mmproj") == std::string::npos && std::regex_search(name, kVlFamilyRegex);
     }
 
+    uint64_t parse_param_count(const std::string& size_label) {
+        std::smatch m;
+        if (!std::regex_search(size_label, m, kSizeLabelRegex)) {
+            return 0;
+        }
+
+        const double value = std::stod(m[1].str());
+        const std::string unit = to_lower(m[2].str());
+        const double multiplier = unit == "b" ? 1000.0 * 1000.0 * 1000.0 : 1000.0 * 1000.0;
+        return static_cast<uint64_t>(value * multiplier);
+    }
+
+    double weight_bits_from_file_type(const uint32_t file_type) {
+        switch (file_type) {
+        case 0:  return 32.0;
+        case 1:  return 16.0;
+        case 2:  return 4.0;
+        case 3:  return 4.0;
+        case 7:  return 8.0;
+        case 8:  return 5.0;
+        case 9:  return 5.0;
+        case 10: return 2.0;
+        case 12: return 3.0;
+        case 14: return 6.0;
+        case 15: return 4.0;
+        case 16: return 4.0;
+        default: return 4.0;
+        }
+    }
+
+    int bytes_to_mb_ceil(const double bytes) {
+        if (bytes <= 0) {
+            return 0;
+        }
+
+        return static_cast<int>(std::ceil(bytes / (1000.0 * 1000.0)));
+    }
+
+    bool get_u32_key(gguf_context* ctx, const std::string& key, uint32_t& value) {
+        return HLIEGgufUtil::get_key<uint32_t>(ctx, key, value, false);
+    }
+
+    std::string get_arch_prefix(gguf_context* ctx) {
+        std::string arch;
+        if (!HLIEGgufUtil::get_key<std::string>(ctx, "general.architecture", arch, false) || arch.empty()) {
+            return {};
+        }
+
+        return arch + ".";
+    }
+
 } // namespace
 
 int HLIEModelInfo::parse_from_file(const std::string& file_path) {
@@ -103,6 +159,7 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
             vl_spec_ = parse_mmproj_vl_spec(mm_proj_path_);
         }
         model_version_ = config.value("Version", "");
+        estimated_mem_mb_ = config.value("EstimatedMemMB", 0);
         clip_model_ = config.value("ClipModel", "");
         clip_l_model_ = config.value("ClipLModel", "");
         t5_model_ = config.value("T5Model", "");
@@ -131,6 +188,9 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
         model_key_ = model_name_;
         if (!mm_proj_path_.empty()) {
             model_key_ += "_" + vl_spec_;
+        }
+        if (estimated_mem_mb_ <= 0 && !model_path_.empty()) {
+            estimated_mem_mb_ = estimate_mem_from_gguf(model_path_, context_size_, batch_num_);
         }
     } catch (const nlohmann::json::exception& ex) {
         LOG_ERROR("JSON Error: {}", ex.what());
@@ -243,6 +303,7 @@ int HLIEModelInfo::parse_from_gguf_filename(const std::string& file_path) {
     }
 
     is_llm_ = true;
+    estimated_mem_mb_ = estimate_mem_from_gguf(model_path_, context_size_, batch_num_);
     return 0;
 }
 
@@ -395,6 +456,82 @@ int HLIEModelInfo::estimate_mem(const std::string& model_name) {
     return 4096;
 }
 
+int HLIEModelInfo::estimate_mem_from_gguf(const std::string& model_path, const int context_size, const int batch_num) {
+    if (model_path.empty()) {
+        return 0;
+    }
+
+    ggml_context* ctx_data = nullptr;
+    gguf_init_params params = {
+        /*.no_alloc = */ true,
+        /*.ctx      = */ &ctx_data,
+    };
+
+    gguf_context* ctx = gguf_init_from_file(model_path.c_str(), params);
+    if (!ctx) {
+        LOG_WARN("failed to init gguf for memory estimate: {}", model_path);
+        return 0;
+    }
+
+    try {
+        const std::string prefix = get_arch_prefix(ctx);
+
+        std::string size_label;
+        HLIEGgufUtil::get_key<std::string>(ctx, "general.size_label", size_label, false);
+
+        uint32_t file_type = 0;
+        HLIEGgufUtil::get_key<uint32_t>(ctx, "general.file_type", file_type, false);
+
+        uint64_t tensor_bytes = 0;
+        const int64_t n_tensors = gguf_get_n_tensors(ctx);
+        for (int64_t i = 0; i < n_tensors; ++i) {
+            tensor_bytes += gguf_get_tensor_size(ctx, i);
+        }
+
+        const uint64_t param_count = parse_param_count(size_label);
+        const double weight_bits = weight_bits_from_file_type(file_type);
+        const double param_weight_bytes = static_cast<double>(param_count) * weight_bits / 8.0;
+        const double base_weight_bytes = param_weight_bytes > 0 ? param_weight_bytes : static_cast<double>(tensor_bytes);
+
+        uint32_t block_count = 0;
+        uint32_t ctx_train = 0;
+        uint32_t head_count_kv = 0;
+        uint32_t key_length = 0;
+        uint32_t value_length = 0;
+        if (!prefix.empty()) {
+            get_u32_key(ctx, prefix + "block_count", block_count);
+            get_u32_key(ctx, prefix + "context_length", ctx_train);
+            get_u32_key(ctx, prefix + "attention.head_count_kv", head_count_kv);
+            get_u32_key(ctx, prefix + "attention.key_length", key_length);
+            get_u32_key(ctx, prefix + "attention.value_length", value_length);
+        }
+
+        const uint32_t runtime_ctx = context_size > 0 ? static_cast<uint32_t>(context_size) : ctx_train;
+        const uint32_t runtime_batch = batch_num > 0 ? static_cast<uint32_t>(batch_num) : 1;
+        const double kv_cache_bytes = static_cast<double>(runtime_batch) * runtime_ctx * block_count * head_count_kv *
+            (key_length + value_length) * 2.0;
+
+        constexpr double kLoadUpperFactor = 1.9;
+        const double estimate_bytes = base_weight_bytes * kLoadUpperFactor;
+        const int estimate_mb = bytes_to_mb_ceil(estimate_bytes);
+
+        LOG_INFO("GGUF memory estimate for {}: size_label={}, file_type={}, weight_bits={}, param_weight={}MB, tensor={}MB, kv_cache={}MB, load_upper={}MB",
+                 model_path, size_label, file_type, weight_bits, bytes_to_mb_ceil(param_weight_bytes), bytes_to_mb_ceil(tensor_bytes),
+                 bytes_to_mb_ceil(kv_cache_bytes), estimate_mb);
+
+        gguf_free(ctx);
+        return estimate_mb;
+    } catch (const std::exception& ex) {
+        LOG_WARN("failed to estimate memory from gguf {}, ex: {}", model_path, ex.what());
+        gguf_free(ctx);
+        return 0;
+    }
+}
+
+int HLIEModelInfo::get_estimated_mem() const {
+    return estimated_mem_mb_ > 0 ? estimated_mem_mb_ : estimate_mem(model_name_);
+}
+
 void HLIEModelInfo::build_llm(const std::string& model_path, const std::string& model_type, const int context_size, const int cores,
                               const int batch_num, const int xh_version, const bool is_multi_model, const std::string& params,
                               const std::string& mm_proj_path, const std::string& devices) {
@@ -408,6 +545,7 @@ void HLIEModelInfo::build_llm(const std::string& model_path, const std::string& 
     params_ = params;
     mm_proj_path_ = mm_proj_path;
     devices_ = devices;
+    estimated_mem_mb_ = estimate_mem_from_gguf(model_path_, context_size_, batch_num_);
 }
 
 void HLIEModelInfo::build_sd(const std::string& model_type, const std::string& vae_model, const std::string& t5_model,
@@ -427,7 +565,8 @@ int HLIEModelInfo::to_json_file(const std::string& file_path) const {
         {"ModelPath", model_path_}, {"ModelType", model_type_},  {"ContextSize", context_size_}, {"Cores", cores_},
         {"BatchNum", batch_num_},   {"XHVersion", xh_version_},  {"IsMM", is_multi_model_},      {"Params", params_},
         {"MMProj", mm_proj_path_},  {"Version", model_version_}, {"ClipModel", clip_model_},     {"ClipLModel", clip_l_model_},
-        {"T5Model", t5_model_},     {"Devices", devices_},       {"MMDitModel", mmdit_model_},   {"VaeModel", vae_model_}};
+        {"T5Model", t5_model_},     {"Devices", devices_},       {"MMDitModel", mmdit_model_},   {"VaeModel", vae_model_},
+        {"EstimatedMemMB", estimated_mem_mb_}};
 
     try {
         std::ofstream file(file_path);

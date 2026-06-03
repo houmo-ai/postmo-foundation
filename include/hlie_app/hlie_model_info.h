@@ -25,6 +25,7 @@ public:
     static void ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, const std::string& dir);
 
     static int estimate_mem(const std::string& model_name);
+    static int estimate_mem_from_gguf(const std::string& model_path, int context_size = 0, int batch_num = 1);
 
 
     void build_llm(const std::string& model_path, const std::string& model_type, int context_size, int cores, int batch_num, int xh_version,
@@ -55,6 +56,7 @@ public:
     [[nodiscard]] const std::string& get_vae_model() const { return vae_model_; }
     [[nodiscard]] const std::string& get_devices() const { return devices_; }
     [[nodiscard]] int get_device_num() const { return device_num_; }
+    [[nodiscard]] int get_estimated_mem() const;
 
     bool is_embedding_model() const;
     bool is_rerank_model() const;
@@ -90,6 +92,7 @@ private:
     std::string mmdit_model_;
     std::string vae_model_;
     std::string devices_;
+    int estimated_mem_mb_ = 0;
 };
 
 HLIE_NAMESPACE_END

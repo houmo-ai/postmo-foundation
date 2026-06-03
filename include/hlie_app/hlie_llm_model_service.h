@@ -60,6 +60,8 @@ public:
 
     server_http_res_ptr handle_props(const server_http_req& req) const;
 
+    server_http_res_ptr handle_slots(const server_http_req& req) const;
+
     [[nodiscard]] std::string get_model_key() const {
         return model_key_;
     }
@@ -74,6 +76,7 @@ private:
     bool is_embedding_ = false;
     std::string model_key_;
     int batch_num_{1};
+    int estimated_mem_mb_{0};
 
     common_params params_;
 };

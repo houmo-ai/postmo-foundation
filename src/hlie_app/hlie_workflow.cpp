@@ -606,7 +606,8 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             res->error(format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        mem_est = HLIEModelInfo::estimate_mem(model_name);
+        const auto model_inst = get_model_inst(model_name);
+        mem_est = model_inst ? model_inst->get().model_info.get_estimated_mem() : HLIEModelInfo::estimate_mem(model_name);
     } else if (model_path.empty()) {
         res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
         return res;
@@ -623,7 +624,10 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             res->error(format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        mem_est = HLIEModelInfo::estimate_mem(model_name);
+        mem_est = HLIEModelInfo::estimate_mem_from_gguf(model_path, 0, 1);
+        if (mem_est <= 0) {
+            mem_est = HLIEModelInfo::estimate_mem(model_name);
+        }
     }
 
     LOG_INFO("ready to acquire devices");
@@ -632,7 +636,8 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         if (devices == "undefined") {
             uint32_t device_id = 0;
             if (device_service_->acquire_mem(mem_est, device_id, true) < 0) {
-                res->error(format_error_response_ex("The devices is not available.", ERROR_TYPE_UNAVAILABLE, 80004));
+                res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
+                                                     ERROR_TYPE_UNAVAILABLE, 80004));
                 return res;
             }
             devices = std::to_string(device_id);
@@ -643,7 +648,8 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
                 return res;
             }
             if (device_service_->acquire_mem_on_devices(devices_vec, mem_est, false, true) < 0) {
-                res->error(format_error_response_ex("The devices is not available.", ERROR_TYPE_UNAVAILABLE, 80004));
+                res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
+                                                     ERROR_TYPE_UNAVAILABLE, 80004));
                 return res;
             }
         }
@@ -1270,6 +1276,16 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 true,
                 LLM // LLM模型类型
             },
+            {
+                    {"/slots"},
+                    GET,
+                    [this](const server_http_req& req) -> server_http_res_ptr {
+                        CHECK_SERVICE(llm_model_service_);
+                        return llm_model_service_->handle_slots(req);
+                    },
+                    true,
+                    LLM // LLM模型类型
+                },
             {
                 {"/hlie/v1/start", "/models/load"},
                 POST,

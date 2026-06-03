@@ -178,7 +178,9 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
             }
         }
     } else { // 单实例模式可以定制Model Devices
-        const auto mem_est = HLIEModelInfo::estimate_mem(model_info.get_model_name());
+        const auto mem_est = model_info.get_estimated_mem();
+        estimated_mem_mb_ = mem_est;
+        LOG_INFO("LLM memory estimate for {} is {}MB", model_info.get_model_name(), mem_est);
         if (!devices.empty()) {
             if (!HlieUtil::is_valid_devices(devices)) {
                 LOG_ERROR("LLM cannot acquire model specific device \"{}\"", devices);
@@ -279,7 +281,7 @@ void LLModelService::stop() {
     if (is_multi_instance_) {
         Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
     } else {
-        const auto mem_est = HLIEModelInfo::estimate_mem(model_key_);
+        const auto mem_est = estimated_mem_mb_ > 0 ? estimated_mem_mb_ : HLIEModelInfo::estimate_mem(model_key_);
         device_service_->release_mem_on_devices(devices_, mem_est);
     }
     devices_.clear();
@@ -361,6 +363,10 @@ server_http_res_ptr LLModelService::handle_props(const server_http_req& req) con
     }
 
     return llama_server_routes_->get_props(req);
+}
+
+server_http_res_ptr LLModelService::handle_slots(const server_http_req& req) const {
+    return llama_server_routes_->get_slots(req);
 }
 
 int LLModelService::get_state() {
