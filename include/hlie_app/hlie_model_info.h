@@ -22,6 +22,8 @@ public:
 
     static std::string parse_mmproj_vl_spec(const std::string& name);
 
+    static std::string build_model_key(const HLIEModelInfo& model_info);
+
     static void ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, const std::string& dir);
 
     static int estimate_mem(const std::string& model_name);

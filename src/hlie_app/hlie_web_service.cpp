@@ -624,7 +624,7 @@ void HLIEWebService::post(const std::string& path, const server_http_context::ha
             get_headers(req),
             req.path,
             build_query_string(req),
-            req.body,
+            std::move(body),
             std::move(files),
             req.is_connection_closed
         });

@@ -1,10 +1,14 @@
 #include "hlie_app/hlie_server_http_proxy.h"
 
 #include <queue>
+#include <random>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 
 #include "hlie_base/hlie_logger.h"
 #include "httplib.h"
+#include "json.hpp"
 
 
 namespace {
@@ -29,6 +33,73 @@ namespace {
         }
 
         return false;
+    }
+
+    std::string generate_multipart_boundary() {
+        thread_local std::mt19937 gen(std::random_device{}());
+        static constexpr char chars[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+        std::uniform_int_distribution<> dis(0, sizeof(chars) - 2);
+
+        std::string boundary = "----hlie-proxy-";
+        for (int i = 0; i < 16; ++i) {
+            boundary += chars[dis(gen)];
+        }
+        return boundary;
+    }
+
+    std::string sanitize_multipart_header_value(const std::string& text) {
+        std::string result;
+        result.reserve(text.size());
+        for (const char c : text) {
+            if (c != '\n' && c != '\r' && c != '"') {
+                result += c;
+            }
+        }
+        return result;
+    }
+
+    std::string build_multipart_body(
+        const nlohmann::json& form_fields,
+        const std::map<std::string, uploaded_file>& files,
+        const std::string& boundary) {
+        std::ostringstream body;
+
+        const auto append_field = [&](const std::string& key, const nlohmann::json& value) {
+            if (!value.is_string()) {
+                throw std::invalid_argument("multipart form field must be a string");
+            }
+            body << "--" << boundary << "\r\n";
+            body << "Content-Disposition: form-data; name=\"" << sanitize_multipart_header_value(key) << "\"\r\n\r\n";
+            body << value.get<std::string>() << "\r\n";
+        };
+
+        for (const auto& [key, value] : form_fields.items()) {
+            if (value.is_array()) {
+                for (const auto& item : value) {
+                    append_field(key, item);
+                }
+            } else {
+                append_field(key, value);
+            }
+        }
+
+        for (const auto& [key, file] : files) {
+            body << "--" << boundary << "\r\n";
+            body << "Content-Disposition: form-data; name=\"" << sanitize_multipart_header_value(key) << "\"";
+            if (!file.filename.empty()) {
+                body << "; filename=\"" << sanitize_multipart_header_value(file.filename) << "\"";
+            }
+            body << "\r\n";
+            body << "Content-Type: "
+                 << (file.content_type.empty() ? "application/octet-stream"
+                                               : sanitize_multipart_header_value(file.content_type))
+                 << "\r\n\r\n";
+            body.write(reinterpret_cast<const char*>(file.data.data()), static_cast<std::streamsize>(file.data.size()));
+            body << "\r\n";
+        }
+
+        body << "--" << boundary << "--\r\n";
+        return body.str();
     }
 }
 
@@ -86,6 +157,7 @@ struct pipe_t {
 
 ServerHttpProxy::ServerHttpProxy(const std::string& method, const std::string& host, int port, const std::string& path,
                                         const std::map<std::string, std::string>& headers, const std::string& body,
+                                        const std::map<std::string, uploaded_file>& files,
                                         const std::function<bool()>& should_stop) {
 // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::Client>(host, port);
@@ -133,22 +205,56 @@ ServerHttpProxy::ServerHttpProxy(const std::string& method, const std::string& h
         return pipe->write({{}, 0, std::string(data, data_length), ""});
     };
 
+    std::string effective_body = body;
+    std::string override_content_type;
+    const bool has_files = !files.empty();
+    if (has_files) {
+        const auto form_fields = nlohmann::json::parse(body, nullptr, false);
+        if (form_fields.is_discarded() || !form_fields.is_object()) {
+            throw std::runtime_error("failed to parse multipart form fields JSON");
+        }
+
+        const std::string boundary = generate_multipart_boundary();
+        effective_body = build_multipart_body(form_fields, files, boundary);
+        override_content_type = "multipart/form-data; boundary=" + boundary;
+    }
+
     // prepare the request to destination server
     httplib::Request req;
     {
         req.method = method;
         req.path = path;
         for (const auto & [key, value] : headers) {
-            req.set_header(key, value);
+            const auto lowered = to_lower_copy(key);
+            if (lowered == "accept-encoding" || lowered == "transfer-encoding" || lowered == "content-length") {
+                continue;
+            }
+            if (lowered == "content-type") {
+                if (has_files) {
+                    continue;
+                }
+                if (value.find("multipart/form-data") != std::string::npos) {
+                    override_content_type = "application/json; charset=utf-8";
+                    continue;
+                }
+            }
+            if (lowered == "host") {
+                req.set_header(key, host + ":" + std::to_string(port));
+            } else {
+                req.set_header(key, value);
+            }
         }
-        req.body = body;
+        req.body = std::move(effective_body);
+        if (!override_content_type.empty()) {
+            req.set_header("Content-Type", override_content_type);
+        }
         req.response_handler = response_handler;
         req.content_receiver = content_receiver;
     }
 
     // start the proxy thread
     LOG_DEBUG("start proxy thread {} {}", req.method.c_str(), req.path.c_str());
-    this->thread = std::thread([cli, pipe, req]() {
+    this->thread = std::thread([cli, pipe, req]() mutable {
         auto result = cli->send(std::move(req));
         if (result.error() != httplib::Error::Success) {
             auto err_str = httplib::to_string(result.error());

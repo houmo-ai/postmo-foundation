@@ -11,6 +11,7 @@
 #include "hlie_ws_service.h"
 #include "httplib.h"
 #include "json.hpp"
+#include "server/server-http.h"
 #include "whisper.h"
 
 
@@ -137,6 +138,7 @@ public:
     std::string handle_stream(const WhisperStreamRequest& request) const;
 
     void handle_transcriptions(const httplib::Request& req, httplib::Response& res);
+    server_http_res_ptr handle_transcriptions(const server_http_req& req);
 
     [[nodiscard]] std::string get_model_key() const {
         return model_key_;

@@ -722,5 +722,40 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
     }
 }
 
+server_http_res_ptr WhisperModelService::handle_transcriptions(const server_http_req& req) {
+    httplib::Request adapted_req;
+    adapted_req.path = req.path;
+    adapted_req.body = req.body;
+    adapted_req.is_connection_closed = req.should_stop;
+
+    if (!req.body.empty()) {
+        const auto body = json::parse(req.body);
+        if (body.is_object()) {
+            for (const auto& [key, value] : body.items()) {
+                const std::string content = value.is_string() ? value.get<std::string>() : value.dump();
+                adapted_req.form.fields.emplace(key, httplib::FormField{key, content, {}});
+                // The existing whisper parameter parser reads text parts through
+                // the legacy file-style multipart accessors.
+                adapted_req.form.files.emplace(key, httplib::FormData{key, content, "", "", {}});
+            }
+        }
+    }
+
+    for (const auto& [key, file] : req.files) {
+        const std::string content(file.data.begin(), file.data.end());
+        adapted_req.form.files.emplace(
+            key, httplib::FormData{key, content, file.filename, file.content_type, {}});
+    }
+
+    httplib::Response adapted_res;
+    handle_transcriptions(adapted_req, adapted_res);
+
+    auto res = std::make_unique<server_http_res>();
+    res->status = adapted_res.status > 0 ? adapted_res.status : 200;
+    res->data = std::move(adapted_res.body);
+    res->content_type = adapted_res.get_header_value("Content-Type", "application/json");
+    return res;
+}
+
 
 HLIE_NAMESPACE_END

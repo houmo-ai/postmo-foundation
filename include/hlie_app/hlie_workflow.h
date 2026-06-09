@@ -88,11 +88,12 @@ private:
 
     static server_http_res_ptr proxy_request(const server_http_req& req, const std::string& method, const std::string& name, int port);
 
-    server_http_res_ptr route_llm_request(const server_http_req& req, const RequestHandler& handler);
+    server_http_res_ptr route_llm_request(const server_http_req& req, const RequestHandler& handler,
+                                          const std::string& method = "POST");
 
     server_http_res_ptr stop_service(const server_http_req& req);
 
-    [[nodiscard]] server_http_res_ptr handle_get_status(const server_http_req& req) const;
+    [[nodiscard]] server_http_res_ptr handle_get_status(const server_http_req& req);
 
     [[nodiscard]] server_http_res_ptr handle_post_status(const server_http_req& req);
 
@@ -102,6 +103,7 @@ private:
 
     std::optional<server_model_meta> get_model_meta(const std::string& name);
     std::optional<std::reference_wrapper<ModelInstance>> get_model_inst(const std::string& model_name);
+    void register_model_instance(HLIEModelInfo model_info);
 
     static int generate_instance_id() {
         static std::atomic counter{0};

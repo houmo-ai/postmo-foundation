@@ -289,7 +289,7 @@ void HLIEProcessManager::add_model(const std::string& model_name, const int inst
     std::lock_guard lock(mutex_);
 
     for (auto& [pid, process] : processes_) {
-        if (!process.is_running && process.instance_id != instance_id) {
+        if (!process.is_running || process.instance_id != instance_id) {
             continue;
         }
 

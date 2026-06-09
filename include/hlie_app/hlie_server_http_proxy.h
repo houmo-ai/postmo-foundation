@@ -15,6 +15,7 @@ struct HLIE_API ServerHttpProxy : server_http_res {
                       const std::string & path,
                       const std::map<std::string, std::string> & headers,
                       const std::string & body,
+                      const std::map<std::string, uploaded_file> & files,
                       const std::function<bool()>& should_stop);
     ~ServerHttpProxy() override {
         if (cleanup) {
