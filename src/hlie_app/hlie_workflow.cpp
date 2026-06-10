@@ -590,7 +590,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     }
 
     auto body = json::parse(req.body);
-    const std::string model_type = body.value("model_type", LLM);
+    std::string model_type = body.value("model_type", LLM);
     std::string devices = body.value("devices", "undefined");
     std::string model_name = body.value("model", std::string());
     const std::string model_path = body.value("model_path", std::string());
@@ -641,6 +641,16 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         if (mem_est <= 0) {
             mem_est = HLIEModelInfo::estimate_mem(model_name);
         }
+    }
+
+    const bool is_qwen3_audio_llm =
+        HlieUtil::contains_ignore_case(model_name, "qwen3_asr") ||
+        HlieUtil::contains_ignore_case(model_name, "qwen3-asr") ||
+        HlieUtil::contains_ignore_case(model_name, "qwen3_forcedaligner") ||
+        HlieUtil::contains_ignore_case(model_name, "qwen3-forcedaligner");
+    if (model_type == WHISPER && is_qwen3_audio_llm) {
+        LOG_WARN("Model {} was requested as whisper, overriding model_type to llm", model_name);
+        model_type = LLM;
     }
 
     LOG_INFO("ready to acquire devices");
@@ -1482,6 +1492,9 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
         for (const auto& name : names) {
             const auto model_inst = get_model_inst(name);
             const std::string public_name = model_inst ? model_inst->get().model_info.get_model_name() : name;
+            if (public_name.empty()) {
+                continue;
+            }
             if (seen.insert(public_name).second) {
                 result.push_back(public_name);
             }
@@ -1493,7 +1506,11 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
     json models = json::array();
     if (llm_model_service_) {
         const auto model_inst = get_model_inst(llm_model_service_->get_model_key());
-        models.push_back(model_inst ? model_inst->get().model_info.get_model_name() : llm_model_service_->get_model_key());
+        const std::string model_name =
+            model_inst ? model_inst->get().model_info.get_model_name() : llm_model_service_->get_model_key();
+        if (!model_name.empty()) {
+            models.push_back(model_name);
+        }
     }
 
     if (sd_model_service_) {
@@ -1501,11 +1518,17 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
     }
 
     if (whisper_model_service_) {
-        models.push_back(whisper_model_service_->get_model_key());
+        const auto& model_name = whisper_model_service_->get_model_key();
+        if (!model_name.empty()) {
+            models.push_back(model_name);
+        }
     }
 
     if (cosy_voice_model_service_) {
-        models.push_back(cosy_voice_model_service_->get_model_key());
+        const auto& model_name = cosy_voice_model_service_->get_model_key();
+        if (!model_name.empty()) {
+            models.push_back(model_name);
+        }
     }
 
     processors.push_back({{"params", ""},

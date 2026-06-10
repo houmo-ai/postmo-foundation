@@ -33,7 +33,7 @@ namespace {
     const std::regex kSizeLabelRegex(R"((\d+(?:\.\d+)?)\s*([bBmM]))", std::regex::icase);
     const std::regex kVlFamilyRegex(R"(qwen2\.5-vl|qwen3-vl|qwen3\.5|qwen3\.6)", std::regex::icase);
     const std::regex kMmprojFamilyRegex(
-        R"(qwen2\.5-vl|qwen3-vl|qwen3\.5|qwen3\.6|qwen3-asr|qwen3-forcedaligner|glm-ocr)",
+        R"(qwen2\.5-vl|qwen3-vl|qwen3\.5|qwen3\.6|qwen3[-_]asr|qwen3[-_]forcedaligner|glm-ocr)",
         std::regex::icase);
     const std::regex kOptionalMmprojVlFamilyRegex(R"(qwen3\.5|qwen3\.6)", std::regex::icase);
     const std::regex kVlResRegex(R"(vit_(\d+)(?:[_x](\d+))?)", std::regex::icase);
@@ -44,7 +44,8 @@ namespace {
 
         if (!std::regex_search(name, m, kMmprojFamilyRegex))
             return {};
-        const std::string model_family = to_lower(m.str());
+        std::string model_family = to_lower(m.str());
+        std::replace(model_family.begin(), model_family.end(), '_', '-');
 
         if (!std::regex_search(name, m, kXhRegex))
             return {};
