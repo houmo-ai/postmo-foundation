@@ -17,7 +17,8 @@ from hliepython.utils.logging import async_logger as logger
 
 from typing import Final, Literal, TypeAlias, TypeVar, cast
 from typing import Callable, Literal, Optional, TypeVar, Union, cast
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Set
+from collections.abc import Mapping, Sequence
 
 from hliepython.model_server.engines.base_engine import InferenceEngine
 from hliepython.model_server.engines.utils import (
@@ -25,14 +26,19 @@ from hliepython.model_server.engines.utils import (
     normalize_vllm_engine_args,
 )
 
-from collections.abc import Mapping, Sequence
+from vllm.entrypoints.utils import get_max_tokens
 from vllm.multimodal.audio import get_audio_duration, split_audio
+from vllm.model_executor.model_loader.utils import get_model_architecture 
 from vllm.multimodal.media.audio import load_audio
 from vllm.renderers.inputs import DictPrompt, EncoderDecoderDictPrompt
+# from vllm.inputs import EncoderDecoderInputs, ProcessorInputs
+from vllm.inputs import EncoderDecoderInput
+from vllm.multimodal.processing import ProcessorInputs
 from vllm.logprobs import FlatLogprobs, Logprob
-from vllm.inputs.data import PromptType
+from vllm.inputs import PromptType
 from vllm.entrypoints.utils import create_error_response
 from vllm import AsyncLLMEngine, SamplingParams
+from vllm.sampling_params import BeamSearchParams, SamplingParams
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.outputs import RequestOutput
 from vllm.entrypoints.openai.engine.serving import OpenAIServing, SpeechToTextRequest
@@ -41,11 +47,16 @@ from vllm.entrypoints.openai.engine.protocol import (
     RequestResponseMetadata,
 )
 from vllm.exceptions import VLLMValidationError
+from vllm.entrypoints.speech_to_text.transcription.protocol import (  
+    TranscriptionRequest,  
+    TranscriptionResponse,  
+    TranscriptionResponseVerbose,  
+)
 from vllm.entrypoints.openai.speech_to_text.protocol import (
-    TranscriptionRequest,
-    TranscriptionResponse,
+    # TranscriptionRequest,
+    # TranscriptionResponse,
     TranscriptionResponseStreamChoice,
-    TranscriptionResponseVerbose,
+    # TranscriptionResponseVerbose,
     TranscriptionSegment,
     TranscriptionStreamResponse,
     TranslationResponse,
@@ -71,7 +82,7 @@ from vllm.inputs import (
     TextPrompt,
 )
 from vllm.renderers.inputs.preprocess import parse_enc_dec_prompt, parse_model_prompt
-
+from vllm.utils.async_utils import merge_async_iterators
 from vllm.sampling_params import RequestOutputKind
 
 from vllm_houmo.models.export_meta_from_gguf import parse_gguf
@@ -97,9 +108,19 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 # As per https://platform.openai.com/docs/guides/speech-to-text#overview.
 # TODO configurable
 VLLM_MAX_AUDIO_CLIP_FILESIZE_MB = 25
-MAX_AUDIO_CLIP_SECONDS = 30
+MAX_AUDIO_CLIP_SECONDS = 20
 OVERLAP_CHUNK_SECOND = 1
 MIN_ENERGY_WINDOW_SIZE = 1600  # 1600 ~ 100ms for 16000 Hz audio
+
+def asr_inter_chunk_separator(
+    language: str | None, no_space_languages: Set[str]
+) -> str:
+    """Space to insert between ASR text chunks for streaming and non-streaming join.
+
+    Languages in ``no_space_languages`` (e.g. Chinese, Japanese) use an empty
+    separator; others use a single ASCII space.
+    """
+    return "" if language and language.lower() in no_space_languages else " "
 
 class ASREngine(InferenceEngine):
     """ASR 推理引擎（对齐 OpenAI /v1/audio/transcriptions）。"""
@@ -109,15 +130,14 @@ class ASREngine(InferenceEngine):
             "vllm_config",
             instance_config.get("vllm_extra_config", {}),
         )
-        super().__init__(instance_config)
-
-        self.max_audio_clip_s = MAX_AUDIO_CLIP_SECONDS
 
         self.task_type = "transcribe"
         self.model_sr = 16000
         self.hop_length = 160
-        
+        self.max_audio_clip_s = MAX_AUDIO_CLIP_SECONDS
         self.max_audio_filesize_mb = VLLM_MAX_AUDIO_CLIP_FILESIZE_MB
+
+        super().__init__(instance_config)
 
     def _load_model(self):
         if AsyncLLMEngine is None:
@@ -125,12 +145,23 @@ class ASREngine(InferenceEngine):
 
         try:
             vllm_engine_args = normalize_vllm_engine_args(self.vllm_config)
+            additional_config = dict(self.additional_config)
+            vit_model_name = additional_config.pop("vit_model_name", None)
+            if vit_model_name:
+                additional_config.update(
+                    {
+                        "visual_model_path": os.path.join(
+                            self.model_path, vit_model_name
+                        )
+                    }
+                )
+
+            additional_config.setdefault("device_ids", self.device_ids)
             user_additional_config = vllm_engine_args.pop("additional_config", None)
             additional_config = merge_additional_config(
                 dict(self.additional_config),
                 user_additional_config,
             )
-            additional_config.setdefault("device_ids", self.device_ids)
 
             parse_gguf(self.model_path)
 
@@ -139,10 +170,25 @@ class ASREngine(InferenceEngine):
                 "model": self.model_path,
                 "additional_config": additional_config,
             }
+            logger.info(f"vllm 启动参数: {engine_arg_kwargs}")
             engine_args = AsyncEngineArgs(**engine_arg_kwargs)
 
             self.engine = AsyncLLMEngine.from_engine_args(engine_args)
+
+            self.model_cls, self.arch_name = get_model_architecture(self.engine.model_config)
+            self.asr_config = self.model_cls.get_speech_to_text_config(
+                self.engine.model_config, self.task_type
+            )
+            
+            self.model_config = self.engine.model_config
+            self.default_sampling_params = self.model_config.get_diff_sampling_param()
+
             logger.info(f"ASREngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
+            logger.info(f"vllm 实际启动参数：{self.engine.vllm_config}")
+            logger.info(f"asr 模型配置参数：{self.asr_config}")
+            logger.info(f"模型配置：{self.engine.vllm_config.model_config}")
+            logger.info(f"并行配置：{self.engine.vllm_config.parallel_config}")
+            logger.info(f"TextEngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
 
         except Exception as e:
             logger.error(f"ASREngine: vLLM 引擎加载失败 {e}")
@@ -301,76 +347,6 @@ class ASREngine(InferenceEngine):
         # Send the final done message after all response.n are finished
         yield "data: [DONE]\n\n"
 
-    async def transcription_stream_generator(
-        self,
-        request: TranscriptionRequest,
-        result_generator: list[AsyncGenerator[RequestOutput, None]],
-        request_id: str,
-        request_metadata: RequestResponseMetadata,
-        audio_duration_s: float,
-    ) -> AsyncGenerator[str, None]:
-        generator = self._speech_to_text_stream_generator(
-            request=request,
-            list_result_generator=result_generator,
-            request_id=request_id,
-            request_metadata=request_metadata,
-            audio_duration_s=audio_duration_s,
-            chunk_object_type="transcription.chunk",
-            response_stream_choice_class=TranscriptionResponseStreamChoice,
-            stream_response_class=TranscriptionStreamResponse,
-        )
-        async for chunk in generator:
-            yield chunk
-
-    def _find_split_point(self, wav: np.ndarray, start_idx: int,
-                          end_idx: int) -> int:
-        """Find the best point to split audio by 
-        looking for silence or low amplitude.
-        Args:
-            wav: Audio tensor [1, T]
-            start_idx: Start index of search region
-            end_idx: End index of search region
-        Returns:
-            Index of best splitting point
-        """
-        segment = wav[start_idx:end_idx]
-
-        # Calculate RMS energy in small windows
-        min_energy = math.inf
-        quietest_idx = 0
-        for i in range(0,
-                       len(segment) - MIN_ENERGY_WINDOW_SIZE,
-                       MIN_ENERGY_WINDOW_SIZE):
-            window = segment[i:i + MIN_ENERGY_WINDOW_SIZE]
-            energy = (window**2).mean()**0.5
-            if energy < min_energy:
-                quietest_idx = i + start_idx
-                min_energy = energy
-        return quietest_idx
-
-    def _split_audio(self, audio_data: np.ndarray,
-                     sample_rate: int) -> list[np.ndarray]:
-        chunk_size = sample_rate * self.max_audio_clip_s
-        overlap_size = sample_rate * OVERLAP_CHUNK_SECOND
-        chunks = []
-        i = 0
-        while i < audio_data.shape[-1]:
-            if i + chunk_size >= audio_data.shape[-1]:
-                # handle last chunk
-                chunks.append(audio_data[..., i:])
-                break
-
-            # Find the best split point in the overlap region
-            search_start = i + chunk_size - overlap_size
-            search_end = min(i + chunk_size, audio_data.shape[-1])
-            split_point = self._find_split_point(audio_data, search_start,
-                                                 search_end)
-
-            # Extract chunk up to the split point
-            chunks.append(audio_data[..., i:split_point])
-            i = split_point
-        return chunks
-
     async def _preprocess_speech_to_text(
         self,
         request: SpeechToTextRequest,
@@ -378,7 +354,12 @@ class ASREngine(InferenceEngine):
         request_id: str,
     ) -> tuple[list[PromptType], float]:
         # Validate request
-        lang = request.language or "en"
+        language = self.model_cls.validate_language(request.language)
+        request.to_language = (
+            self.model_cls.validate_language(request.to_language)
+            if request.to_language
+            else None
+        )
 
         if len(audio_data) / 1024**2 > self.max_audio_filesize_mb:
             raise VLLMValidationError(
@@ -394,27 +375,51 @@ class ASREngine(InferenceEngine):
         # pre-requisite for chunking, as it assumes Whisper SR.
         try:
             with io.BytesIO(audio_data) as buf:
-                y, sr = load_audio(buf, sr=self.model_sr)
+                y, sr = load_audio(buf, sr=self.asr_config.sample_rate)
         except Exception as exc:
             raise ValueError("Invalid or unsupported audio file.") from exc
 
         duration = get_audio_duration(y=y, sr=sr)
-        chunks = [y] if duration < self.max_audio_clip_s else self._split_audio(y, int(sr))
+        do_split_audio = self.asr_config.allow_audio_chunking and (
+            self.asr_config.max_audio_clip_s is not None
+            and duration > self.asr_config.max_audio_clip_s
+        )
+
+        if not do_split_audio:
+            chunks = [y]
+        else:
+            assert self.asr_config.max_audio_clip_s is not None
+            assert self.asr_config.min_energy_split_window_size is not None
+            chunks = split_audio(
+                audio_data=y,
+                sample_rate=int(sr),
+                max_clip_duration_s=self.asr_config.max_audio_clip_s,
+                overlap_duration_s=self.asr_config.overlap_chunk_second,
+                min_energy_window_size=self.asr_config.min_energy_split_window_size,
+            )
+        logger.info(
+            f"音频被分段成 {len(chunks)} 段，原始时长 {duration:.2f} 秒，"
+            f"分段时长 {[get_audio_duration(y=chunk, sr=sr) for chunk in chunks]} 秒"
+        )
+
+        # if request.language is None and getattr(
+        #     self.model_cls, "supports_explicit_language_detection", False
+        # ):
+        #     # Auto-detect language from the first chunk.
+        #     request.language = await self._detect_language(
+        #         chunks[0], f"{request_id}-lang_detect"
+        #     )
 
         parsed_prompts: list[DictPrompt] = []
         for chunk in chunks:
-            
-            decoder_text = (
-                f"<|prev|>{request.prompt}" if request.prompt else ""
-            ) + f"<|startoftranscript|><|{lang}|><|transcribe|><|notimestamps|>"
-
-            prompt = ExplicitEncoderDecoderPrompt(
-                encoder_prompt=TextPrompt(
-                    prompt="",  # Whisper does not support encoder prompt.
-                    multi_modal_data={"audio": (chunk, sr)},
-                ),
-                decoder_prompt=TextPrompt(prompt=decoder_text),
+            stt_params = request.build_stt_params(
+                audio=chunk,
+                stt_config=self.asr_config,
+                model_config=self.model_config,
+                task_type=self.task_type,
             )
+
+            prompt = self.model_cls.get_generation_prompt(stt_params)
 
             parsed_prompt: DictPrompt
             if request.response_format == "verbose_json":
@@ -479,6 +484,26 @@ class ASREngine(InferenceEngine):
             output_kind=output_kind,
         )
 
+    @staticmethod
+    def _get_decoder_prompt_len(engine_prompts: list[ProcessorInputs]) -> int:
+        """Get the length of the decoder prompt. Currently we need to offset
+        by the decoder prompt length when running beam search because the mm
+        encoder is not currently cached and runs on decode calls; because of
+        this, we need to make sure the redundant encoder calls won't exceed
+        the context :(
+
+        FIXME (Alex) - this will be removed in the very near future once the
+        encoder/decoder caching is implemented.
+        """
+        input_len = 0
+        assert len(engine_prompts) > 0
+        first_eng_prompt = engine_prompts[0]
+
+        if first_eng_prompt.get("type") == "enc_dec":
+            first_eng_prompt = cast(EncoderDecoderInput, first_eng_prompt)
+            input_len = len(first_eng_prompt["decoder_prompt"]["prompt_token_ids"])
+        return input_len
+
     async def _create_speech_to_text(
         self,
         audio_data: bytes,
@@ -494,49 +519,139 @@ class ASREngine(InferenceEngine):
                 "Streaming is not currently supported with beam search"
             )
 
-        if request.response_format not in ['text', 'json', 'verbose_json']:
-            return self.create_error_response(
-            "Currently only support response_format `text`, `json` or `verbose_json`")
+        # error_check_ret = await self._check_model(request)
+        # if error_check_ret is not None:
+        #     return error_check_ret
 
+        # if not request.model:
+        #     request.model = self.models.model_name()
+
+        # # If the engine is dead, raise the engine's DEAD_ERROR.
+        # # This is required for the streaming case, where we return a
+        # # success status before we actually start generating text :).
+        # if self.engine_client.errored:
+        #     raise self.engine_client.dead_error
+
+        if request.response_format not in ["text", "json", "verbose_json"]:
+            return self.create_error_response(
+                "Currently only support response_format: "
+                "`text`, `json` or `verbose_json`"
+            )
+
+        if (
+            request.response_format == "verbose_json"
+            and not self.model_cls.supports_segment_timestamp
+        ):
+            return self.create_error_response(
+                f"Currently do not support verbose_json for {request.model}"
+            )
+
+        if request.response_format == "verbose_json" and request.stream:
+            return self.create_error_response(
+                "verbose_json format doesn't support streaming case"
+            )
         request_id = f"{self.task_type}-{self._base_request_id(raw_request)}"
 
         request_metadata = RequestResponseMetadata(request_id=request_id)
         if raw_request:
             raw_request.state.request_metadata = request_metadata
 
-        try:
-            prompts, duration_s = await self._preprocess_speech_to_text(
-                request=request,
-                audio_data=audio_data,
-                request_id=request_id,
+        # lora_request = self._maybe_get_adapters(request)
+
+        engine_inputs, duration_s = await self._preprocess_speech_to_text(
+            request=request,
+            audio_data=audio_data,
+            request_id=request_id,
+        )
+
+        # Schedule the request and get the result generator.
+        max_model_len = self.model_config.max_model_len
+        list_result_generator: list[AsyncGenerator[RequestOutput, None]] | None = None
+
+        input_len = (
+            ASREngine._get_decoder_prompt_len(engine_inputs)
+            if request.use_beam_search
+            else 0
+        )
+
+        # Unlike most decoder-only models, whisper generation length is not
+        # constrained by the size of the input audio, which is mapped to a
+        # fixed-size log-mel-spectogram. Still, allow for fewer tokens to be
+        # generated by respecting the extra completion tokens arg.
+        max_tokens = get_max_tokens(
+            max_model_len,
+            request.max_completion_tokens,
+            input_len,
+            self.default_sampling_params,
+        )
+
+        if request.use_beam_search:
+            sampling_params = request.to_beam_search_params(
+                max_tokens, self.default_sampling_params
+            )
+        else:
+            sampling_params = request.to_sampling_params(
+                max_tokens,
+                self.default_sampling_params,
             )
 
-        except ValueError as e:
-            logger.exception("Error in preprocessing prompt inputs")
-            return self.create_error_response(str(e))
+        if request.response_format == "verbose_json":
+            sampling_params.logprobs = 1
 
-        list_result_generator: Optional[list[AsyncGenerator[RequestOutput,
-                                                            None]]] = None
-        try:  
-            sampling_params = self.create_sampling_params(request)
-            logger.info(f"sampling_params: {sampling_params}")
+        engine_request_ids = [
+            request_id if len(engine_inputs) == 1 else f"{request_id}-{idx}"
+            for idx in range(len(engine_inputs))
+        ]
+        list_result_generator = []
+        try:
+            for request_id_item, engine_input in zip(engine_request_ids, engine_inputs):
+                # self._log_inputs(
+                #     request_id_item,
+                #     engine_input,
+                #     params=sampling_params,
+                #     lora_request=lora_request,
+                # )
 
-            logger.info(f" ---------------------------------------- ")
-            logger.info(f"prompts: {prompts}")
-            logger.info(f"sampling_params: {sampling_params}")
-            logger.info(f"request_id: {request_id}")
-            logger.info(f" ---------------------------------------- ")
+                # trace_headers = (
+                #     None
+                #     if raw_request is None
+                #     else await self._get_trace_headers(raw_request.headers)
+                # )
 
-            list_result_generator = [
-                self.engine.generate(
-                    prompt,
-                    sampling_params,
-                    request_id,
-                ) for prompt in prompts
-            ]
-        except ValueError as e:
-            # TODO: Use a vllm-specific Validation Error
-            return self.create_error_response(str(e))
+                # if isinstance(sampling_params, BeamSearchParams):
+                if 0:
+                    generator = self.beam_search(
+                        prompt=engine_input,
+                        params=sampling_params,
+                        request_id=request_id_item,
+                        lora_request=lora_request,
+                        trace_headers=trace_headers,
+                    )
+                else:
+                    generator = self.engine.generate(
+                        engine_input,
+                        sampling_params,
+                        request_id_item,
+                        # lora_request=lora_request,
+                        # trace_headers=trace_headers,
+                    )
+
+                list_result_generator.append(generator)
+        except asyncio.CancelledError:
+            logger.info(
+                "Request %s cancelled; aborting %d transcription engine request(s).",
+                request_id,
+                len(engine_request_ids),
+            )
+            await asyncio.gather(
+                self.engine.abort(engine_request_ids),
+                return_exceptions=True,
+            )
+            raise
+
+        separator = asr_inter_chunk_separator(
+            request.language, self.model_cls.no_space_languages
+        )
 
         if request.stream:
             return stream_generator_method(
@@ -545,6 +660,7 @@ class ASREngine(InferenceEngine):
                 request_id,
                 request_metadata,
                 duration_s,
+                separator,
             )
 
         # Non-streaming response.
@@ -552,43 +668,50 @@ class ASREngine(InferenceEngine):
         text_parts = []
         try:
             assert list_result_generator is not None
+            chunk_segment_parts: list[list[SpeechToTextSegment]] = [
+                [] for _ in list_result_generator
+            ]
+            chunk_text_parts: list[list[str]] = [[] for _ in list_result_generator]
             segments_types: dict[str, type[SpeechToTextSegment]] = {
                 "transcribe": TranscriptionSegment,
                 "translate": TranslationSegment,
             }
             segment_class: type[SpeechToTextSegment] = segments_types[self.task_type]
             text = ""
-            # chunk_size_in_s = self.asr_config.max_audio_clip_s
-            chunk_size_in_s = 30
+            chunk_size_in_s = self.asr_config.max_audio_clip_s
             if chunk_size_in_s is None:
                 assert len(list_result_generator) == 1, (
                     "`max_audio_clip_s` is set to None, audio cannot be chunked"
                 )
-            for idx, result_generator in enumerate(list_result_generator):
+            result_generator = merge_async_iterators(*list_result_generator)
+            async for idx, op in result_generator:
                 start_time = (
                     float(idx * chunk_size_in_s) if chunk_size_in_s is not None else 0.0
                 )
-                async for op in result_generator:
-                    logger.info(f"op.outputs: {op.outputs}")
-                    if request.response_format == "verbose_json":
-                        assert op.outputs[0].logprobs
-                        segments: list[SpeechToTextSegment] = (
-                            self._get_verbose_segments(
-                                tokens=tuple(op.outputs[0].token_ids),
-                                segment_class=segment_class,
-                                request=request,
-                                start_time=start_time,
-                                log_probs=op.outputs[0].logprobs,
-                            )
-                        )
+                if request.response_format == "verbose_json":
+                    assert op.outputs[0].logprobs
+                    segments: list[SpeechToTextSegment] = self._get_verbose_segments(
+                        tokens=tuple(op.outputs[0].token_ids),
+                        segment_class=segment_class,
+                        request=request,
+                        start_time=start_time,
+                        log_probs=op.outputs[0].logprobs,
+                    )
 
-                        total_segments.extend(segments)
-                        text_parts.extend([seg.text for seg in segments])
-                    else:
-                        raw_text = op.outputs[0].text
-                        text_parts.append(self.post_process_output(raw_text))
-            text = "".join(text_parts)
-
+                    chunk_segment_parts[idx].extend(segments)
+                    chunk_text_parts[idx].extend([seg.text for seg in segments])
+                else:
+                    raw_text = op.outputs[0].text
+                    chunk_text_parts[idx].append(
+                        self.model_cls.post_process_output(raw_text)
+                    )
+            total_segments = [
+                segment
+                for segment_parts in chunk_segment_parts
+                for segment in segment_parts
+            ]
+            text_parts = [text for text_part in chunk_text_parts for text in text_part]
+            text = separator.join(text_parts)
             if self.task_type == "transcribe":
                 final_response: ResponseType
                 # add usage in TranscriptionResponse.
@@ -626,29 +749,17 @@ class ASREngine(InferenceEngine):
                         ),
                     )
             return final_response
-
         except asyncio.CancelledError:
-            return self.create_error_response("Client disconnected")
-        except ValueError as e:
-            # TODO: Use a vllm-specific Validation Error
-            return self.create_error_response(str(e))
-
-
-    @classmethod
-    def post_process_output(cls, text: str) -> str:
-        """
-        Post-process the raw model output text.
-
-        Some ASR models output structured formats (e.g., language tags,
-        special tokens) that need to be stripped before returning to the user.
-
-        Args:
-            text: Raw decoded text from the model.
-
-        Returns:
-            Cleaned transcription text.
-        """
-        return text
+            logger.info(
+                "Request %s cancelled; aborting %d transcription engine request(s).",
+                request_id,
+                len(engine_request_ids),
+            )
+            await asyncio.gather(
+                self.engine.abort(engine_request_ids),
+                return_exceptions=True,
+            )
+            raise
 
     def _get_verbose_segments(
         self,
@@ -728,6 +839,11 @@ class ASREngine(InferenceEngine):
         | AsyncGenerator[str, None]
         | ErrorResponse
     ):
+        """Transcription API similar to OpenAI's API.
+
+        See https://platform.openai.com/docs/api-reference/audio/createTranscription
+        for the API specification. This API mimics the OpenAI transcription API.
+        """
         audio_data = await request.file.read()
 
         return await self._create_speech_to_text(
@@ -741,6 +857,29 @@ class ASREngine(InferenceEngine):
             ),
             stream_generator_method=self.transcription_stream_generator,
         )
+
+    async def transcription_stream_generator(
+        self,
+        request: TranscriptionRequest,
+        result_generator: list[AsyncGenerator[RequestOutput, None]],
+        request_id: str,
+        request_metadata: RequestResponseMetadata,
+        audio_duration_s: float,
+        separator: str,
+    ) -> AsyncGenerator[str, None]:
+        generator = self._speech_to_text_stream_generator(
+            request=request,
+            list_result_generator=result_generator,
+            request_id=request_id,
+            request_metadata=request_metadata,
+            audio_duration_s=audio_duration_s,
+            chunk_object_type="transcription.chunk",
+            response_stream_choice_class=TranscriptionResponseStreamChoice,
+            stream_response_class=TranscriptionStreamResponse,
+            separator=separator,
+        )
+        async for chunk in generator:
+            yield chunk
 
     async def websocket_transcribe_bytes(
         self,
