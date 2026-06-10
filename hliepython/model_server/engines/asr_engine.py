@@ -23,6 +23,7 @@ from collections.abc import Mapping, Sequence
 from hliepython.model_server.engines.base_engine import InferenceEngine
 from hliepython.model_server.engines.utils import (
     merge_additional_config,
+    move_vllm_engine_args_from_additional_config,
     normalize_vllm_engine_args,
 )
 
@@ -161,6 +162,10 @@ class ASREngine(InferenceEngine):
             additional_config = merge_additional_config(
                 dict(self.additional_config),
                 user_additional_config,
+            )
+            vllm_engine_args, additional_config = move_vllm_engine_args_from_additional_config(
+                vllm_engine_args,
+                additional_config,
             )
 
             parse_gguf(self.model_path)

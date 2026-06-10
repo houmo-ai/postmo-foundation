@@ -12,6 +12,7 @@ from typing import Dict, Any
 from hliepython.model_server.engines.base_engine import InferenceEngine
 from hliepython.model_server.engines.utils import (
     merge_additional_config,
+    move_vllm_engine_args_from_additional_config,
     normalize_vllm_engine_args,
 )
 
@@ -44,6 +45,10 @@ class ImageEngine(InferenceEngine):
                 user_additional_config,
             )
             additional_config.setdefault("device_ids", self.device_ids)
+            vllm_engine_args, additional_config = move_vllm_engine_args_from_additional_config(
+                vllm_engine_args,
+                additional_config,
+            )
 
             # 配置 vLLM 引擎参数（适用于多模态模型）
             engine_arg_kwargs = {

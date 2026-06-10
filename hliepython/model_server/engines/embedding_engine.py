@@ -17,6 +17,7 @@ from hliepython.model_server.engines.protocol.embeddings import (
 )
 from hliepython.model_server.engines.utils import (
     merge_additional_config,
+    move_vllm_engine_args_from_additional_config,
     normalize_vllm_engine_args,
 )
 
@@ -68,6 +69,10 @@ class EmbeddingEngine(InferenceEngine):
                 user_additional_config,
             )
             additional_config.setdefault("device_ids", self.device_ids)
+            vllm_engine_args, additional_config = move_vllm_engine_args_from_additional_config(
+                vllm_engine_args,
+                additional_config,
+            )
 
             # vLLM 新版本通过 runner/convert 指定 pooling/embed；部分旧版本
             # 不支持这些参数，因此仅在当前 AsyncEngineArgs 签名支持时设置。

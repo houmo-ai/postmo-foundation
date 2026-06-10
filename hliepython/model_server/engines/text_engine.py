@@ -19,6 +19,7 @@ from qwen_vl_utils import process_vision_info
 
 from hliepython.model_server.engines.utils import (
     merge_additional_config,
+    move_vllm_engine_args_from_additional_config,
     normalize_vllm_engine_args,
     should_include_usage,
 )
@@ -117,6 +118,10 @@ class TextEngine(InferenceEngine):
             additional_config = merge_additional_config(
                 additional_config,
                 user_additional_config,
+            )
+            vllm_engine_args, additional_config = move_vllm_engine_args_from_additional_config(
+                vllm_engine_args,
+                additional_config,
             )
 
             parse_gguf(self.model_path)
