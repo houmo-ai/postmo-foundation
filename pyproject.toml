@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hliepython"
-version = "3.0.0"
+version = "3.0.1"
 description = "A multi-process multi-instance OpenAI API server"
 authors = [
     {name = "wenhao.yang", email = "wenhao.yang@houmo.ai"},

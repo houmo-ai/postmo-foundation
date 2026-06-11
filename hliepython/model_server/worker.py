@@ -9,6 +9,7 @@ from hliepython.utils.logging import configure_logging, get_async_logger, get_sy
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response, StreamingResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import UploadFile
 from typing import Dict, Any, Optional
 from .inference_adapter import InferenceEngineFactory, InferenceEngine
@@ -30,11 +31,57 @@ from hliepython.model_server.engines.protocol.chat_completions import (
 from hliepython.model_server.engines.protocol.embeddings import (
     EmbeddingRequest,
 )
+from hliepython.model_server.engines.utils import split_vllm_config
 
 # 初始化子进程服务
 app = FastAPI()
 logger = get_async_logger("worker")
 sync_logger = get_sync_logger("worker")
+API_KEYS: set[str] = set()
+
+
+def _reconfigure_app_for_api_server(api_server_args: dict[str, Any]) -> None:
+    """把 vLLM api-server 层参数映射到当前 worker FastAPI app。"""
+    global API_KEYS
+    if not api_server_args:
+        return
+
+    if api_server_args.get("disable_fastapi_docs"):
+        app.docs_url = None
+        app.redoc_url = None
+        app.openapi_url = None
+
+    root_path = api_server_args.get("root_path")
+    if isinstance(root_path, str):
+        app.root_path = root_path
+
+    api_key = api_server_args.get("api_key")
+    if isinstance(api_key, str) and api_key:
+        API_KEYS = {api_key}
+    elif isinstance(api_key, list):
+        API_KEYS = {str(key) for key in api_key if str(key)}
+
+    allowed_origins = api_server_args.get("allowed_origins")
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=True,
+            allow_methods=api_server_args.get("allowed_methods") or ["*"],
+            allow_headers=api_server_args.get("allowed_headers") or ["*"],
+        )
+
+
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    if not API_KEYS or request.url.path == "/health":
+        return await call_next(request)
+
+    auth = request.headers.get("authorization", "")
+    token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else auth
+    if token not in API_KEYS:
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+    return await call_next(request)
 
 # 子进程绑定的模型和端口
 MODEL_NAME = ""
@@ -535,5 +582,34 @@ def run_worker(
 
     # 通用配置可根据 model_path/additional_config 动态设置
     # 这里可扩展为加载本地模型路径或专用调参
+    try:
+        _, _, api_server_args, unknown_args = split_vllm_config(vllm_config or {})
+    except Exception as exc:
+        sync_logger.warning(f"解析 vLLM api-server 层参数失败，使用默认 worker server 参数: {exc}")
+        api_server_args = {}
+        unknown_args = {}
 
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    if unknown_args:
+        sync_logger.warning(f"vLLM 未识别参数: {unknown_args}")
+    if api_server_args:
+        sync_logger.info(f"当前 worker server 应用 vLLM api-server 层参数: {api_server_args}")
+    _reconfigure_app_for_api_server(api_server_args)
+
+    configured_port = api_server_args.get("port")
+    if configured_port is not None and int(configured_port) != int(port):
+        sync_logger.warning(
+            f"忽略 vLLM api-server.port={configured_port}，当前子进程端口由模型实例 port={port} 决定"
+        )
+
+    host = api_server_args.get("host", "0.0.0.0")
+    uvicorn_log_level = api_server_args.get("uvicorn_log_level", "warning")
+    run_kwargs = {
+        "host": host,
+        "port": int(port),
+        "log_level": uvicorn_log_level,
+        "ssl_keyfile": api_server_args.get("ssl_keyfile"),
+        "ssl_certfile": api_server_args.get("ssl_certfile"),
+        "ssl_ca_certs": api_server_args.get("ssl_ca_certs"),
+        "ssl_cert_reqs": api_server_args.get("ssl_cert_reqs"),
+    }
+    uvicorn.run(app, **{key: value for key, value in run_kwargs.items() if value is not None})

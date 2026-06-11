@@ -22,9 +22,10 @@ from collections.abc import Mapping, Sequence
 
 from hliepython.model_server.engines.base_engine import InferenceEngine
 from hliepython.model_server.engines.utils import (
+    make_vllm_frontend_namespace,
     merge_additional_config,
     move_vllm_engine_args_from_additional_config,
-    normalize_vllm_engine_args,
+    split_vllm_config,
 )
 
 from vllm.entrypoints.utils import get_max_tokens
@@ -47,6 +48,7 @@ from vllm.entrypoints.openai.engine.protocol import (
     ErrorResponse,
     RequestResponseMetadata,
 )
+from vllm.config.speech_to_text import SpeechToTextParams
 from vllm.exceptions import VLLMValidationError
 from vllm.entrypoints.speech_to_text.transcription.protocol import (  
     TranscriptionRequest,  
@@ -137,6 +139,9 @@ class ASREngine(InferenceEngine):
         self.hop_length = 160
         self.max_audio_clip_s = MAX_AUDIO_CLIP_SECONDS
         self.max_audio_filesize_mb = VLLM_MAX_AUDIO_CLIP_FILESIZE_MB
+        self.vllm_frontend_args = None
+        self.vllm_api_server_args: dict[str, Any] = {}
+        self.vllm_unknown_args: dict[str, Any] = {}
 
         super().__init__(instance_config)
 
@@ -145,22 +150,45 @@ class ASREngine(InferenceEngine):
             raise RuntimeError("vLLM not available")
 
         try:
-            vllm_engine_args = normalize_vllm_engine_args(self.vllm_config)
+            (
+                vllm_engine_args,
+                vllm_frontend_args,
+                vllm_api_server_args,
+                vllm_unknown_args,
+            ) = split_vllm_config(self.vllm_config)
+            self.vllm_api_server_args = vllm_api_server_args
+            self.vllm_unknown_args = vllm_unknown_args
+            self.vllm_frontend_args = make_vllm_frontend_namespace(
+                vllm_frontend_args,
+                vllm_engine_args,
+            )
+            if vllm_frontend_args:
+                logger.info(
+                    "vLLM serving/frontend 层参数已接收；ASR 当前仍复用项目内 speech-to-text 流程: "
+                    f"{vllm_frontend_args}"
+                )
+            if vllm_api_server_args:
+                logger.info(
+                    "vLLM API server 层参数已接收；当前 worker 已是 HTTP server，"
+                    f"不会再启动第二个 vLLM API server: {vllm_api_server_args}"
+                )
+            if vllm_unknown_args:
+                logger.warning(f"vLLM 未识别参数不会传入 AsyncEngineArgs: {vllm_unknown_args}")
+
             additional_config = dict(self.additional_config)
             vit_model_name = additional_config.pop("vit_model_name", None)
             if vit_model_name:
-                additional_config.update(
-                    {
-                        "visual_model_path": os.path.join(
-                            self.model_path, vit_model_name
-                        )
-                    }
+                visual_model_path = (
+                    vit_model_name
+                    if os.path.isabs(vit_model_name)
+                    else os.path.join(self.model_path, vit_model_name)
                 )
+                additional_config["visual_model_path"] = visual_model_path
 
             additional_config.setdefault("device_ids", self.device_ids)
             user_additional_config = vllm_engine_args.pop("additional_config", None)
             additional_config = merge_additional_config(
-                dict(self.additional_config),
+                additional_config,
                 user_additional_config,
             )
             vllm_engine_args, additional_config = move_vllm_engine_args_from_additional_config(
@@ -176,6 +204,7 @@ class ASREngine(InferenceEngine):
                 "additional_config": additional_config,
             }
             logger.info(f"vllm 启动参数: {engine_arg_kwargs}")
+            logger.info(f"vllm serving/frontend 参数: {vllm_frontend_args}")
             engine_args = AsyncEngineArgs(**engine_arg_kwargs)
 
             self.engine = AsyncLLMEngine.from_engine_args(engine_args)
@@ -417,11 +446,21 @@ class ASREngine(InferenceEngine):
 
         parsed_prompts: list[DictPrompt] = []
         for chunk in chunks:
-            stt_params = request.build_stt_params(
+            # stt_params = request.build_stt_params(
+            #     audio=chunk,
+            #     stt_config=self.asr_config,
+            #     model_config=self.model_config,
+            #     task_type=self.task_type,
+            # )
+            stt_params = SpeechToTextParams(
                 audio=chunk,
                 stt_config=self.asr_config,
                 model_config=self.model_config,
+                language=language,
                 task_type=self.task_type,
+                # request_prompt=self.prompt,
+                to_language=request.to_language,
+                # hotwords=self.hotwords,
             )
 
             prompt = self.model_cls.get_generation_prompt(stt_params)

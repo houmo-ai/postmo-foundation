@@ -5,6 +5,7 @@ import asyncio
 import uuid
 import time
 import hashlib
+import inspect
 from http import HTTPStatus
 from hliepython.utils.logging import async_logger as logger
 from collections.abc import AsyncGenerator
@@ -18,9 +19,10 @@ from typing import Dict, Any
 from qwen_vl_utils import process_vision_info
 
 from hliepython.model_server.engines.utils import (
+    make_vllm_frontend_namespace,
     merge_additional_config,
     move_vllm_engine_args_from_additional_config,
-    normalize_vllm_engine_args,
+    split_vllm_config,
     should_include_usage,
 )
 from hliepython.model_server.engines.base_engine import InferenceEngine
@@ -47,6 +49,15 @@ from vllm.v1.engine.exceptions import EngineDeadError
 from vllm import AsyncLLMEngine, SamplingParams
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.sampling_params import RequestOutputKind
+from vllm.entrypoints.chat_utils import load_chat_template
+from vllm.entrypoints.logger import RequestLogger
+from vllm.entrypoints.openai.chat_completion.protocol import (
+    ChatCompletionRequest as VllmChatCompletionRequest,
+)
+from vllm.entrypoints.openai.chat_completion.serving import OpenAIServingChat
+from vllm.entrypoints.openai.models.serving import OpenAIServingModels
+from vllm.entrypoints.openai.models.protocol import BaseModelPath
+from vllm.entrypoints.serve.render.serving import OpenAIServingRender
 
 from vllm_houmo.models.export_meta_from_gguf import parse_gguf
 
@@ -72,6 +83,15 @@ class TextEngine(InferenceEngine):
         self.default_enable_think = False
         self.return_tokens_as_token_ids: bool = False
         self.enable_force_include_usage: bool = False
+        self.vllm_frontend_args = None
+        self.vllm_api_server_args: dict[str, Any] = {}
+        self.vllm_unknown_args: dict[str, Any] = {}
+        self.openai_serving_models = None
+        self.openai_serving_render = None
+        self.openai_serving_chat = None
+        self.use_vllm_openai_serving = True
+        self.chat_template = None
+        self.chat_template_kwargs: dict[str, Any] = {}
 
         # 待开发功能
         self.use_harmony = False
@@ -98,16 +118,51 @@ class TextEngine(InferenceEngine):
             raise RuntimeError("vLLM not available")
 
         try:
-            vllm_engine_args = normalize_vllm_engine_args(self.vllm_config)
+            (
+                vllm_engine_args,
+                vllm_frontend_args,
+                vllm_api_server_args,
+                vllm_unknown_args,
+            ) = split_vllm_config(self.vllm_config)
+            self.vllm_api_server_args = vllm_api_server_args
+            self.vllm_unknown_args = vllm_unknown_args
+            if vllm_api_server_args:
+                logger.info(
+                    "vLLM API server 层参数已接收；当前 worker 已是 HTTP server，"
+                    f"不会再启动第二个 vLLM API server: {vllm_api_server_args}"
+                )
+            if vllm_unknown_args:
+                logger.warning(f"vLLM 未识别参数不会传入 AsyncEngineArgs: {vllm_unknown_args}")
+
+            self.vllm_frontend_args = make_vllm_frontend_namespace(
+                vllm_frontend_args,
+                vllm_engine_args,
+            )
+            self.response_role = getattr(self.vllm_frontend_args, "response_role", self.response_role)
+            self.return_tokens_as_token_ids = bool(
+                getattr(self.vllm_frontend_args, "return_tokens_as_token_ids", self.return_tokens_as_token_ids)
+            )
+            self.enable_force_include_usage = bool(
+                getattr(self.vllm_frontend_args, "enable_force_include_usage", self.enable_force_include_usage)
+            )
+            self.chat_template = getattr(self.vllm_frontend_args, "chat_template", None)
+            self.chat_template_kwargs = getattr(
+                self.vllm_frontend_args,
+                "default_chat_template_kwargs",
+                None,
+            ) or {}
             additional_config = dict(self.additional_config)
             vit_model_name = additional_config.pop("vit_model_name", None)
 
             if vit_model_name:
+                visual_model_path = (
+                    vit_model_name
+                    if os.path.isabs(vit_model_name)
+                    else os.path.join(self.model_path, vit_model_name)
+                )
                 additional_config.update(
                     {
-                        "visual_model_path": os.path.join(
-                            self.model_path, vit_model_name
-                        ),
+                        "visual_model_path": visual_model_path,
                         "visual_model_w": 448,
                         "visual_model_h": 448,
                     }
@@ -139,11 +194,13 @@ class TextEngine(InferenceEngine):
             }
 
             logger.info(f"vllm 启动参数: {engine_arg_kwargs}")
+            logger.info(f"vllm frontend/chat serving 参数: {vllm_frontend_args}")
 
             engine_args = AsyncEngineArgs(**engine_arg_kwargs)
 
             # 创建异步引擎
             self.engine = AsyncLLMEngine.from_engine_args(engine_args)
+            self._init_vllm_openai_serving(vllm_frontend_args)
             logger.info(f"vllm 实际启动参数：{self.engine.vllm_config}")
             logger.info(f"模型配置：{self.engine.vllm_config.model_config}")
             logger.info(f"并行配置：{self.engine.vllm_config.parallel_config}")
@@ -152,6 +209,96 @@ class TextEngine(InferenceEngine):
         except Exception as e:
             logger.error(f"TextEngine: vLLM 引擎加载失败 {e}")
             raise RuntimeError(f"Failed to load vLLM engine: {e}")
+
+    def _init_vllm_openai_serving(self, vllm_frontend_args: dict[str, Any]) -> None:
+        """初始化 vLLM OpenAI chat serving 层，但复用当前 worker 的 HTTP server。"""
+        try:
+            frontend_args = self.vllm_frontend_args
+            if frontend_args is None:
+                return
+
+            served_model_names = getattr(frontend_args, "served_model_name", None) or [self.model_name]
+            if isinstance(served_model_names, str):
+                served_model_names = [served_model_names]
+
+            base_model_paths = [
+                BaseModelPath(name=name, model_path=self.model_path)
+                for name in served_model_names
+            ]
+            self.openai_serving_models = OpenAIServingModels(
+                engine_client=self.engine,
+                base_model_paths=base_model_paths,
+                lora_modules=getattr(frontend_args, "lora_modules", None),
+            )
+
+            request_logger = None
+            if getattr(frontend_args, "enable_log_requests", False):
+                request_logger = RequestLogger(max_log_len=getattr(frontend_args, "max_log_len", None))
+
+            resolved_chat_template = load_chat_template(self.chat_template)
+            reasoning_parser = getattr(frontend_args, "reasoning_parser", None)
+            if reasoning_parser is None:
+                structured_outputs_config = getattr(frontend_args, "structured_outputs_config", None)
+                reasoning_parser = getattr(structured_outputs_config, "reasoning_parser", "") or ""
+
+            self.openai_serving_render = OpenAIServingRender(
+                model_config=self.engine.model_config,
+                renderer=self.engine.renderer,
+                model_registry=self.openai_serving_models.registry,
+                request_logger=request_logger,
+                chat_template=resolved_chat_template,
+                chat_template_content_format=getattr(frontend_args, "chat_template_content_format", "auto"),
+                trust_request_chat_template=bool(getattr(frontend_args, "trust_request_chat_template", False)),
+                enable_auto_tools=bool(getattr(frontend_args, "enable_auto_tool_choice", False)),
+                exclude_tools_when_tool_choice_none=bool(
+                    getattr(frontend_args, "exclude_tools_when_tool_choice_none", False)
+                ),
+                tool_parser=getattr(frontend_args, "tool_call_parser", None),
+                reasoning_parser=reasoning_parser,
+                default_chat_template_kwargs=self.chat_template_kwargs,
+                log_error_stack=bool(getattr(frontend_args, "log_error_stack", False)),
+            )
+
+            chat_kwargs = {
+                "engine_client": self.engine,
+                "models": self.openai_serving_models,
+                "response_role": self.response_role,
+                "openai_serving_render": self.openai_serving_render,
+                "request_logger": request_logger,
+                "chat_template": resolved_chat_template,
+                "chat_template_content_format": getattr(frontend_args, "chat_template_content_format", "auto"),
+                "trust_request_chat_template": bool(getattr(frontend_args, "trust_request_chat_template", False)),
+                "return_tokens_as_token_ids": self.return_tokens_as_token_ids,
+                "reasoning_parser": reasoning_parser,
+                "enable_auto_tools": bool(getattr(frontend_args, "enable_auto_tool_choice", False)),
+                "exclude_tools_when_tool_choice_none": bool(
+                    getattr(frontend_args, "exclude_tools_when_tool_choice_none", False)
+                ),
+                "tool_parser": getattr(frontend_args, "tool_call_parser", None),
+                "enable_prompt_tokens_details": bool(
+                    getattr(frontend_args, "enable_prompt_tokens_details", False)
+                ),
+                "enable_force_include_usage": self.enable_force_include_usage,
+                "enable_log_outputs": bool(getattr(frontend_args, "enable_log_outputs", False)),
+                "enable_log_deltas": bool(getattr(frontend_args, "enable_log_deltas", True)),
+                "default_chat_template_kwargs": self.chat_template_kwargs,
+            }
+            allowed = set(inspect.signature(OpenAIServingChat).parameters)
+            self.openai_serving_chat = OpenAIServingChat(
+                **{key: value for key, value in chat_kwargs.items() if key in allowed}
+            )
+            logger.info(f"vLLM OpenAI chat serving 层初始化完成: {vllm_frontend_args}")
+        except Exception as exc:
+            self.use_vllm_openai_serving = False
+            logger.warning(f"vLLM OpenAI chat serving 层初始化失败，将回退旧 chat 流程: {exc}")
+
+    def _to_vllm_chat_request(self, request: ChatCompletionRequest) -> VllmChatCompletionRequest:
+        payload = request.model_dump(mode="json", exclude_none=True)
+        payload.pop("server_config", None)
+        payload.setdefault("model", self.model_name)
+        if payload.get("return_tokens_as_token_ids") is None:
+            payload["return_tokens_as_token_ids"] = self.return_tokens_as_token_ids
+        return VllmChatCompletionRequest.model_validate(payload)
 
 
     def _build_usage(self, prompt: str, content: str) -> Dict[str, int]:
@@ -266,11 +413,17 @@ class TextEngine(InferenceEngine):
         if reasoning_effort is not None:
             enable_think = reasoning_effort != "none"
 
+        chat_template_kwargs = dict(self.chat_template_kwargs)
+        if request.chat_template_kwargs:
+            chat_template_kwargs.update(request.chat_template_kwargs)
+        chat_template_kwargs.setdefault("enable_thinking", enable_think)
+
         request_prompt = self.tokenizer.apply_chat_template(
             conversation,
             tokenize=False,  # 返回字符串而非 token IDs
             add_generation_prompt=True,
-            enable_thinking=enable_think,
+            chat_template=request.chat_template or self.chat_template,
+            **chat_template_kwargs,
         )
 
         sampling_params = self._create_sampling_params(request)
@@ -296,6 +449,19 @@ class TextEngine(InferenceEngine):
         request: ChatCompletionRequest,
         raw_request: Request | None = None,
     ):
+        if self.use_vllm_openai_serving and self.openai_serving_chat is not None:
+            try:
+                vllm_request = self._to_vllm_chat_request(request)
+                result = await self.openai_serving_chat.create_chat_completion(
+                    vllm_request,
+                    raw_request,
+                )
+                if isinstance(result, AsyncGenerator):
+                    return StreamingResponse(result, media_type="text/event-stream")
+                return result
+            except Exception as exc:
+                logger.exception(f"vLLM OpenAI chat serving 处理失败，将回退旧 chat 流程: {exc}")
+
         try:
             model_name = self.model_name
             (conversation, request_prompt, sampling_params) \

@@ -6,20 +6,21 @@ server:
 
 # 模型配置
 models:
-  # # Qwen3.5-9B 模型
-  # - name: "Qwen3.5-9B"
-  #   instances:
-  #     - port: 7801
-  #       model_path: "Qwen3.5-9B"
-  #       model_type: "text"    # text、embedding、asr、tts
-  #       vllm_config:
-  #         max-model-len: 65536
-  #         max-num-seqs: 1
-  #         no-enable-prefix-caching: true
-  #         max-num-batched-tokens: 65536
-  #       additional_config:
-  #         device_ids: [0]
-  #         enable_cacheprompt: "False"
+  # Qwen3.5-9B 模型
+  - name: "Qwen3.5-9B"
+    instances:
+      - port: 7801
+        model_path: "Qwen3.5-9B"
+        model_type: "text"    # text、embedding、asr、tts
+        vllm_config:
+          engine:
+            max-model-len: 65536
+            max-num-seqs: 1
+            no-enable-prefix-caching: true
+            max-num-batched-tokens: 65536
+        additional_config:
+          device_ids: [0]
+          enable_cacheprompt: "False"
 
   # - name: "Qwen3.6-27B_mtp"
   #   instances:
@@ -27,68 +28,71 @@ models:
   #       model_path: "Qwen3.6-27B_mtp"
   #       model_type: "text"    # text、embedding、asr、tts
   #       vllm_config:
-  #         max-model-len: 262144
-  #         max-num-seqs: 1
-  #         no-enable-prefix-caching: true
-  #         # enable-auto-tool-choice: true
-  #         max-num-batched-tokens: 262144
-  #         # tool-call-parser: "qwen3_coder"
-  #         # 推荐：直接写 YAML 对象，会透传为 AsyncEngineArgs.speculative_config
-  #         speculative-config:
-  #           model: "/home/ywh/workspace/models/v1.4.0/Qwen3.6-27B_mtp"
-  #           method: "mtp"
-  #           num_speculative_tokens: 5
-  #         # 兼容：保留 vLLM CLI 字符串写法也可以
-  #         # --speculative-config: '{"model":"/home/user/szj_project/models/v1.3.0/qwen36_27b_mtp","method":"mtp","num_speculative_tokens":5}'
-  #       # additional_config:
-  #       #   device_ids: [0]
-  #       #   enable_cacheprompt: "False"
-  #         # 兼容：如果误写到 additional_config，也会自动移动到 vLLM 启动参数
-  #         # speculative-config:
-  #         #   model: "/home/user/szj_project/models/v1.3.0/qwen36_27b_mtp"
-  #         #   method: "mtp"
-  #         #   num_speculative_tokens: 5
+  #         engine:
+  #           max-model-len: 262144
+  #           max-num-seqs: 1
+  #           no-enable-prefix-caching: true
+  #           max-num-batched-tokens: 262144
+  #           # 推荐：直接写 YAML 对象，会透传为 AsyncEngineArgs.speculative_config
+  #           speculative-config:
+  #             model: "/home/ywh/workspace/models/v1.4.0/Qwen3.6-27B_mtp"
+  #             method: "mtp"
+  #             num_speculative_tokens: 5
+  #         serving:
+  #           enable-auto-tool-choice: true
+  #           tool-call-parser: "qwen3_coder"
 
-  # # Qwen3.5_VL-35B 模型
+  # # Qwen3.6-27B 模型
   # - name: "Qwen3.6-27B"
   #   instances:
   #     - port: 7802
   #       model_path: "Qwen3.6-27B"
   #       model_type: "text"
   #       vllm_config:
-  #         max-model-len: 131072
-  #         max-num-seqs: 1
-  #         no-enable-prefix-caching: true
-  #         max-num-batched-tokens: 131072
+  #         engine:
+  #           max-model-len: 131072
+  #           max-num-seqs: 1
+  #           no-enable-prefix-caching: true
+  #           max-num-batched-tokens: 131072
+  #         serving:
+  #           enable-auto-tool-choice: true
+  #           tool-call-parser: "qwen3_coder"
   #       additional_config:
   #         device_ids: [0]
   #         enable_cacheprompt: "False"
   #         "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
 
-  - name: "Gemma4-26B_a4b"
-    instances:
-      - port: 7802
-        model_path: "Gemma4-26B_a4b"
-        model_type: "text"
-        vllm_config:
-          max-model-len: 131072
-          max-num-seqs: 1
-          no-enable-prefix-caching: true
-          max-num-batched-tokens: 131072
-        additional_config:
-          device_ids: [0]
-          enable_cacheprompt: "False"
-          "vit_model_name": "mmproj_xh2_gemma4-26b-a4b_2cores_vit_448x448_v1.4.0_20260610.gguf"
-
-  # # whisper-medium 模型
-  # - name: "whisper-medium"
+  # - name: "Gemma4-26B_a4b"
   #   instances:
-  #     - port: 7803
-  #       model_path: "whisper-medium"
-  #       model_type: "asr"
+  #     - port: 7802
+  #       model_path: "Gemma4-26B_a4b"
+  #       model_type: "text"
+  #       vllm_config:
+  #         engine:
+  #           max-model-len: 131072
+  #           max-num-seqs: 1
+  #           no-enable-prefix-caching: true
+  #           max-num-batched-tokens: 131072
+  #         serving:
+  #           enable-auto-tool-choice: true
+  #           tool-call-parser: "gemma4"
   #       additional_config:
   #         device_ids: [0]
-  #         enable_cacheprompt: ""
+  #         # enable_cacheprompt: "False"
+  #         "vit_model_name": "mmproj_xh2_gemma4-26b-a4b_2cores_vit_448x448_v1.4.0_20260610.gguf"
+
+  # # Qwen3-ASR-0.6B 模型
+  # - name: "Qwen3-ASR-0.6B"
+  #   instances:
+  #     - port: 7803
+  #       model_path: "Qwen3-ASR-0.6B"
+  #       model_type: "asr"
+  #       vllm_config:
+  #         engine:
+  #           no-enable-prefix-caching: true
+  #           load-format: "dummy"
+  #       additional_config:
+  #         "vit_model_name": "mmproj_xh2_qwen3-asr_0.6b_2cores_v1.3.0_20260522.gguf"
 
   # # CosyVoice3 模型
   # - name: "Fun-CosyVoice3-0.5B"
