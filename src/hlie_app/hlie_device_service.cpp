@@ -1,9 +1,12 @@
 #include "hlie_app/hlie_device_service.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -30,6 +33,60 @@ namespace {
     constexpr auto BACK_UP_MEM = 200;
 
     constexpr uint32_t HM_SYS_MAX_DEVICES = 32;
+
+#ifdef _WIN32
+    std::string windows_error_message(const DWORD error) {
+        char* message = nullptr;
+        const DWORD size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                                          nullptr, error, 0, reinterpret_cast<char*>(&message), 0, nullptr);
+        std::string result = size && message ? std::string(message, size) : "unknown error";
+        if (message) {
+            LocalFree(message);
+        }
+        while (!result.empty() && (result.back() == '\r' || result.back() == '\n')) {
+            result.pop_back();
+        }
+        return result;
+    }
+
+    void append_installed_driver_paths(std::vector<std::string>& base_paths) {
+        const char* program_files_roots[] = {
+            std::getenv("ProgramFiles(x86)"),
+            std::getenv("ProgramFiles"),
+        };
+
+        std::vector<std::string> discovered;
+        for (const char* root : program_files_roots) {
+            if (!root || !*root) {
+                continue;
+            }
+
+            std::error_code error;
+            for (const auto& entry : std::filesystem::directory_iterator(root, error)) {
+                if (error) {
+                    break;
+                }
+                if (!entry.is_directory(error) || error) {
+                    error.clear();
+                    continue;
+                }
+
+                const auto directory_name = entry.path().filename().string();
+                if (directory_name.rfind("houmo-drv-xh2", 0) == 0) {
+                    discovered.push_back(entry.path().string());
+                }
+            }
+        }
+
+        std::sort(discovered.rbegin(), discovered.rend());
+        for (const auto& path : discovered) {
+            if (std::find(base_paths.begin(), base_paths.end(), path) == base_paths.end()) {
+                LOG_INFO("discovered Houmo driver installation: {}", path);
+                base_paths.push_back(path);
+            }
+        }
+    }
+#endif
 
     struct hm_device_info {
         uint32_t num_devices;
@@ -72,32 +129,48 @@ namespace {
             LOG_INFO("loading Houmo HAL library {}", library_name());
 
 #ifdef _WIN32
-            const char* env_paths[] = {
-                std::getenv("HOUMO_SDK_PATH"),
-                std::getenv("HOUMO_DRV_PATH"),
-                std::getenv("TCIM_RUNTIME_PATH"),
-                ".",
-                nullptr,
-            };
+            char current_dir[MAX_PATH] = {};
+            GetCurrentDirectoryA(MAX_PATH, current_dir);
+            LOG_INFO("HAL loader context: current_dir={}, HOUMO_SDK_PATH={}, HOUMO_DRV_PATH={}, TCIM_RUNTIME_PATH={}", current_dir,
+                     std::getenv("HOUMO_SDK_PATH") ? std::getenv("HOUMO_SDK_PATH") : "<unset>",
+                     std::getenv("HOUMO_DRV_PATH") ? std::getenv("HOUMO_DRV_PATH") : "<unset>",
+                     std::getenv("TCIM_RUNTIME_PATH") ? std::getenv("TCIM_RUNTIME_PATH") : "<unset>");
 
-            for (const char** env_path = env_paths; *env_path != nullptr; ++env_path) {
-                if (!*env_path || !**env_path) {
+            std::vector<std::string> base_paths = {
+                std::getenv("HOUMO_SDK_PATH") ? std::getenv("HOUMO_SDK_PATH") : "",
+                std::getenv("HOUMO_DRV_PATH") ? std::getenv("HOUMO_DRV_PATH") : "",
+                std::getenv("TCIM_RUNTIME_PATH") ? std::getenv("TCIM_RUNTIME_PATH") : "",
+            };
+            append_installed_driver_paths(base_paths);
+
+            for (const auto& base_path : base_paths) {
+                if (base_path.empty()) {
                     continue;
                 }
 
-                const std::string base_path = *env_path;
                 const std::string candidate_paths[] = {
+                    base_path + "/hal/bin/" + library_name(),
                     base_path + "/hal/lib/" + library_name(),
+                    base_path + "/bin/" + library_name(),
                     base_path + "/lib/" + library_name(),
                     base_path + "/" + library_name(),
                 };
 
                 for (const auto& path : candidate_paths) {
-                    handle = LoadLibraryA(path.c_str());
+                    const DWORD attributes = GetFileAttributesA(path.c_str());
+                    if (attributes == INVALID_FILE_ATTRIBUTES) {
+                        LOG_INFO("HAL candidate does not exist: {}", path);
+                        continue;
+                    }
+
+                    handle = LoadLibraryExA(path.c_str(), nullptr,
+                                            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
                     if (handle) {
                         LOG_INFO("loaded Houmo HAL library from {}", path);
                         break;
                     }
+                    const DWORD error = GetLastError();
+                    LOG_ERROR("HAL candidate exists but failed to load: {}, error {} ({})", path, error, windows_error_message(error));
                 }
 
                 if (handle) {

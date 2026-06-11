@@ -144,14 +144,13 @@ package_service() {
 
     # 清理并创建目录结构
     rm -rf "$release_dir"/*
-    mkdir -p "$release_dir/bin/hal/bin" "$release_dir/config" "$release_dir/samples"
+    mkdir -p "$release_dir/bin" "$release_dir/config" "$release_dir/samples"
     cp build/bin/Release/houmo-llm-hi-cpp-win.exe "$release_dir/bin/HLIECpp.exe"
     cp samples/zero_shot_prompt.wav "$release_dir/samples/zero_shot_prompt.wav"
     cp build/bin/Release/hlie-*.dll "$release_dir/bin/"
     cp third_party/llama.cpp_houmo/bin/*.dll "$release_dir/bin/"
     cp config/win/sys.cfg "$release_dir/config/"
 
-    cp third_party/llama.cpp_houmo/bin/libhal_xh2a.dll "$release_dir/bin/hal/bin/"
     cp third_party/sd.cpp/bin/stable-diffusion.dll "$release_dir/bin/"
     cp third_party/whisper.cpp/bin/whisper.dll "$release_dir/bin/"
     cp third_party/uwebsockets/bin/uv.dll "$release_dir/bin/"

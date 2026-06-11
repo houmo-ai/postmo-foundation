@@ -1,7 +1,9 @@
 #include <chrono>
 #include <cstdio>
 #include <iostream>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include <windows.h>
 #include <DbgHelp.h>
@@ -11,6 +13,72 @@
 
 
 #pragma comment(lib, "dbghelp.lib")
+#pragma comment(lib, "advapi32.lib")
+
+namespace {
+
+    std::string GetExecutableDirectory() {
+        std::vector<char> path(MAX_PATH);
+        while (true) {
+            const DWORD length = GetModuleFileNameA(nullptr, path.data(), static_cast<DWORD>(path.size()));
+            if (length == 0) {
+                return {};
+            }
+            if (length < path.size() - 1) {
+                const std::string executable_path(path.data(), length);
+                const auto separator = executable_path.find_last_of("\\/");
+                return separator == std::string::npos ? std::string{} : executable_path.substr(0, separator);
+            }
+            path.resize(path.size() * 2);
+        }
+    }
+
+    void RefreshMachineEnvironmentVariable(const char* name) {
+        if (GetEnvironmentVariableA(name, nullptr, 0) != 0) {
+            return;
+        }
+
+        constexpr auto environment_key = "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment";
+        DWORD type = 0;
+        DWORD size = 0;
+        if (RegGetValueA(HKEY_LOCAL_MACHINE, environment_key, name, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &type, nullptr, &size) !=
+                ERROR_SUCCESS ||
+            size == 0) {
+            return;
+        }
+
+        std::vector<char> value(size);
+        if (RegGetValueA(HKEY_LOCAL_MACHINE, environment_key, name, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &type, value.data(),
+                         &size) != ERROR_SUCCESS) {
+            return;
+        }
+
+        if (type == REG_EXPAND_SZ) {
+            const DWORD expanded_size = ExpandEnvironmentStringsA(value.data(), nullptr, 0);
+            if (expanded_size != 0) {
+                std::vector<char> expanded(expanded_size);
+                if (ExpandEnvironmentStringsA(value.data(), expanded.data(), expanded_size) != 0) {
+                    SetEnvironmentVariableA(name, expanded.data());
+                    return;
+                }
+            }
+        }
+
+        SetEnvironmentVariableA(name, value.data());
+    }
+
+    void InitializeWindowsRuntimeContext() {
+        const auto executable_dir = GetExecutableDirectory();
+        if (!executable_dir.empty()) {
+            SetCurrentDirectoryA(executable_dir.c_str());
+        }
+
+        RefreshMachineEnvironmentVariable("HOUMO_SDK_PATH");
+        RefreshMachineEnvironmentVariable("HOUMO_DRV_PATH");
+        RefreshMachineEnvironmentVariable("TCIM_RUNTIME_PATH");
+    }
+
+} // namespace
 
 namespace minidump {
 
@@ -150,7 +218,7 @@ void ServiceWorkerThread() {
 
 void WINAPI ServiceMain(DWORD argc, LPTSTR* argv) {
     // 1. 注册控制处理函数
-    g_StatusHandle = RegisterServiceCtrlHandler(TEXT("HoumoHI"), Handler);
+    g_StatusHandle = RegisterServiceCtrlHandler(TEXT("HLIECpp"), Handler);
 
     // 2. 初始化 SERVICE_STATUS
     g_ServiceStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
@@ -174,6 +242,7 @@ int main(const int argc, char** argv) {
     std::setlocale(LC_NUMERIC, "C");
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
+    InitializeWindowsRuntimeContext();
     _putenv("TCIM_LOG_TAGS=all");
     _putenv("TCIM_BACKEND=Xh1HdiBackend");
     _putenv("HM_PLATFORM=ASIC");
@@ -182,12 +251,6 @@ int main(const int argc, char** argv) {
 
     const auto& config_service = hm_HLIE::Singleton<hm_HLIE::HLIEConfigService>::instance();
     config_service->set_args(argc, argv);
-
-    char exePath[MAX_PATH];
-    GetModuleFileName(nullptr, exePath, MAX_PATH); // 获取exe绝对路径
-    const auto programPath = std::string(exePath);
-    const auto program_dir = std::string(exePath).substr(0, std::string(exePath).find_last_of('\\') + 1);
-    _putenv(("TCIM_RUNTIME_PATH=" + program_dir + "/hal").c_str());
 
     if (std::getenv("HLIECPP_WIN_D") || config_service->get_args().find("--instance_id") != config_service->get_args().end()) {
         printf("========HLIECpp Instance & COPY Mode======== \n");
@@ -199,7 +262,7 @@ int main(const int argc, char** argv) {
     if (!StartServiceCtrlDispatcher(ServiceTable)) {
         // 此处处理错误（如记录日志）
         const DWORD err = GetLastError();
-        std::cerr << "HoumoHI WIN32 Service StartServiceCtrlDispatcher failed, ErrCode: " << err;
+        std::cerr << "HLIECpp WIN32 Service StartServiceCtrlDispatcher failed, ErrCode: " << err;
 
         return 8;
     }
