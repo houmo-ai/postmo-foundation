@@ -167,6 +167,7 @@ namespace {
                                             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
                     if (handle) {
                         LOG_INFO("loaded Houmo HAL library from {}", path);
+                        HlieUtil::set_env("TCIM_RUNTIME_PATH", std::filesystem::path(path).parent_path().string());
                         break;
                     }
                     const DWORD error = GetLastError();
