@@ -28,6 +28,8 @@ Whisper.cpp / miniaudio Compatible WebSocket Audio Stream Client
 """
 
 import asyncio
+import base64
+import json
 import time
 from pathlib import Path
 
@@ -41,10 +43,13 @@ from scipy import signal
 # Config
 # =============================================================================
 
-TARGET_SAMPLE_RATE = 16000
+TARGET_SAMPLE_RATE = 24000
 
-# 1000ms chunk
-CHUNK_DURATION_MS = 1000
+# Send small chunks so audio upload resembles a live microphone.
+CHUNK_DURATION_MS = 250
+
+# Trailing silence lets server VAD close the final speech turn.
+TRAILING_SILENCE_MS = 750
 
 # websocket uri
 WS_URI = "ws://10.65.32.191:7999"
@@ -232,10 +237,12 @@ async def stream_audio(
 
         chunk = pcmf32[start:end]
 
-        # binary float32 pcm
-        binary = chunk.astype(np.float32).tobytes()
-
-        await websocket.send(binary)
+        pcm16 = np.clip(chunk, -1.0, 1.0)
+        pcm16 = (pcm16 * 32767.0).astype("<i2").tobytes()
+        await websocket.send(json.dumps({
+            "type": "input_audio_buffer.append",
+            "audio": base64.b64encode(pcm16).decode("ascii"),
+        }))
 
         chunk_duration = (
                 len(chunk)
@@ -245,18 +252,73 @@ async def stream_audio(
         logger.info(
             f"[Chunk {chunk_index}/{total_chunks}] "
             f"samples={len(chunk)}, "
-            f"bytes={len(binary)}, "
+            f"bytes={len(pcm16)}, "
             f"duration={chunk_duration:.3f}s"
         )
 
         # 模拟真实实时发送
         await asyncio.sleep(chunk_duration)
 
+    silence_samples = TARGET_SAMPLE_RATE * TRAILING_SILENCE_MS // 1000
+    silence = np.zeros(silence_samples, dtype=np.float32)
+    for start in range(0, len(silence), chunk_size):
+        chunk = silence[start:start + chunk_size]
+        pcm16 = chunk.astype("<i2").tobytes()
+        await websocket.send(json.dumps({
+            "type": "input_audio_buffer.append",
+            "audio": base64.b64encode(pcm16).decode("ascii"),
+        }))
+        await asyncio.sleep(len(chunk) / TARGET_SAMPLE_RATE)
+
     elapsed = time.time() - start_time
 
     logger.success(
         f"Audio stream completed (elapsed={elapsed:.2f}s)"
     )
+
+
+async def receive_transcripts(
+        websocket,
+        sender_done: asyncio.Event,
+) -> str:
+    completed_turns = 0
+    committed_turns = 0
+    transcripts = []
+
+    while True:
+        try:
+            event = json.loads(await asyncio.wait_for(websocket.recv(), timeout=2.0))
+        except asyncio.TimeoutError:
+            if sender_done.is_set() and completed_turns >= committed_turns:
+                break
+            continue
+
+        event_type = event.get("type")
+
+        if event_type == "input_audio_buffer.committed":
+            committed_turns += 1
+            logger.info(f"Server accepted turn: {event.get('item_id')}")
+        elif event_type == "input_audio_buffer.speech_started":
+            logger.info(f"Speech started: {event.get('item_id')}")
+        elif event_type == "input_audio_buffer.speech_stopped":
+            logger.info(f"Speech stopped: {event.get('item_id')}")
+        elif event_type == "conversation.item.input_audio_transcription.delta":
+            print(event.get("delta", ""), end="", flush=True)
+        elif event_type == "conversation.item.input_audio_transcription.completed":
+            transcript = event.get("transcript", "").strip()
+            transcripts.append(transcript)
+            completed_turns += 1
+            logger.success(
+                f"\nCompleted turn {completed_turns}/{committed_turns}: "
+                f"{transcript}"
+            )
+        elif event_type == "conversation.item.input_audio_transcription.failed":
+            completed_turns += 1
+            raise RuntimeError(event.get("error", {}).get("message", "Transcription failed"))
+        elif event_type == "error":
+            raise RuntimeError(event.get("error", {}).get("message", "WebSocket error"))
+
+    return " ".join(text for text in transcripts if text)
 
 
 # =============================================================================
@@ -290,28 +352,43 @@ async def simulate_frontend_stream(
 
             logger.success("WebSocket connected")
 
-            # stream audio
-            await stream_audio(
-                websocket,
-                pcmf32,
+            created = json.loads(await websocket.recv())
+            logger.info(f"Session event: {created['type']}")
+
+            await websocket.send(json.dumps({
+                "type": "session.update",
+                "session": {
+                    "type": "transcription",
+                    "audio": {
+                        "input": {
+                            "format": {"type": "audio/pcm", "rate": TARGET_SAMPLE_RATE},
+                            "transcription": {"model": "whisper-1"},
+                            "turn_detection": {
+                                "type": "server_vad",
+                                "threshold": 0.5,
+                                "prefix_padding_ms": 300,
+                                "silence_duration_ms": 500,
+                            },
+                        }
+                    },
+                },
+            }))
+            updated = json.loads(await websocket.recv())
+            logger.info(f"Session event: {updated['type']}")
+
+            sender_done = asyncio.Event()
+            receiver_task = asyncio.create_task(
+                receive_transcripts(websocket, sender_done)
             )
 
-            # EOS
-            logger.info("Sending EOS")
+            try:
+                await stream_audio(websocket, pcmf32)
+            finally:
+                sender_done.set()
 
-            await websocket.send("EOS")
+            final_transcript = await receiver_task
 
-            # wait result
-            logger.info("Waiting ASR result...")
-
-            result = await asyncio.wait_for(
-                websocket.recv(),
-                timeout=30.0,
-            )
-
-            logger.success(
-                f"ASR Result:\n{result}"
-            )
+            logger.success(f"\nASR Result:\n{final_transcript}")
 
     except asyncio.TimeoutError:
 

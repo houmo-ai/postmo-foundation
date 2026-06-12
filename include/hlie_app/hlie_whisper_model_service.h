@@ -135,7 +135,7 @@ public:
 
     void fill_params(whisper_full_params& wparams) const;
 
-    std::string handle_stream(const WhisperStreamRequest& request) const;
+    std::string handle_stream(const WhisperStreamRequest& request, const TranscriptCallback& callback) const;
 
     void handle_transcriptions(const httplib::Request& req, httplib::Response& res);
     server_http_res_ptr handle_transcriptions(const server_http_req& req);
@@ -149,6 +149,7 @@ private:
     WhisperResult transcription_sync(const WhisperRequest& request) const;
 
     std::string transcription(const WhisperRequest& request) const;
+    mutable std::mutex whisper_mtx_;
 
     whisper_params params_;
     whisper_params default_params_;

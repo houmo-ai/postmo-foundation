@@ -399,7 +399,10 @@ void WhisperModelService::run() {
     }
 
     // Todo 判断配置是否支持WS
-    websocket_service_->run([this](const WhisperStreamRequest& req) { return this->handle_stream(req); });
+    websocket_service_->run(
+        [this](const WhisperStreamRequest& req, const TranscriptCallback& callback) {
+            return this->handle_stream(req, callback);
+        });
 
     state_.store(SERVER_STATE_READY);
     should_stop_ = false;
@@ -446,6 +449,11 @@ void WhisperModelService::stop() {
         return;
     }
 
+    // Stop WebSocket inference before releasing the shared whisper context.
+    if (websocket_service_) {
+        websocket_service_->stop();
+    }
+
     should_stop_ = true;
     if (blocking_queue_) {
         blocking_queue_->close(); // 通知队列关闭，唤醒可能阻塞的 pop()
@@ -456,10 +464,7 @@ void WhisperModelService::stop() {
     }
     worker_thread_.reset();
     whisper_free(whisper_ctx_);
-
-    if (websocket_service_) {
-        websocket_service_->stop();
-    }
+    whisper_ctx_ = nullptr;
 
     if (is_multi_instance_) {
         Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
@@ -543,18 +548,42 @@ void WhisperModelService::fill_params(whisper_full_params& wparams) const {
     wparams.vad_params.samples_overlap = params_.vad_samples_overlap;
 }
 
-std::string WhisperModelService::handle_stream(const WhisperStreamRequest& request) const {
+std::string WhisperModelService::handle_stream(
+    const WhisperStreamRequest& request,
+    const TranscriptCallback& callback) const {
     whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     fill_params(wparams);
 
-    WhisperRequest req;
-    req.filename = "stream";
-    req.params = wparams;
-    req.pcmf32 = request.pcmf32;
-    req.n_processors = 1;
+    struct StreamCallbackContext {
+        const TranscriptCallback* callback;
+    } callback_context{&callback};
+
+    wparams.new_segment_callback = [](whisper_context* context, whisper_state*, const int n_new, void* user_data) {
+        const auto* callback_context = static_cast<StreamCallbackContext*>(user_data);
+        if (!callback_context || !callback_context->callback || !*callback_context->callback) {
+            return;
+        }
+
+        const int segment_count = whisper_full_n_segments(context);
+        const int first_segment = std::max(0, segment_count - n_new);
+        for (int i = first_segment; i < segment_count; ++i) {
+            const char* text = whisper_full_get_segment_text(context, i);
+            if (text) {
+                (*callback_context->callback)(text);
+            }
+        }
+    };
+    wparams.new_segment_callback_user_data = &callback_context;
 
     const auto start = std::chrono::steady_clock::now();
-    auto transcription_result = transcription(req);
+    std::string transcription_result;
+    {
+        std::lock_guard lock(whisper_mtx_);
+        if (whisper_full(whisper_ctx_, wparams, request.pcmf32.data(), request.pcmf32.size()) != 0) {
+            return "HLIECpp-FAILED-888";
+        }
+        transcription_result = output_str(whisper_ctx_, params_, request.pcmf32s);
+    }
     const auto end = std::chrono::steady_clock::now();
     auto predicted_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     LOG_INFO("transcription time: {} ms", predicted_ms);
@@ -585,6 +614,7 @@ WhisperResult WhisperModelService::transcription_sync(const WhisperRequest& requ
 std::string WhisperModelService::transcription(const WhisperRequest& request) const {
     std::string results;
     try {
+        std::lock_guard lock(whisper_mtx_);
         LOG_INFO("whisper.cpp full parallel ready to run {}", request.filename);
         if (whisper_full_parallel(whisper_ctx_, request.params, request.pcmf32.data(), request.pcmf32.size(), request.n_processors) != 0) {
             return "HLIECpp-FAILED-888";

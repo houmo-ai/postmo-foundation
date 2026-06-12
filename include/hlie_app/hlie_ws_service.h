@@ -1,100 +1,128 @@
 #ifndef HLIE_WEBSOCKET_SERVICE_H
 #define HLIE_WEBSOCKET_SERVICE_H
+
 #define UWS_NO_ZLIB
+
 #include <atomic>
-#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <set>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include "hlie_base/hlie_base.h"
 #include "uwebsockets/WebSocket.h"
 
-
 struct us_listen_socket_t;
 
 HLIE_NAMESPACE_BEGIN
 
+struct WhisperStreamRequest {
+    std::vector<float> pcmf32; // mono-channel F32 PCM at 16 kHz
+    std::vector<std::vector<float>> pcmf32s;
+};
+
+using TranscriptCallback = std::function<void(const std::string&)>;
+using AudioHandler = std::function<std::string(const WhisperStreamRequest&, const TranscriptCallback&)>;
+using AudioSubmitter = std::function<void(std::vector<float>, int, std::string)>;
+using EventSender = std::function<void(std::string)>;
+
 class AudioBuffer {
 public:
-    void append(const std::vector<float>& chunk) {
-        data_.insert(data_.end(), chunk.begin(), chunk.end());
-    }
-
-    std::vector<float> consume() {
-        auto tmp = data_;
-        data_.clear();
-        return tmp;
-    }
+    void append(const std::vector<float>& chunk);
+    std::vector<float> consume();
+    void clear();
+    void retainLast(size_t sample_count);
+    [[nodiscard]] bool empty() const;
+    [[nodiscard]] size_t size() const;
 
 private:
     std::vector<float> data_;
 };
 
-class VAD {
-public:
-    static bool is_voice(const std::vector<float>& audio) {
-        if (audio.empty())
-            return false;
-
-        float energy = 0;
-        for (const auto v : audio) {
-            energy += v * v;
-        }
-        energy /= audio.size();
-        return energy > 0.001;
-    }
+struct SessionConnectionState {
+    std::atomic<bool> active{true};
 };
-
-struct WhisperStreamRequest {
-    std::vector<float> pcmf32; // mono-channel F32 PCM
-    std::vector<std::vector<float>> pcmf32s; // stereo-channel F32 PCM
-};
-
-using AudioHandler = std::function<std::string(WhisperStreamRequest)>;
 
 class Session {
 public:
-    void init(const AudioHandler& handler);
-    void onMessage(auto* ws, std::string_view msg);
+    void init(
+        AudioSubmitter submitter,
+        EventSender sender,
+        std::shared_ptr<SessionConnectionState> connection);
+    void onMessage(auto* ws, std::string_view msg, uWS::OpCode op_code);
+    void close();
+    void sendSessionEvent(const std::string& type) const;
 
 private:
+    void handleTextMessage(std::string_view msg);
+    void appendPcm16(const std::string& encoded_audio);
+    void processTurnDetection(const std::vector<float>& chunk);
+    void commit(bool automatic = false);
+    void resetTurnState();
+    [[nodiscard]] int64_t audioTimeMs() const;
+    void sendError(const std::string& message, const std::string& code = "invalid_request_error") const;
     AudioBuffer buffer_;
-    VAD vad_;
-
-    AudioHandler handler_;
-
-    std::chrono::steady_clock::time_point last_audio_time_;
-
-    bool speaking_ = false;
-
-    void processAudio(auto* ws, const std::vector<float>& chunk);
+    AudioSubmitter submitter_;
+    EventSender sender_;
+    std::shared_ptr<SessionConnectionState> connection_;
+    int input_sample_rate_ = 24000;
+    uint64_t item_sequence_ = 0;
+    bool openai_protocol_ = false;
+    bool server_vad_enabled_ = true;
+    bool speech_active_ = false;
+    float vad_threshold_ = 0.5f;
+    int silence_duration_ms_ = 500;
+    int prefix_padding_ms_ = 300;
+    int max_turn_duration_ms_ = 3000;
+    int speech_duration_ms_ = 0;
+    int silence_ms_ = 0;
+    int64_t total_audio_samples_ = 0;
+    std::string pending_item_id_;
 };
 
 class HLIE_API HLIEWebSocketService {
 public:
-    explicit HLIEWebSocketService();
-    ~HLIEWebSocketService() = default;
+    HLIEWebSocketService();
+    ~HLIEWebSocketService();
 
     void init();
-
     void run(AudioHandler handler, int port = 7999);
-
     void stop();
 
 private:
-    std::unique_ptr<std::thread> worker_thread_; // 工作线程
-    std::atomic<bool> is_ready = false;
+    using WebSocketPtr = uWS::WebSocket<false, true, Session>*;
 
+    struct InferenceTask {
+        WebSocketPtr ws = nullptr;
+        std::shared_ptr<SessionConnectionState> connection;
+        std::vector<float> audio;
+        int sample_rate = 16000;
+        std::string item_id;
+    };
+
+    void enqueue(InferenceTask task);
+    void processInferenceTasks();
+    void sendEvent(const InferenceTask& task, std::string event);
+
+    std::unique_ptr<std::thread> worker_thread_;
+    std::unique_ptr<std::thread> inference_thread_;
+    AudioHandler handler_;
+    std::atomic<bool> stopping_{false};
+
+    std::mutex queue_mtx_;
+    std::condition_variable queue_cv_;
+    std::deque<InferenceTask> queue_;
 
     struct us_listen_socket_t* listen_token_ = nullptr;
-
-    // 跨线程通信的 loop 指针
     uWS::Loop* loop_ = nullptr;
 
-    // 追踪所有活跃连接，以便在 stop 时强制断开
-    using WebSocketPtr = uWS::WebSocket<false, true, Session>*;
     std::set<WebSocketPtr> clients_;
     std::mutex clients_mtx_;
 };
