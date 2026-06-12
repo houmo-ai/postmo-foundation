@@ -259,6 +259,11 @@ def _resolve_model_type_from_path(path: str) -> Optional[str]:
     path_alias = {
         "/v1/chat/completions": "text",
         "/v1/embeddings": "embedding",
+        "/score": "reranker",
+        "/v1/score": "reranker",
+        "/rerank": "reranker",
+        "/v1/rerank": "reranker",
+        "/v2/rerank": "reranker",
         "/v1/images/generations": "image",
         "/v1/audio/speech": "tts",
         "/v1/audio/transcriptions": "asr",
@@ -913,6 +918,23 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 @main_app.post("/v1/embeddings", dependencies=[Depends(validate_json_request)])
 async def create_embeddings(request: EmbeddingRequest, raw_request: Request):
     req_body = await _build_req_body(request=request, raw_request=raw_request)
+    worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
+    return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+
+
+@main_app.post("/score", dependencies=[Depends(validate_json_request)])
+@main_app.post("/v1/score", dependencies=[Depends(validate_json_request)])
+async def create_score(raw_request: Request):
+    req_body = await _build_req_body(request=None, raw_request=raw_request)
+    worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
+    return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+
+
+@main_app.post("/rerank", dependencies=[Depends(validate_json_request)])
+@main_app.post("/v1/rerank", dependencies=[Depends(validate_json_request)])
+@main_app.post("/v2/rerank", dependencies=[Depends(validate_json_request)])
+async def create_rerank(raw_request: Request):
+    req_body = await _build_req_body(request=None, raw_request=raw_request)
     worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
     return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
 

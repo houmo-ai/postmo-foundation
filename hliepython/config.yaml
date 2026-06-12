@@ -2,7 +2,7 @@
 server:
   main_port: 7800
   log_level: "info"
-  model_root_dir: "/home/ywh/workspace/models/v1.4.0"
+  model_root_dir: "/data/useradmin/models/v1.3.0"
 
 # 模型配置
 models:
@@ -21,6 +21,21 @@ models:
         additional_config:
           device_ids: [0]
           enable_cacheprompt: "False"
+
+  # # CoPaw-Flash-9B 模型
+  # - name: "CoPaw-Flash-9B"
+  #   instances:
+  #     - port: 7801
+  #       model_path: "CoPaw-Flash-9B"
+  #       model_type: "text"    # text、embedding、asr、tts
+  #       vllm_config:
+  #         engine:
+  #           max-model-len: 131072
+  #           max-num-seqs: 1
+  #           no-enable-prefix-caching: true
+  #           max-num-batched-tokens: 131072
+  #       additional_config:
+  #         enable_cacheprompt: "False"
 
   # - name: "Qwen3.6-27B_mtp"
   #   instances:
@@ -93,6 +108,53 @@ models:
   #           load-format: "dummy"
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_qwen3-asr_0.6b_2cores_v1.3.0_20260522.gguf"
+
+  # # Qwen3-ForcedAligner-0.6B 模型
+  # - name: "Qwen3-ForcedAligner-0.6B"
+  #   instances:
+  #     - port: 7803
+  #       model_path: "Qwen3-ForcedAligner-0.6B"
+  #       model_type: "asr"
+  #       vllm_config:
+  #         engine:
+  #           no-enable-prefix-caching: true
+  #           load-format: "dummy"
+  #           max-model-len: 411
+  #           load-format: "dummy"
+  #           hf-overrides:
+  #             architectures: ["Qwen3ASRForcedAlignerForTokenClassification"]
+  #         # serving:
+  #         #   trust-request-chat-template: true
+  #       additional_config:
+  #         "vit_model_name": "mmproj-Qwen3-ForcedAligner-Q4_0.gguf"
+
+  # - name: "glm-ocr"
+  #   instances:
+  #     - port: 7802
+  #       model_path: "glm-ocr"
+  #       model_type: "text"
+  #       vllm_config:
+  #         engine:
+  #           max-model-len: 2048
+  #           max-num-seqs: 1
+  #           no-enable-prefix-caching: true
+  #           max-num-batched-tokens: 2048
+  #       additional_config:
+  #         "vit_model_name": "mmproj_xh2_glm-ocr_0.8b_2cores_v1.3.0_20260519.gguf"
+
+  # # Qwen3-ForcedAligner-0.6B 模型
+  # - name: "Qwen3-Reranker-8B"
+  #   instances:
+  #     - port: 7803
+  #       model_path: "Qwen3-Reranker-8B"
+  #       model_type: "reranker"
+  #       vllm_config:
+  #         engine:
+  #           max-model-len: 8192
+  #           hf-overrides:
+  #             architectures: ["Qwen3ForSequenceClassification"]
+  #             classifier_from_token: ["no", "yes"]
+  #             is_original_qwen3_reranker: true
 
   # # CosyVoice3 模型
   # - name: "Fun-CosyVoice3-0.5B"

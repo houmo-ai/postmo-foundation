@@ -29,5 +29,9 @@ class InferenceEngineFactory:
             from hliepython.model_server.engines.embedding_engine import EmbeddingEngine
 
             return EmbeddingEngine(instance_config)
+        elif model_type == "reranker":
+            from hliepython.model_server.engines.reranker_engine import RerankerEngine
+
+            return RerankerEngine(instance_config)
         else:
             raise ValueError(f"未知的模型类型: {model_type}")

@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import base64
+import importlib
 from http import HTTPStatus
 from collections.abc import AsyncGenerator
 from inspect import isawaitable
@@ -97,6 +98,11 @@ engine: Optional[InferenceEngine] = None
 routes: Dict[str, str] = {
     "/v1/chat/completions": "create_chat_completions",
     "/v1/embeddings": "create_embeddings",
+    "/score": "create_score",
+    "/v1/score": "create_score",
+    "/rerank": "create_rerank",
+    "/v1/rerank": "create_rerank",
+    "/v2/rerank": "create_rerank",
     "/v1/images/generations": "create_images_generations",
     "/v1/audio/speech": "create_audio_speech",
     "/v1/audio/transcriptions": "create_audio_transcriptions",
@@ -500,6 +506,16 @@ def create_route_handler(method_name: str):
                 method_input = ChatCompletionRequest(**req_data)
             elif method_name == "create_embeddings":
                 method_input = EmbeddingRequest(**req_data)
+            elif method_name == "create_score":
+                from pydantic import TypeAdapter
+
+                scoring_protocol = importlib.import_module("vllm.entrypoints.pooling.scoring.protocol")
+                ScoreRequest = getattr(scoring_protocol, "ScoreRequest")
+                method_input = TypeAdapter(ScoreRequest).validate_python(req_data)
+            elif method_name == "create_rerank":
+                scoring_protocol = importlib.import_module("vllm.entrypoints.pooling.scoring.protocol")
+                RerankRequest = getattr(scoring_protocol, "RerankRequest")
+                method_input = RerankRequest(**req_data)
             elif method_name == "create_audio_speech":
                 method_input = AudioSpeechRequest(**req_data)
             elif method_name == "create_audio_transcriptions":
