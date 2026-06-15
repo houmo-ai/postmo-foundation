@@ -1,0 +1,28 @@
+{
+  "rules": [
+    {
+      "model_family": "qwen3.6",
+      "params": "27b",
+      "chips": 1,
+      "memory_per_device_mb": 23969.43
+    },
+    {
+      "model_family": "qwen3.6",
+      "params": "27b",
+      "chips": 2,
+      "memory_per_device_mb": 12951.42
+    },
+    {
+      "model_family": "qwen3.6",
+      "params": "27b",
+      "chips": 4,
+      "memory_per_device_mb": 7381.91
+    },
+    {
+      "model_family": "gemma4",
+      "params": "26b",
+      "chips": 1,
+      "memory_per_device_mb": 35336.42
+    }
+  ]
+}

@@ -27,7 +27,9 @@ public:
     static void ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, const std::string& dir);
 
     static int estimate_mem(const std::string& model_name);
+    static int estimate_empirical_mem(const std::string& model_name);
     static int estimate_mem_from_gguf(const std::string& model_path, int context_size = 0, int batch_num = 1);
+    static int estimate_device_num(const std::string& model_name);
 
 
     void build_llm(const std::string& model_path, const std::string& model_type, int context_size, int cores, int batch_num, int xh_version,

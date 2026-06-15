@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cerrno>
 #include <algorithm>
+#include <cctype>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -26,6 +27,34 @@
 HLIE_NAMESPACE_BEGIN
 
 namespace {
+    std::string process_body(const std::string& body);
+
+    std::string to_lower_copy(std::string value) {
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return value;
+    }
+
+    bool is_binary_content_type(const std::string& content_type) {
+        const std::string lowered = to_lower_copy(content_type);
+        return lowered.rfind("audio/", 0) == 0 || lowered.rfind("image/", 0) == 0 ||
+            lowered.rfind("video/", 0) == 0 || lowered.find("application/octet-stream") != std::string::npos ||
+            lowered.find("application/pdf") != std::string::npos || lowered.find("application/zip") != std::string::npos;
+    }
+
+    bool is_wav_body(const std::string& body) {
+        return body.size() >= 12 && body.compare(0, 4, "RIFF") == 0 && body.compare(8, 4, "WAVE") == 0;
+    }
+
+    std::string process_response_body(const httplib::Response& res) {
+        const std::string content_type = res.get_header_value("Content-Type");
+        if (is_binary_content_type(content_type) || is_wav_body(res.body)) {
+            const std::string type = content_type.empty() && is_wav_body(res.body) ? "audio/wav" : content_type;
+            return "<binary response: content_type=" + type + ", size=" + std::to_string(res.body.size()) + " bytes>";
+        }
+        return process_body(res.body);
+    }
+
     std::string process_body(const std::string& body) {
         try {
             if (body.empty()) {
@@ -83,7 +112,7 @@ namespace {
         access_logger->flush();
 
         LOG_INFO("Request[{}]: {} {} {} {} \n{}", request_id, req.method, req.path, req.remote_addr, res.status, process_body(req.body));
-        LOG_INFO("Response[{}]: {}", request_id, process_body(res.body));
+        LOG_INFO("Response[{}]: {}", request_id, process_response_body(res));
     }
 
     void res_error(httplib::Response& res, const json& error_data) {

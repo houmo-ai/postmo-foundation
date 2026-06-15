@@ -608,6 +608,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
     std::optional<server_model_meta> meta = std::nullopt;
     int mem_est;
+    int required_device_num = HLIEModelInfo::estimate_device_num(model_name);
     if (!model_name.empty()) { // 兼容LLAMA新方式， 检查模型是否存在
         meta = get_model_meta(model_name);
         if (!meta.has_value()) {
@@ -621,6 +622,9 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         }
         const auto model_inst = get_model_inst(model_name);
         mem_est = model_inst ? model_inst->get().model_info.get_estimated_mem() : HLIEModelInfo::estimate_mem(model_name);
+        if (model_inst) {
+            required_device_num = model_inst->get().model_info.get_device_num();
+        }
     } else if (model_path.empty()) {
         res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
         return res;
@@ -632,12 +636,16 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         }
 
         model_name = model_path_tmp.filename().stem().string();
+        required_device_num = HLIEModelInfo::estimate_device_num(model_name);
         meta = get_model_meta(model_name);
         if (meta && meta->status == SERVER_MODEL_STATUS_LOADED) {
             res->error(format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        mem_est = HLIEModelInfo::estimate_mem_from_gguf(model_path, 0, 1);
+        mem_est = HLIEModelInfo::estimate_empirical_mem(model_name);
+        if (mem_est <= 0) {
+            mem_est = HLIEModelInfo::estimate_mem_from_gguf(model_path, 0, 1);
+        }
         if (mem_est <= 0) {
             mem_est = HLIEModelInfo::estimate_mem(model_name);
         }
@@ -657,20 +665,29 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     {
         std::unique_lock lock(mutex_);
         if (devices == "undefined") {
-            uint32_t device_id = 0;
-            if (device_service_->acquire_mem(mem_est, device_id, true) < 0) {
+            std::vector<int> devices_vec;
+            if (device_service_->acquire_mem_on_device_count(required_device_num, mem_est, devices_vec, true, model_name) < 0) {
                 res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
                                                      ERROR_TYPE_UNAVAILABLE, 80004));
                 return res;
             }
-            devices = std::to_string(device_id);
+            devices = HlieUtil::join_devices(devices_vec);
         } else {
             std::vector<int> devices_vec;
             if (HlieUtil::parse_device(devices, devices_vec) < 0) {
                 res->error(format_error_response_ex("The devices parsed failed.", ERROR_TYPE_UNAVAILABLE, 80004));
                 return res;
             }
-            if (device_service_->acquire_mem_on_devices(devices_vec, mem_est, false, true) < 0) {
+            std::sort(devices_vec.begin(), devices_vec.end());
+            devices_vec.erase(std::unique(devices_vec.begin(), devices_vec.end()), devices_vec.end());
+            if (devices_vec.size() != static_cast<size_t>(required_device_num)) {
+                LOG_ERROR("model {} requires {} devices, but {} devices were requested", model_name, required_device_num, devices_vec.size());
+                res->error(format_error_response_ex("The requested device count does not match the model chip count.",
+                                                     ERROR_TYPE_UNAVAILABLE, 80004));
+                return res;
+            }
+            devices = HlieUtil::join_devices(devices_vec);
+            if (device_service_->acquire_mem_on_devices(devices_vec, mem_est, false, true, model_name) < 0) {
                 res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
                                                      ERROR_TYPE_UNAVAILABLE, 80004));
                 return res;

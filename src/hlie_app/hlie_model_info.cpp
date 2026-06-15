@@ -8,6 +8,7 @@
 #include <unordered_map>
 
 #include "gguf.h"
+#include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_gguf_util.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
@@ -30,6 +31,8 @@ namespace {
     const std::regex kContextRegex(R"((\d+)\s*[kK])");
     const std::regex kBatchRegex(R"(b(\d+))", std::regex::icase);
     const std::regex kCoreRegex(R"((\d+)\s*core)", std::regex::icase);
+    const std::regex kChipRegex(R"((\d+)\s*chips?)", std::regex::icase);
+    const std::regex kDeviceRegex(R"((\d+)d)", std::regex::icase);
     const std::regex kSizeLabelRegex(R"((\d+(?:\.\d+)?)\s*([bBmM]))", std::regex::icase);
     const std::regex kVlFamilyRegex(R"(qwen2\.5-vl|qwen3-vl|qwen3\.5|qwen3\.6)", std::regex::icase);
     const std::regex kMmprojFamilyRegex(
@@ -133,6 +136,14 @@ namespace {
         return arch + ".";
     }
 
+    std::filesystem::path memory_estimates_path() {
+        const auto config_path = Singleton<HLIEConfigService>::instance()->get_config_path();
+        if (config_path.empty()) {
+            return "memory_estimates.json";
+        }
+        return std::filesystem::path(config_path).parent_path() / "memory_estimates.json";
+    }
+
 } // namespace
 
 int HLIEModelInfo::parse_from_file(const std::string& file_path) {
@@ -175,14 +186,7 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
             const std::filesystem::path p(model_path_);
             model_name_ = p.stem().string(); // 去掉扩展名
             // ===== device =====
-            std::smatch m;
-            // 1chip / 2chips
-            if (const std::regex chip_regex(R"((\d+)\s*chips?)", std::regex::icase); std::regex_search(model_name_, m, chip_regex)) {
-                device_num_ = std::stoi(m[1].str());
-            } else if (const std::regex device_regex(R"((\d+)d)", std::regex::icase); std::regex_search(model_name_, m, device_regex)) {
-                // 兼容旧格式：如 2d
-                device_num_ = std::stoi(m[1].str());
-            }
+            device_num_ = estimate_device_num(model_name_);
         } else if (!clip_model_.empty()) {
             model_name_ = "sd3";
             is_llm_ = false;
@@ -260,12 +264,7 @@ int HLIEModelInfo::parse_from_gguf_filename(const std::string& file_path) {
 
     // ===== device =====
     // 1chip / 2chips
-    if (const std::regex chip_regex(R"((\d+)\s*chips?)", std::regex::icase); std::regex_search(name, m, chip_regex)) {
-        device_num_ = std::stoi(m[1].str());
-    } else if (const std::regex device_regex(R"((\d+)d)", std::regex::icase); std::regex_search(name, m, device_regex)) {
-        // 兼容旧格式：如 2d
-        device_num_ = std::stoi(m[1].str());
-    }
+    device_num_ = estimate_device_num(name);
 
     // ===== VL family 判断 =====
     if (find(kMmprojFamilyRegex, m)) {
@@ -453,6 +452,10 @@ int HLIEModelInfo::estimate_mem(const std::string& model_name) {
         return 0;
     }
 
+    if (const int empirical_mem = estimate_empirical_mem(model_name); empirical_mem > 0) {
+        return empirical_mem;
+    }
+
     const std::string name = to_lower(model_name);
 
     if (name.find("qwen2.5") != std::string::npos) {
@@ -472,6 +475,69 @@ int HLIEModelInfo::estimate_mem(const std::string& model_name) {
     }
 
     return 4096;
+}
+
+int HLIEModelInfo::estimate_empirical_mem(const std::string& model_name) {
+    if (model_name.empty()) {
+        return 0;
+    }
+
+    const auto path = memory_estimates_path();
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        LOG_WARN("memory estimate rules not found: {}", path.string());
+        return 0;
+    }
+
+    try {
+        nlohmann::json config;
+        file >> config;
+        const std::string name = to_lower(model_name);
+        const int chips = estimate_device_num(name);
+        std::smatch param_match;
+        std::string model_params;
+        if (std::regex_search(name, param_match, kParamRegex)) {
+            model_params = to_lower(param_match.str());
+            model_params.erase(std::remove_if(model_params.begin(), model_params.end(),
+                                              [](const unsigned char c) { return std::isspace(c); }),
+                               model_params.end());
+        }
+
+        for (const auto& rule : config.value("rules", nlohmann::json::array())) {
+            const std::string family = to_lower(rule.value("model_family", ""));
+            std::string params = to_lower(rule.value("params", ""));
+            params.erase(std::remove_if(params.begin(), params.end(), [](const unsigned char c) { return std::isspace(c); }),
+                         params.end());
+            const int rule_chips = rule.value("chips", 1);
+            const double per_device_mb = rule.value("memory_per_device_mb", 0.0);
+            if (family.empty() || params.empty() || per_device_mb <= 0 || rule_chips != chips) {
+                continue;
+            }
+            if (name.find(family) == std::string::npos || model_params != params) {
+                continue;
+            }
+
+            const int total_mb = static_cast<int>(std::ceil(per_device_mb * rule_chips));
+            LOG_INFO("empirical memory estimate for {} matched {} {} {}chips: {}MB per device, {}MB total",
+                     model_name, family, params, rule_chips, per_device_mb, total_mb);
+            return total_mb;
+        }
+    } catch (const std::exception& ex) {
+        LOG_WARN("failed to parse memory estimate rules {}, ex: {}", path.string(), ex.what());
+    }
+
+    return 0;
+}
+
+int HLIEModelInfo::estimate_device_num(const std::string& model_name) {
+    std::smatch match;
+    if (std::regex_search(model_name, match, kChipRegex)) {
+        return std::max(1, std::stoi(match[1].str()));
+    }
+    if (std::regex_search(model_name, match, kDeviceRegex)) {
+        return std::max(1, std::stoi(match[1].str()));
+    }
+    return 1;
 }
 
 int HLIEModelInfo::estimate_mem_from_gguf(const std::string& model_path, const int context_size, const int batch_num) {
@@ -547,6 +613,9 @@ int HLIEModelInfo::estimate_mem_from_gguf(const std::string& model_path, const i
 }
 
 int HLIEModelInfo::get_estimated_mem() const {
+    if (const int empirical_mem = estimate_empirical_mem(model_name_); empirical_mem > 0) {
+        return empirical_mem;
+    }
     return estimated_mem_mb_ > 0 ? estimated_mem_mb_ : estimate_mem(model_name_);
 }
 

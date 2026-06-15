@@ -875,12 +875,14 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
                                                  const std::vector<float>& prompt_feat, const std::vector<float>& embedding,
                                                  float speed) const {
 
-    using namespace std::chrono;
+    using Clock = std::chrono::steady_clock;
+    const auto elapsed_ms = [](const Clock::time_point begin, const Clock::time_point end) {
+        return std::chrono::duration<double, std::milli>(end - begin).count();
+    };
 
-    auto t_start = high_resolution_clock::now();
+    const auto t_start = Clock::now();
 
     constexpr int flow_mel_bins_ = 80;
-    constexpr int k_max_seq_len_2048 = 2048;
     constexpr int kTokenMelRatio = 2;
     constexpr float kInferenceCfgRate = 0.7f;
     constexpr int kNumSteps = 10; // Number of diffusion steps
@@ -897,20 +899,28 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     auto token_emb_info = token_emb_tensor.Info().AsContiguous();
     auto token_emb_shape = token_emb_info.Shape();
 
-    // Pad to max sequence length (1024)
-    // Equivalent Python: token = F.pad(token, (0, 0, 0, 1024 - token.shape[1]), value=0)
-    constexpr int kPadLen = 1024;
-    int pad_len = kPadLen - static_cast<int>(token_emb_shape[1]);
+    const auto flow_encoder_input_info =
+        cosyvoice3_flow_encoder_model_->GetInputInfo(flow_encoder_input_names_[0]).AsContiguous();
+    const auto flow_encoder_input_shape = flow_encoder_input_info.Shape();
+    const int encoder_seq_len = static_cast<int>(flow_encoder_input_shape[1]);
+    const int encoder_feat_dim = static_cast<int>(flow_encoder_input_shape[2]);
+    if (encoder_feat_dim != flow_mel_bins_) {
+        throw std::runtime_error("Unexpected flow encoder feature dimension");
+    }
+    if (concat_token_len > encoder_seq_len) {
+        throw std::runtime_error("Flow token length exceeds flow encoder static sequence length");
+    }
+
+    int pad_len = encoder_seq_len - static_cast<int>(token_emb_shape[1]);
     if (pad_len < 0) {
-        LOG_WARN("token sequence length {} exceeds padding length {}, truncating", token_emb_shape[1], kPadLen);
-        pad_len = 0;
+        throw std::runtime_error("Embedded flow token length exceeds flow encoder static sequence length");
     }
 
     // Prepare padded token embedding for flow_encoder
     // Shape: [1, seq_len, 80] -> [1, 1024, 80]
     LOG_DEBUG("Prepare padded token embedding for flow_encoder");
     std::vector<TensorFP16> padded_token_emb;
-    padded_token_emb.reserve(kPadLen * flow_mel_bins_);
+    padded_token_emb.reserve(static_cast<size_t>(encoder_seq_len * flow_mel_bins_));
 
     const auto* token_emb_data = static_cast<const TensorFP16*>(token_emb_tensor.Buffer().Data());
     size_t token_emb_size = token_emb_tensor.MemSize() / sizeof(TensorFP16);
@@ -923,18 +933,20 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     for (int i = 0; i < pad_len * flow_mel_bins_; ++i) {
         padded_token_emb.push_back(static_cast<TensorFP16>(0.0f));
     }
+    const auto t_embedding_ready = Clock::now();
 
     // Set input to flow_encoder and run
     // Input shape: [1, 1024, 80] (float16)
     LOG_DEBUG("Set input to flow_encoder and run");
 
-    auto input_tensor_info_fp16 = cosyvoice3_flow_encoder_model_->GetInputInfo(flow_encoder_input_names_[0]).AsContiguous();
-    auto input_tensor = tcim::Tensor::CreateHostTensor(input_tensor_info_fp16);
+    auto input_tensor = tcim::Tensor::CreateHostTensor(flow_encoder_input_info);
     CHECK_TCIM_STATUS(input_tensor.Buffer().CopyFromHost(padded_token_emb.data(), padded_token_emb.size() * sizeof(TensorFP16)));
     CHECK_TCIM_STATUS(cosyvoice3_flow_encoder_model_->SetInput(flow_encoder_input_names_[0], input_tensor));
 
+    const auto t_flow_encoder_run_start = Clock::now();
     CHECK_TCIM_STATUS(cosyvoice3_flow_encoder_model_->Run());
     CHECK_TCIM_STATUS(cosyvoice3_flow_encoder_model_->Sync());
+    const auto t_flow_encoder_run_end = Clock::now();
 
     // Get output from flow_encoder
     // Output shape: [1, 1024, 80] (float16)
@@ -960,8 +972,15 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     // Reshape to [1, seq, 80] and apply repeat_interleave along dim=1
     LOG_TRACE("Reshape to [1, seq, 80] and apply repeat_interleave along dim=1");
     int h_seq_len = static_cast<int>(h_size) / flow_mel_bins_;
+    const int flow_seq_len = h_seq_len * kTokenMelRatio;
+    const auto flow_decoder_x_shape =
+        cosyvoice3_flow_decoder_model_->GetInputInfo(cosyvoice3_flow_decoder_model_->GetInputName(0)).Shape();
+    if (flow_decoder_x_shape.size() < 3 || flow_decoder_x_shape[1] != flow_mel_bins_ ||
+        flow_decoder_x_shape[2] != flow_seq_len) {
+        throw std::runtime_error("Flow encoder output length does not match flow decoder input shape");
+    }
     std::vector<float> h_repeated;
-    h_repeated.reserve(h_seq_len * kTokenMelRatio * flow_mel_bins_);
+    h_repeated.reserve(static_cast<size_t>(flow_seq_len * flow_mel_bins_));
     for (int i = 0; i < h_seq_len; ++i) {
         for (int r = 0; r < kTokenMelRatio; ++r) {
             for (int j = 0; j < flow_mel_bins_; ++j) {
@@ -969,6 +988,10 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
             }
         }
     }
+    const auto t_flow_encoder_done = Clock::now();
+    LOG_INFO("token2wav perf: token_embedding_and_pad={:.3f}ms, flow_encoder_run_sync={:.3f}ms, flow_encoder_output_postprocess={:.3f}ms",
+             elapsed_ms(t_start, t_embedding_ready), elapsed_ms(t_flow_encoder_run_start, t_flow_encoder_run_end),
+             elapsed_ms(t_flow_encoder_run_end, t_flow_encoder_done));
 
     // ========== STEP 3: Process speaker embedding ==========
     // Equivalent Python: embedding = F.normalize(embedding, dim=1)
@@ -978,7 +1001,7 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     for (float v : embedding) {
         emb_norm += v * v;
     }
-    emb_norm = std::sqrt(emb_norm);
+    emb_norm = std::sqrt(std::max(emb_norm, 1e-12f));
 
     std::vector<TensorFP16> normalized_emb;
     normalized_emb.reserve(embedding.size());
@@ -994,8 +1017,10 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     CHECK_TCIM_STATUS(spk_input_input_tensor.Buffer().CopyFromHost(normalized_emb.data(), normalized_emb.size() * sizeof(TensorFP16)));
     CHECK_TCIM_STATUS(cosyvoice3_flow_spk_model_->SetInput(flow_spk_input_names_[0], spk_input_input_tensor));
 
+    const auto t_flow_spk_run_start = Clock::now();
     CHECK_TCIM_STATUS(cosyvoice3_flow_spk_model_->Run());
     CHECK_TCIM_STATUS(cosyvoice3_flow_spk_model_->Sync());
+    const auto t_flow_spk_run_end = Clock::now();
 
 
     // Get output from flow_spk
@@ -1013,8 +1038,12 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     for (size_t i = 0; i < spk_size; ++i) {
         speaker_embedding[i] = static_cast<float>(spk_data[i]);
     }
+    const auto t_flow_spk_done = Clock::now();
 
     LOG_TRACE("cosyvoice3_flow_spk_model_ out spk_size: {}", spk_size);
+    LOG_INFO("token2wav perf: speaker_prepare={:.3f}ms, flow_spk_run_sync={:.3f}ms, flow_spk_output={:.3f}ms",
+             elapsed_ms(t_flow_encoder_done, t_flow_spk_run_start), elapsed_ms(t_flow_spk_run_start, t_flow_spk_run_end),
+             elapsed_ms(t_flow_spk_run_end, t_flow_spk_done));
 
     // ========== STEP 4: Prepare flow decoder inputs ==========
     // Calculate mel lengths
@@ -1024,20 +1053,30 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
 
     const int mel_len1 = static_cast<int>(prompt_feat.size()) / flow_mel_bins_;
     const int mel_len2 = concat_token_len * kTokenMelRatio - mel_len1;
+    if (mel_len2 <= 0) {
+        LOG_WARN("token2wav: invalid mel_len2={}, concat_token_len={}, prompt_mel_len={}", mel_len2, concat_token_len, mel_len1);
+        return {};
+    }
     const int total_mel_len = mel_len1 + mel_len2;
+    if (total_mel_len > flow_seq_len) {
+        throw std::runtime_error("Total mel length exceeds flow decoder static sequence length");
+    }
 
     LOG_INFO("token2wav: prompt_mel_len={}, mel_len2={}, total_mel_len={}", mel_len1, mel_len2, total_mel_len);
 
-    std::vector<float> conds(static_cast<size_t>(k_max_seq_len_2048 * flow_mel_bins_), 0.0f);
+    std::vector<float> conds(static_cast<size_t>(flow_seq_len * flow_mel_bins_), 0.0f);
     for (int idx = 0; idx < mel_len1 * flow_mel_bins_ && idx < static_cast<int>(prompt_feat.size()); ++idx) {
         conds[static_cast<size_t>(idx)] = static_cast<float>(prompt_feat[static_cast<size_t>(idx)]);
     }
-    std::vector<float> conds_t = TransposeSeqFeatToFeatSeq(conds, k_max_seq_len_2048, flow_mel_bins_);
-    std::vector<float> mask(static_cast<size_t>(k_max_seq_len_2048), 0.0f);
-    for (int idx = 0; idx < std::min(total_mel_len, k_max_seq_len_2048); ++idx) {
+    std::vector<float> conds_t = TransposeSeqFeatToFeatSeq(conds, flow_seq_len, flow_mel_bins_);
+    std::vector<float> mask(static_cast<size_t>(flow_seq_len), 0.0f);
+    for (int idx = 0; idx < total_mel_len; ++idx) {
         mask[static_cast<size_t>(idx)] = 1.0f;
     }
-    std::vector<float> mu = TransposeSeqFeatToFeatSeq(h_repeated, k_max_seq_len_2048, flow_mel_bins_);
+    std::vector<float> mu = TransposeSeqFeatToFeatSeq(h_repeated, flow_seq_len, flow_mel_bins_);
+    const auto t_flow_inputs_ready = Clock::now();
+    LOG_INFO("token2wav perf: flow_decoder_static_input_prepare={:.3f}ms",
+             elapsed_ms(t_flow_spk_done, t_flow_inputs_ready));
 
 
     // ========== STEP 5: Diffusion sampling loop ==========
@@ -1045,26 +1084,35 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     // ---------- noise ----------
     std::mt19937 rng(std::random_device{}());
     std::normal_distribution<float> normal_dist(0.0f, 1.0f);
-    std::vector<float> x(flow_mel_bins_ * k_max_seq_len_2048, 0.0f);
+    std::vector<float> x(static_cast<size_t>(flow_mel_bins_ * flow_seq_len), 0.0f);
     for (auto& value : x) {
         value = normal_dist(rng);
     }
 
-    LOG_DEBUG("x 随机噪声生成完毕, shape : {}x{}, size{}", flow_mel_bins_, k_max_seq_len_2048, x.size());
+    LOG_DEBUG("x 随机噪声生成完毕, shape : {}x{}, size{}", flow_mel_bins_, flow_seq_len, x.size());
 
     const std::vector<float> t_span = BuildCosineTimeSpan(kNumSteps);
     float t = t_span[0];
     float dt = t_span[1] - t_span[0];
 
-    std::vector<float> x_in(2 * flow_mel_bins_ * k_max_seq_len_2048, 0.0f);
-    std::vector<float> mask_in(2 * k_max_seq_len_2048, 0.0f);
-    std::vector<float> mu_in(static_cast<size_t>(2 * flow_mel_bins_ * k_max_seq_len_2048), 0.0f);
+    std::vector<float> x_in(static_cast<size_t>(2 * flow_mel_bins_ * flow_seq_len), 0.0f);
+    std::vector<float> mask_in(static_cast<size_t>(2 * flow_seq_len), 0.0f);
+    std::vector<float> mu_in(static_cast<size_t>(2 * flow_mel_bins_ * flow_seq_len), 0.0f);
     std::vector<float> t_in(2, 0.0f);
-    std::vector<float> cond_in(2 * flow_mel_bins_ * k_max_seq_len_2048, 0.0f);
+    std::vector<float> cond_in(static_cast<size_t>(2 * flow_mel_bins_ * flow_seq_len), 0.0f);
     std::vector<float> spks_in(2 * flow_mel_bins_, 0.0f);
 
+    double decoder_host_prepare_ms = 0.0;
+    double decoder_tensor_convert_ms = 0.0;
+    double decoder_h2d_ms = 0.0;
+    double decoder_set_input_ms = 0.0;
+    double decoder_run_sync_ms = 0.0;
+    double decoder_d2h_ms = 0.0;
+    double decoder_output_update_ms = 0.0;
+    const auto t_diffusion_start = Clock::now();
 
     for (int step = 1; step < static_cast<int>(t_span.size()); ++step) {
+        const auto t_step_start = Clock::now();
         std::copy(x.begin(), x.end(), x_in.begin());
         std::copy(x.begin(), x.end(), x_in.begin() + x.size());
         std::copy(mask.begin(), mask.end(), mask_in.begin());
@@ -1077,6 +1125,7 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
         std::copy(speaker_embedding.begin(), speaker_embedding.begin() + std::min(speaker_embedding.size(), spks_in.size()),
                   spks_in.begin());
         std::fill(t_in.begin(), t_in.end(), t);
+        const auto t_host_prepare_done = Clock::now();
 
         const auto x_tensor = TcimUtil::float_to_tensor_vec(x_in);
         const auto mask_tensor = TcimUtil::float_to_tensor_vec(mask_in);
@@ -1084,6 +1133,7 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
         const auto t_tensor = TcimUtil::float_to_tensor_vec(t_in);
         const auto spks_tensor = TcimUtil::float_to_tensor_vec(spks_in);
         const auto cond_tensor = TcimUtil::float_to_tensor_vec(cond_in);
+        const auto t_tensor_convert_done = Clock::now();
 
         const auto x_name = cosyvoice3_flow_decoder_model_->GetInputName(0);
         const auto mask_name = cosyvoice3_flow_decoder_model_->GetInputName(1);
@@ -1104,6 +1154,7 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
                                                                                        flow_decoder_input_maps_.at(spks_name).MemSize()));
         CHECK_TCIM_STATUS(flow_decoder_input_maps_.at(cond_name).Buffer().CopyFromHost(cond_tensor.data(),
                                                                                        flow_decoder_input_maps_.at(cond_name).MemSize()));
+        const auto t_h2d_done = Clock::now();
 
         CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->SetInput(x_name, flow_decoder_input_maps_.at(x_name)));
         CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->SetInput(mask_name, flow_decoder_input_maps_.at(mask_name)));
@@ -1111,13 +1162,16 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
         CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->SetInput(t_name, flow_decoder_input_maps_.at(t_name)));
         CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->SetInput(spks_name, flow_decoder_input_maps_.at(spks_name)));
         CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->SetInput(cond_name, flow_decoder_input_maps_.at(cond_name)));
+        const auto t_set_input_done = Clock::now();
         CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->Run());
         CHECK_TCIM_STATUS(cosyvoice3_flow_decoder_model_->Sync());
+        const auto t_run_sync_done = Clock::now();
 
         auto dphi_dt_output = cosyvoice3_flow_decoder_model_->GetDevOutput(cosyvoice3_flow_decoder_model_->GetOutputName(0)).ToHost(true);
+        const auto t_d2h_done = Clock::now();
         const auto dphi_shape = cosyvoice3_flow_decoder_model_->GetOutputInfo(cosyvoice3_flow_decoder_model_->GetOutputName(0)).Shape();
         std::vector<float> dphi_dt_all = TcimUtil::tensor_to_float_vec(dphi_dt_output.Buffer().Data(), TcimUtil::numel(dphi_shape));
-        const size_t batch_stride = static_cast<size_t>(flow_mel_bins_ * k_max_seq_len_2048);
+        const size_t batch_stride = static_cast<size_t>(flow_mel_bins_ * flow_seq_len);
         for (size_t idx = 0; idx < batch_stride; ++idx) {
             const float dphi = dphi_dt_all[idx];
             const float cfg_dphi = dphi_dt_all[idx + batch_stride];
@@ -1127,16 +1181,43 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
         if (step < static_cast<int>(t_span.size()) - 1) {
             dt = t_span[static_cast<size_t>(step + 1)] - t;
         }
+        const auto t_step_done = Clock::now();
+
+        const double host_prepare_ms = elapsed_ms(t_step_start, t_host_prepare_done);
+        const double tensor_convert_ms = elapsed_ms(t_host_prepare_done, t_tensor_convert_done);
+        const double h2d_ms = elapsed_ms(t_tensor_convert_done, t_h2d_done);
+        const double set_input_ms = elapsed_ms(t_h2d_done, t_set_input_done);
+        const double run_sync_ms = elapsed_ms(t_set_input_done, t_run_sync_done);
+        const double d2h_ms = elapsed_ms(t_run_sync_done, t_d2h_done);
+        const double output_update_ms = elapsed_ms(t_d2h_done, t_step_done);
+        decoder_host_prepare_ms += host_prepare_ms;
+        decoder_tensor_convert_ms += tensor_convert_ms;
+        decoder_h2d_ms += h2d_ms;
+        decoder_set_input_ms += set_input_ms;
+        decoder_run_sync_ms += run_sync_ms;
+        decoder_d2h_ms += d2h_ms;
+        decoder_output_update_ms += output_update_ms;
+
+        LOG_INFO("token2wav flow_decoder step {}/{}: total={:.3f}ms, host_prepare={:.3f}ms, tensor_convert={:.3f}ms, h2d={:.3f}ms, set_input={:.3f}ms, run_sync={:.3f}ms, d2h={:.3f}ms, output_update={:.3f}ms",
+                 step, t_span.size() - 1, elapsed_ms(t_step_start, t_step_done), host_prepare_ms, tensor_convert_ms, h2d_ms,
+                 set_input_ms, run_sync_ms, d2h_ms, output_update_ms);
     }
+    const auto t_diffusion_end = Clock::now();
+    LOG_INFO("token2wav flow_decoder summary: steps={}, total={:.3f}ms, host_prepare={:.3f}ms, tensor_convert={:.3f}ms, h2d={:.3f}ms, set_input={:.3f}ms, run_sync={:.3f}ms, d2h={:.3f}ms, output_update={:.3f}ms",
+             t_span.size() - 1, elapsed_ms(t_diffusion_start, t_diffusion_end), decoder_host_prepare_ms,
+             decoder_tensor_convert_ms, decoder_h2d_ms, decoder_set_input_ms, decoder_run_sync_ms, decoder_d2h_ms,
+             decoder_output_update_ms);
 
     std::vector<float> mel_spectrogram(static_cast<size_t>(flow_mel_bins_ * mel_len2), 0.0f);
     for (int mel_idx = 0; mel_idx < flow_mel_bins_; ++mel_idx) {
-        const size_t src_offset = static_cast<size_t>(mel_idx * k_max_seq_len_2048 + mel_len1);
+        const size_t src_offset = static_cast<size_t>(mel_idx * flow_seq_len + mel_len1);
         const size_t dst_offset = static_cast<size_t>(mel_idx * mel_len2);
         std::copy(x.begin() + src_offset, x.begin() + src_offset + mel_len2, mel_spectrogram.begin() + dst_offset);
     }
 
     LOG_INFO("token2wav: mel_spectrogram feat size = {}", mel_spectrogram.size());
+    const auto t_mel_extract_done = Clock::now();
+    LOG_INFO("token2wav perf: mel_extract={:.3f}ms", elapsed_ms(t_diffusion_end, t_mel_extract_done));
 
     // ========== STEP 6: HiFT vocoder ==========
     int mel_bins_ = 80;
@@ -1160,20 +1241,25 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
         std::copy(speech_feat.begin() + src_offset, speech_feat.begin() + src_offset + copied_frames,
                   padded_speech_feat.begin() + dst_offset);
     }
+    const auto t_hift_prepare_done = Clock::now();
 
     const auto hift_part1_input_name = cosyvoice3_hift_part1_model_->GetInputName(0);
     auto speech_feat_tensor = TcimUtil::float_to_tensor_vec(padded_speech_feat);
     CHECK_TCIM_STATUS(hift_part1_input_maps_.at(hift_part1_input_name).Buffer().CopyFromHost(
         speech_feat_tensor.data(), hift_part1_input_maps_.at(hift_part1_input_name).MemSize()));
     CHECK_TCIM_STATUS(cosyvoice3_hift_part1_model_->SetInput(hift_part1_input_name, hift_part1_input_maps_.at(hift_part1_input_name)));
+    const auto t_hift_part1_run_start = Clock::now();
     CHECK_TCIM_STATUS(cosyvoice3_hift_part1_model_->Run());
     CHECK_TCIM_STATUS(cosyvoice3_hift_part1_model_->Sync());
+    const auto t_hift_part1_run_end = Clock::now();
 
     auto hift_part1_output = cosyvoice3_hift_part1_model_->GetDevOutput(cosyvoice3_hift_part1_model_->GetOutputName(0)).ToHost(true);
     const auto hift_part1_output_shape = cosyvoice3_hift_part1_model_->GetOutputInfo(cosyvoice3_hift_part1_model_->GetOutputName(0)).Shape();
     std::vector<float> stft_input = TcimUtil::tensor_to_float_vec(hift_part1_output.Buffer().Data(), TcimUtil::numel(hift_part1_output_shape));
+    const auto t_hift_part1_output_done = Clock::now();
 
     auto stft_frames = librosa::Feature::stft(stft_input, 16, 4, "hann", false, "reflect");
+    const auto t_stft_done = Clock::now();
     const auto hift_part2_input_name = cosyvoice3_hift_part2_model_->GetInputName(0);
     const auto hift_part2_input_shape = cosyvoice3_hift_part2_model_->GetInputInfo(hift_part2_input_name).Shape();
     const int target_frames = static_cast<int>(hift_part2_input_shape[1]);
@@ -1193,8 +1279,10 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     CHECK_TCIM_STATUS(hift_part2_input_maps_.at(hift_part2_input_name).Buffer().CopyFromHost(
         stft_tensor.data(), hift_part2_input_maps_.at(hift_part2_input_name).MemSize()));
     CHECK_TCIM_STATUS(cosyvoice3_hift_part2_model_->SetInput(hift_part2_input_name, hift_part2_input_maps_.at(hift_part2_input_name)));
+    const auto t_hift_part2_run_start = Clock::now();
     CHECK_TCIM_STATUS(cosyvoice3_hift_part2_model_->Run());
     CHECK_TCIM_STATUS(cosyvoice3_hift_part2_model_->Sync());
+    const auto t_hift_part2_run_end = Clock::now();
 
     auto hift_part2_output = cosyvoice3_hift_part2_model_->GetDevOutput(cosyvoice3_hift_part2_model_->GetOutputName(0)).ToHost(true);
     const auto hift_part2_output_shape = cosyvoice3_hift_part2_model_->GetOutputInfo(cosyvoice3_hift_part2_model_->GetOutputName(0)).Shape();
@@ -1204,10 +1292,15 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     if (utterance_audio.size() > expected_samples) {
         utterance_audio.resize(expected_samples);
     }
+    const auto t_end = Clock::now();
 
-    auto t_end = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(t_end - t_start);
-    LOG_INFO("token2wav completed in {} ms", duration.count());
+    LOG_INFO("token2wav HiFT summary: prepare={:.3f}ms, part1_input={:.3f}ms, part1_run_sync={:.3f}ms, part1_output={:.3f}ms, stft={:.3f}ms, part2_input={:.3f}ms, part2_run_sync={:.3f}ms, part2_output_trim={:.3f}ms",
+             elapsed_ms(t_mel_extract_done, t_hift_prepare_done), elapsed_ms(t_hift_prepare_done, t_hift_part1_run_start),
+             elapsed_ms(t_hift_part1_run_start, t_hift_part1_run_end),
+             elapsed_ms(t_hift_part1_run_end, t_hift_part1_output_done), elapsed_ms(t_hift_part1_output_done, t_stft_done),
+             elapsed_ms(t_stft_done, t_hift_part2_run_start), elapsed_ms(t_hift_part2_run_start, t_hift_part2_run_end),
+             elapsed_ms(t_hift_part2_run_end, t_end));
+    LOG_INFO("token2wav completed in {:.3f} ms", elapsed_ms(t_start, t_end));
     
     return utterance_audio;
 }

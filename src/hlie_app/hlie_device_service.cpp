@@ -389,7 +389,7 @@ server_http_res_ptr HLIEDeviceService::acquire_mem(const server_http_req& req) {
 }
 
 int HLIEDeviceService::acquire_mem_on_devices(const std::vector<int>& devices, const uint32_t total_size, const bool exclusive,
-                                              const bool dry_run) {
+                                              const bool dry_run, const std::string& model_name) {
 
     if (devices.empty()) {
         LOG_ERROR("acquire_mem_on_devices: empty device list");
@@ -403,6 +403,7 @@ int HLIEDeviceService::acquire_mem_on_devices(const std::vector<int>& devices, c
     const size_t n = uniq.size();
 
     const uint32_t per_card = (total_size + n - 1) / n; // ceil
+    const bool allow_capacity_limit = n == 1;
 
     // ---------- Phase 1: check ----------
     for (auto dev : uniq) {
@@ -419,7 +420,7 @@ int HLIEDeviceService::acquire_mem_on_devices(const std::vector<int>& devices, c
             return -1;
         }
 
-        if (!check_mem_available(dev, per_card)) {
+        if (!check_mem_available(dev, per_card, allow_capacity_limit, model_name)) {
             LOG_ERROR("device {} insufficient mem for shard {}MB", dev, per_card);
             return -1;
         }
@@ -432,13 +433,60 @@ int HLIEDeviceService::acquire_mem_on_devices(const std::vector<int>& devices, c
     // ---------- Phase 2: commit ----------
     for (auto dev : uniq) {
         auto& info = devices_[dev];
-        info.mem_used += per_card;
+        info.mem_used += allow_capacity_limit ? std::min(per_card, info.mem_total) : per_card;
 
         if (exclusive) {
             info.exclusive = true;
         }
 
         LOG_INFO("device {} acquire {}MB (multi-card), used {}MB", dev, per_card, info.mem_used);
+    }
+
+    return 0;
+}
+
+int HLIEDeviceService::acquire_mem_on_device_count(const size_t device_count, const uint32_t total_size,
+                                                   std::vector<int>& out_devices, const bool dry_run,
+                                                   const std::string& model_name) {
+    out_devices.clear();
+    if (device_count == 0) {
+        LOG_ERROR("acquire_mem_on_device_count: device count is zero");
+        return -1;
+    }
+
+    std::unique_lock lock(mutex_);
+    if (devices_.size() < device_count) {
+        LOG_ERROR("model {} requires {} devices, but only {} devices are configured", model_name, device_count, devices_.size());
+        return -1;
+    }
+
+    const uint32_t per_device = (total_size + device_count - 1) / device_count;
+    const bool allow_capacity_limit = device_count == 1;
+    for (auto& [id, info] : devices_) {
+        refresh_device_usage(id);
+        if (info.exclusive || !check_mem_available(id, per_device, allow_capacity_limit, model_name)) {
+            continue;
+        }
+        out_devices.push_back(id);
+        if (out_devices.size() == device_count) {
+            break;
+        }
+    }
+
+    if (out_devices.size() != device_count) {
+        LOG_ERROR("model {} cannot acquire {} configured devices with {}MB required per device",
+                  model_name, device_count, per_device);
+        out_devices.clear();
+        return -1;
+    }
+
+    if (!dry_run) {
+        for (const int device : out_devices) {
+            auto& info = devices_.at(device);
+            info.mem_used += allow_capacity_limit ? std::min(per_device, info.mem_total) : per_device;
+            LOG_INFO("device {} acquire {}MB for model {}", device,
+                     allow_capacity_limit ? std::min(per_device, info.mem_total) : per_device, model_name);
+        }
     }
 
     return 0;
@@ -509,20 +557,21 @@ void HLIEDeviceService::release_mem_on_devices(const std::vector<int>& devices, 
         }
 
         auto& info = it->second;
+        const uint32_t release_size = n == 1 ? std::min(per_card, info.mem_total) : per_card;
 
-        if (info.mem_used < per_card) {
-            LOG_ERROR("device {} mem underflow: used {} < release {}", dev, info.mem_used, per_card);
+        if (info.mem_used < release_size) {
+            LOG_ERROR("device {} mem underflow: used {} < release {}", dev, info.mem_used, release_size);
 
             info.mem_used = 0;
         } else {
-            info.mem_used -= per_card;
+            info.mem_used -= release_size;
         }
 
         if (exclusive && info.mem_used == 0) {
             info.exclusive = false;
         }
 
-        LOG_INFO("device {} release {}MB, used {}MB", dev, per_card, info.mem_used);
+        LOG_INFO("device {} release {}MB, used {}MB", dev, release_size, info.mem_used);
         refresh_device_usage(dev);
     }
 }
@@ -569,7 +618,8 @@ server_http_res_ptr HLIEDeviceService::handle_devices(const server_http_req& req
     return res;
 }
 
-bool HLIEDeviceService::check_mem_available(const uint32_t device, const uint32_t size) {
+bool HLIEDeviceService::check_mem_available(const uint32_t device, const uint32_t size, const bool allow_capacity_limit,
+                                            const std::string& model_name) {
     auto& sdk = hm_sys_sdk();
     if (!sdk.load()) {
         return false;
@@ -578,6 +628,12 @@ bool HLIEDeviceService::check_mem_available(const uint32_t device, const uint32_
     hm_mem_info mem_info{};
     if (sdk.get_mem_info(device, &mem_info) < 0)
         return false;
+
+    if (allow_capacity_limit && size > mem_info.mem_total) {
+        LOG_WARN("model {} estimated memory {}MB exceeds single device {} capacity {}MB; limit estimate to device capacity and continue availability check",
+                 model_name, size, device, mem_info.mem_total);
+        return mem_info.mem_avail >= mem_info.mem_total;
+    }
 
     return mem_info.mem_avail > size + BACK_UP_MEM;
 }

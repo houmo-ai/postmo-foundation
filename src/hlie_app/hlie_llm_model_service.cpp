@@ -150,9 +150,6 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     }
 
     auto devices = model_info.get_devices();
-    if (model_info.get_device_num() == 4) { // 4 chips 目前特殊处理
-        devices = "0,1,2,3";
-    }
 
     LOG_INFO("LLM init with devices: {}", devices);
 
@@ -192,21 +189,27 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
                 return -1;
             }
 
-            if (device_service_->acquire_mem_on_devices(devices_, mem_est) < 0) {
+            if (devices_.size() != static_cast<size_t>(model_info.get_device_num())) {
+                LOG_ERROR("LLM model {} requires {} devices, but {} devices were configured",
+                          model_info.get_model_name(), model_info.get_device_num(), devices_.size());
+                return -1;
+            }
+
+            if (device_service_->acquire_mem_on_devices(devices_, mem_est, false, false, model_info.get_model_name()) < 0) {
                 return -1;
             }
 
             HlieUtil::set_env("HOUMO_DEVICE_ID", devices);
             LOG_INFO("LLM acquire_mem_on_devices using model specific device: {}", devices);
         } else {
-            uint32_t device;
-            if (device_service_->acquire_mem(mem_est, device) < 0) {
+            if (device_service_->acquire_mem_on_device_count(model_info.get_device_num(), mem_est, devices_, false,
+                                                             model_info.get_model_name()) < 0) {
                 return -1;
             }
 
-            devices_.push_back(device);
-            HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(device));
-            LOG_INFO("LLM acquire_mem using model specific device: {}", device);
+            devices = HlieUtil::join_devices(devices_);
+            HlieUtil::set_env("HOUMO_DEVICE_ID", devices);
+            LOG_INFO("LLM acquired {} device(s): {}", devices_.size(), devices);
         }
     }
 

@@ -150,6 +150,7 @@ package_service() {
     cp build/bin/Release/hlie-*.dll "$release_dir/bin/"
     cp third_party/llama.cpp_houmo/bin/*.dll "$release_dir/bin/"
     cp config/win/sys.cfg "$release_dir/config/"
+    cp config/win/memory_estimates.json "$release_dir/config/"
 
     cp third_party/sd.cpp/bin/stable-diffusion.dll "$release_dir/bin/"
     cp third_party/whisper.cpp/bin/whisper.dll "$release_dir/bin/"

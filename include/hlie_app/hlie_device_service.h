@@ -36,7 +36,10 @@ public:
 
     int acquire_mem(uint32_t size, uint32_t& out_device, bool dry_run = false);
     server_http_res_ptr acquire_mem(const server_http_req& req);
-    int acquire_mem_on_devices(const std::vector<int>& devices, uint32_t total_size, bool exclusive = false, bool dry_run = false);
+    int acquire_mem_on_devices(const std::vector<int>& devices, uint32_t total_size, bool exclusive = false, bool dry_run = false,
+                               const std::string& model_name = "");
+    int acquire_mem_on_device_count(size_t device_count, uint32_t total_size, std::vector<int>& out_devices, bool dry_run = false,
+                                    const std::string& model_name = "");
 
     int get_device_infos(std::vector<HLIEDeviceInfo>& device_infos);
 
@@ -46,7 +49,8 @@ public:
 
     // API-HANDLERS
     server_http_res_ptr handle_devices(const server_http_req& req);
-    static bool check_mem_available(uint32_t device, uint32_t size);
+    static bool check_mem_available(uint32_t device, uint32_t size, bool allow_capacity_limit = false,
+                                    const std::string& model_name = "");
 
 private:
     int acquire_card_first(uint32_t size, uint32_t& out_device, bool dry_run);
