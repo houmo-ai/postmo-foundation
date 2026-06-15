@@ -873,7 +873,7 @@ std::vector<int> HLIECosyVoiceModel::llm_inference(const std::vector<int>& text,
 
 std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, const std::vector<int>& prompt_token,
                                                  const std::vector<float>& prompt_feat, const std::vector<float>& embedding,
-                                                 float speed) const {
+                                                 float speed, int steps) const {
 
     using Clock = std::chrono::steady_clock;
     const auto elapsed_ms = [](const Clock::time_point begin, const Clock::time_point end) {
@@ -885,14 +885,17 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
     constexpr int flow_mel_bins_ = 80;
     constexpr int kTokenMelRatio = 2;
     constexpr float kInferenceCfgRate = 0.7f;
-    constexpr int kNumSteps = 10; // Number of diffusion steps
+    if (steps <= 0) {
+        throw std::invalid_argument("token2wav steps must be positive");
+    }
 
     // ========== STEP 1: Concatenate prompt_token + token ==========
     std::vector<int> concat_token = prompt_token;
     concat_token.insert(concat_token.end(), token.begin(), token.end());
     int concat_token_len = static_cast<int>(concat_token.size());
 
-    LOG_INFO("token2wav: concat_token_len={}, prompt_token_len={}, token_len={}", concat_token_len, prompt_token.size(), token.size());
+    LOG_INFO("token2wav: concat_token_len={}, prompt_token_len={}, token_len={}, steps={}", concat_token_len, prompt_token.size(),
+             token.size(), steps);
 
     // ========== STEP 2: Token embedding lookup ==========
     auto token_emb_tensor = TcimUtil::embedding_lookup(*flow_input_embedding_, concat_token);
@@ -1091,7 +1094,7 @@ std::vector<float> HLIECosyVoiceModel::token2wav(const std::vector<int>& token, 
 
     LOG_DEBUG("x 随机噪声生成完毕, shape : {}x{}, size{}", flow_mel_bins_, flow_seq_len, x.size());
 
-    const std::vector<float> t_span = BuildCosineTimeSpan(kNumSteps);
+    const std::vector<float> t_span = BuildCosineTimeSpan(steps);
     float t = t_span[0];
     float dt = t_span[1] - t_span[0];
 

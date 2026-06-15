@@ -64,6 +64,7 @@ public:
 
     bool is_embedding_model() const;
     bool is_rerank_model() const;
+    bool is_mtp() const;
 
     // ===== 模型类型 =====
     bool is_llm_ = true;

@@ -131,6 +131,8 @@ void Session::handleTextMessage(const std::string_view msg) {
                             turn_detection.value("prefix_padding_ms", prefix_padding_ms_);
                         silence_duration_ms_ =
                             turn_detection.value("silence_duration_ms", silence_duration_ms_);
+                        max_turn_duration_ms_ =
+                            turn_detection.value("max_turn_duration_ms", max_turn_duration_ms_);
                     }
                     resetTurnState();
                 }
@@ -145,6 +147,8 @@ void Session::handleTextMessage(const std::string_view msg) {
                             turn_detection.value("prefix_padding_ms", prefix_padding_ms_);
                         silence_duration_ms_ =
                             turn_detection.value("silence_duration_ms", silence_duration_ms_);
+                        max_turn_duration_ms_ =
+                            turn_detection.value("max_turn_duration_ms", max_turn_duration_ms_);
                     }
                     resetTurnState();
                 }
@@ -310,7 +314,8 @@ void Session::sendSessionEvent(const std::string& type) const {
                             ? json{{"type", "server_vad"},
                                    {"threshold", vad_threshold_},
                                    {"prefix_padding_ms", prefix_padding_ms_},
-                                   {"silence_duration_ms", silence_duration_ms_}}
+                                   {"silence_duration_ms", silence_duration_ms_},
+                                   {"max_turn_duration_ms", max_turn_duration_ms_}}
                             : json(nullptr)}}}}}}}}
                 .dump());
 }

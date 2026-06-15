@@ -68,6 +68,13 @@ namespace {
     }
 
     void InitializeWindowsRuntimeContext() {
+        std::vector<char> current_dir(MAX_PATH);
+        if (std::getenv("HLIECPP_WIN_D") &&
+            GetCurrentDirectoryA(static_cast<DWORD>(current_dir.size()), current_dir.data()) != 0 &&
+            GetEnvironmentVariableA("HLIECPP_WORKING_DIR", nullptr, 0) == 0) {
+            SetEnvironmentVariableA("HLIECPP_WORKING_DIR", current_dir.data());
+        }
+
         const auto executable_dir = GetExecutableDirectory();
         if (!executable_dir.empty()) {
             SetCurrentDirectoryA(executable_dir.c_str());

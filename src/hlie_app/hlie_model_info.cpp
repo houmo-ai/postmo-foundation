@@ -339,6 +339,10 @@ bool HLIEModelInfo::is_rerank_model() const {
     return HlieUtil::contains_ignore_case(model_name_, "rerank");
 }
 
+bool HLIEModelInfo::is_mtp() const {
+    return HlieUtil::contains_ignore_case(model_name_, "mtp");
+}
+
 void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, const std::string& dir) {
     if (!std::filesystem::exists(dir)) {
         return;

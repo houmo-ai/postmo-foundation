@@ -23,6 +23,7 @@ struct CosyVoiceRequest {
     std::string content;
     std::string prompt_text;
     std::string prompt_wav_path;
+    int steps = 10;
 };
 
 struct CosyVoiceResult {

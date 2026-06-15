@@ -194,17 +194,27 @@ int HLIEWinAppController::initialize() {
         instance_id = args.at("--instance_id");
     }
 
+    const auto boot_log_dir = program_dir + "\\boot_log";
+    std::error_code boot_log_ec;
+    std::filesystem::create_directories(boot_log_dir, boot_log_ec);
     const auto boot_log_file = program_dir + "\\boot_log\\service_boot-" + instance_id + ".log";
     const auto boot_logger = HLIELogger::create_logger(boot_log_file, HLIE_BOOT, "debug");
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
+    boot_logger->info("HLIEWinAppController initialize: instance_id={}, pid={}, program_path={}, program_dir={}",
+                      instance_id, GetCurrentProcessId(), program_path, program_dir);
+    for (const auto& [key, val] : args) {
+        boot_logger->info("program arg: {}={}", key, val);
+    }
 
     const auto datetime = HlieUtil::get_datetime_str();
     HlieUtil::set_env("TCIM_LOG_FILE", program_dir + "\\boot_log\\tcim-" + datetime + "-" + instance_id + ".log");
+    boot_logger->info("TCIM_LOG_FILE={}", std::getenv("TCIM_LOG_FILE") ? std::getenv("TCIM_LOG_FILE") : "");
 
     if (const auto config_path = program_dir + "..\\config\\sys.cfg"; config_services->parse(config_path) < 0) {
-        boot_logger->error("sys_config parsed failed");
+        boot_logger->error("sys_config parsed failed: {}", config_path);
         return -5;
     }
+    boot_logger->info("sys_config parsed successfully: {}", config_services->get_config_path());
 
     const std::string log_location = config_services->get_string("log", "location");
     if (log_location.empty()) {
@@ -233,6 +243,11 @@ int HLIEWinAppController::initialize() {
     spdlog::set_default_logger(logger);
 
     LOG_INFO(HLIECpp);
+    LOG_INFO("HLIEWinAppController initialized logger: instance_id={}, pid={}, log_file={}, boot_log_file={}",
+             instance_id, GetCurrentProcessId(), log_file, boot_log_file);
+    for (const auto& [key, val] : args) {
+        LOG_INFO("program arg: {}={}", key, val);
+    }
 
     const auto access_log = HlieUtil::join_paths(log_location, "access-" + instance_id + ".log");
     const auto access_logger = HLIELogger::create_logger(access_log, HLIE_ACCESS, "debug");
@@ -244,18 +259,23 @@ int HLIEWinAppController::initialize() {
     const std::string cur_model = config_services->get_string("model", "cur_model", "", instance_id != "0");
     if (cur_model.empty()) {
         boot_logger->error("WINSERVICE cannot found model, cur_model is empty");
+        LOG_ERROR("WINSERVICE cannot found model, cur_model is empty, instance_id={}", instance_id);
         return -2;
     }
+    LOG_INFO("HLIEWinAppController cur_model={}, instance_id={}", cur_model, instance_id);
 
     if (initialize_ex(program_path) < 0) {
+        LOG_ERROR("initialize_ex failed: instance_id={}, program_path={}", instance_id, program_path);
         return -3;
     }
 
     workflow_ = std::make_shared<HLIEWorkflow>();
     if (auto res = workflow_->initialize(cur_model, program_path); res < 0) {
+        LOG_ERROR("workflow initialize failed: instance_id={}, result={}", instance_id, res);
         return -1;
     } else {
         zero_load_ = 8 == res;
+        LOG_INFO("workflow initialize succeeded: instance_id={}, result={}, zero_load={}", instance_id, res, zero_load_);
     }
 
     web_service_ = std::make_shared<HLIEWebService>(workflow_);

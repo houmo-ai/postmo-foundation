@@ -7,14 +7,15 @@
 #include <server/info_printer.h>
 #include <unordered_set>
 
-#include "hlie_app/hlie_model_info.h"
 #include "hlie_app/hlie_device_service.h"
+#include "hlie_app/hlie_model_info.h"
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_singleton.h"
 #include "hlie_base/hlie_util.h"
 #include "spdlog/fmt/bundled/base.h"
+#include "speculative.h"
 
 namespace {
     void llama_log_cb(ggml_log_level level, const char * log, void * /*user_data*/) {
@@ -127,6 +128,12 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         if (model_info.is_rerank_model()) {
             params_.pooling_type = LLAMA_POOLING_TYPE_RANK;
         }
+    }
+
+    if (model_info.is_mtp()) {
+        LOG_INFO("LLM model {} enables MTP speculative decoding", model_info.get_model_name());
+        params_.speculative.draft.n_max = 4;
+        params_.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
     }
 
     params_.model.name = model_info.get_model_name();

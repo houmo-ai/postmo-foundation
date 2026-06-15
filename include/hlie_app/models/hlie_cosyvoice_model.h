@@ -228,10 +228,11 @@ public:
      * @param prompt_feat Prompt acoustic features (mel spectrogram) [1, 80, prompt_mel_len]
      * @param embedding Speaker embedding for flow decoder [embedding_dim]
      * @param speed Playback speed ratio (default: 1.0)
+     * @param steps Number of flow-matching diffusion steps
      * @return Generated waveform as float vector
      */
     std::vector<float> token2wav(const std::vector<int>& token, const std::vector<int>& prompt_token, const std::vector<float>& prompt_feat,
-                                 const std::vector<float>& embedding, float speed = 1.0) const;
+                                 const std::vector<float>& embedding, float speed = 1.0, int steps = 10) const;
 
 
     /**

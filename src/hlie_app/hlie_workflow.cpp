@@ -58,6 +58,17 @@ namespace {
         return normalized;
     }
 
+    template <typename Handler>
+    server_http_res_ptr call_llm_service(const std::shared_ptr<LLModelService>& service, Handler&& handler) {
+        auto res = std::make_unique<server_res_generator_light>();
+        if (!service || service->get_state() != SERVER_STATE_READY) {
+            res->error(format_error_response("LLM model is not available for now.", ERROR_TYPE_UNAVAILABLE));
+            return res;
+        }
+
+        return handler(*service);
+    }
+
     std::vector<HLIEModelInfo> load_model_info_files_from_directory(const std::string& directory_path) {
         std::vector<HLIEModelInfo> model_infos;
 
@@ -792,12 +803,14 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
                 args_for_sub_process.push_back(val);
             }
 
-            if (auto pid = Singleton<HLIEProcessManager>::instance()->create_process(program_path_, args_for_sub_process, {model_name},
-                                                                                     instance_id);
-                pid == 0 || pid == -1) {
+            process_id = Singleton<HLIEProcessManager>::instance()->create_process(
+                program_path_, args_for_sub_process, {model_name}, instance_id);
+            if (process_id == 0 || process_id == static_cast<ProcessID>(-1)) {
                 LOG_ERROR("Failed to start process for instance_id[{}]", instance_id);
+                res->error(format_error_response_ex("failed to start model subprocess", ERROR_TYPE_SERVER, 80001));
+                return res;
             } else {
-                LOG_INFO("Started process PID[{}] instance_id[{}]", pid, instance_id);
+                LOG_INFO("Started process PID[{}] instance_id[{}]", process_id, instance_id);
             }
         }
     } else if (model_type == SD) {
@@ -1194,6 +1207,16 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
 
 std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
     auto make_handler = [this](auto func) { return [this, func](const server_http_req& req) { return (this->*func)(req); }; };
+    auto route_llm = [this](const server_http_req& req, auto handler, const std::string& method = "POST") -> server_http_res_ptr {
+        return route_llm_request(
+            req,
+            [this, handler](const server_http_req& routed_req) {
+                return call_llm_service(llm_model_service_, [&](const LLModelService& service) {
+                    return (service.*handler)(routed_req);
+                });
+            },
+            method);
+    };
     return {{
                 {"/health", "/v1/health"},
                 GET,
@@ -1209,9 +1232,8 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
             {
                 {"/v1/chat/completions", "/chat/completions", "/api/chat"},
                 POST,
-                [this](const server_http_req& req) -> server_http_res_ptr {
-                    return route_llm_request(
-                        req, std::bind(&LLModelService::handle_chat_completions, llm_model_service_, std::placeholders::_1));
+                [this, route_llm](const server_http_req& req) -> server_http_res_ptr {
+                    return route_llm(req, &LLModelService::handle_chat_completions);
                 },
                 true, // 需要模型Running
                 LLM // LLM模型类型
@@ -1229,7 +1251,7 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
             {
                 {"/v1/audio/transcriptions"},
                 POST,
-                [this](const server_http_req& req) -> server_http_res_ptr {
+                [this, route_llm](const server_http_req& req) -> server_http_res_ptr {
                     const json body = json::parse(req.body);
                     const std::string model_name = json_value(body, "model", std::string());
                     if (model_name.empty() || HlieUtil::contains_ignore_case(model_name, WHISPER)) {
@@ -1243,9 +1265,7 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                         return whisper_model_service_->handle_transcriptions(req);
                     }
 
-                    return route_llm_request(req, [this](const server_http_req& routed_req) {
-                        return llm_model_service_->handle_transcriptions(routed_req);
-                    });
+                    return route_llm(req, &LLModelService::handle_transcriptions);
                 },
                 false,
                 WHISPER, // 生图模型类型
@@ -1278,9 +1298,8 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
             {
                 {"/v1/completions"},
                 POST,
-                [this](const server_http_req& req) -> server_http_res_ptr {
-                    return route_llm_request(
-                        req, std::bind(&LLModelService::handle_completions_oai, llm_model_service_, std::placeholders::_1));
+                [this, route_llm](const server_http_req& req) -> server_http_res_ptr {
+                    return route_llm(req, &LLModelService::handle_completions_oai);
                 },
                 true,
                 LLM // LLM模型类型
@@ -1288,9 +1307,8 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
             {
                 {"/completion", "/completions"},
                 POST,
-                [this](const server_http_req& req) -> server_http_res_ptr {
-                    return route_llm_request(
-                        req, std::bind(&LLModelService::handle_completions, llm_model_service_, std::placeholders::_1));
+                [this, route_llm](const server_http_req& req) -> server_http_res_ptr {
+                    return route_llm(req, &LLModelService::handle_completions);
                 },
                 true,
                 LLM // LLM模型类型
@@ -1298,8 +1316,8 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
             {
                 {"/v1/responses", "/responses"},
                 POST,
-                [this](const server_http_req& req) -> server_http_res_ptr {
-                    return route_llm_request(req, std::bind(&LLModelService::handle_responses, llm_model_service_, std::placeholders::_1));
+                [this, route_llm](const server_http_req& req) -> server_http_res_ptr {
+                    return route_llm(req, &LLModelService::handle_responses);
                 },
                 true,
                 LLM // LLM模型类型
@@ -1307,9 +1325,8 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
             {
                 {"/embedding", "/embeddings"},
                 POST,
-                [this](const server_http_req& req) -> server_http_res_ptr {
-                    return route_llm_request(
-                        req, std::bind(&LLModelService::handle_embeddings, llm_model_service_, std::placeholders::_1));
+                [this, route_llm](const server_http_req& req) -> server_http_res_ptr {
+                    return route_llm(req, &LLModelService::handle_embeddings);
                 },
                 true,
                 LLM // LLM模型类型
@@ -1317,9 +1334,8 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
             {
                 {"/v1/embeddings"},
                 POST,
-                [this](const server_http_req& req) -> server_http_res_ptr {
-                    return route_llm_request(
-                        req, std::bind(&LLModelService::handle_embeddings_oai, llm_model_service_, std::placeholders::_1));
+                [this, route_llm](const server_http_req& req) -> server_http_res_ptr {
+                    return route_llm(req, &LLModelService::handle_embeddings_oai);
                 },
                 true,
                 LLM // LLM模型类型
@@ -1327,9 +1343,8 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
             {
                 {"/rerank", "/reranking", "/v1/rerank", "/v1/reranking"},
                 POST,
-                [this](const server_http_req& req) -> server_http_res_ptr {
-                    return route_llm_request(req,
-                                             std::bind(&LLModelService::handle_rerank, llm_model_service_, std::placeholders::_1));
+                [this, route_llm](const server_http_req& req) -> server_http_res_ptr {
+                    return route_llm(req, &LLModelService::handle_rerank);
                 },
                 true,
                 LLM // LLM模型类型
@@ -1337,7 +1352,7 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
             {
                 {"/props"},
                 GET,
-                [this](const server_http_req& req) -> server_http_res_ptr {
+                [this, route_llm](const server_http_req& req) -> server_http_res_ptr {
                     if (req.get_param("model").empty()) {
                         if (llm_model_service_) {
                             return llm_model_service_->handle_props(req);
@@ -1360,12 +1375,7 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                         return res;
                     }
 
-                    return route_llm_request(
-                        req,
-                        [this](const server_http_req& routed_req) {
-                            return llm_model_service_->handle_props(routed_req);
-                        },
-                        "GET");
+                    return route_llm(req, &LLModelService::handle_props, "GET");
                 },
                 true,
                 LLM // LLM模型类型

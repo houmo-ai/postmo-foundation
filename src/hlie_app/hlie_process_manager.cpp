@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
 
@@ -17,6 +18,49 @@ HLIE_NAMESPACE_BEGIN
 namespace {
 #ifdef _WIN32
     constexpr DWORD INVALID_PID = 0;
+
+    std::string quote_windows_argument(const std::string& argument) {
+        if (argument.empty()) {
+            return "\"\"";
+        }
+        if (argument.find_first_of(" \t\n\v\"") == std::string::npos) {
+            return argument;
+        }
+
+        std::string quoted{"\""};
+        size_t backslash_count = 0;
+        for (const char ch : argument) {
+            if (ch == '\\') {
+                ++backslash_count;
+                continue;
+            }
+            if (ch == '"') {
+                quoted.append(backslash_count * 2 + 1, '\\');
+                quoted.push_back('"');
+            } else {
+                quoted.append(backslash_count, '\\');
+                quoted.push_back(ch);
+            }
+            backslash_count = 0;
+        }
+        quoted.append(backslash_count * 2, '\\');
+        quoted.push_back('"');
+        return quoted;
+    }
+
+    std::string windows_error_message(const DWORD error) {
+        char* message = nullptr;
+        const DWORD size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                                          nullptr, error, 0, reinterpret_cast<char*>(&message), 0, nullptr);
+        std::string result = size && message ? std::string(message, size) : "unknown error";
+        if (message) {
+            LocalFree(message);
+        }
+        while (!result.empty() && (result.back() == '\r' || result.back() == '\n')) {
+            result.pop_back();
+        }
+        return result;
+    }
 #else
     constexpr pid_t INVALID_PID = static_cast<pid_t>(-1);
 #endif
@@ -49,34 +93,73 @@ ProcessID HLIEProcessManager::create_process(const std::string& exe_path,
 #ifdef _WIN32
     // Windows: 构造命令行，程序路径用双引号包起来，防止路径里有空格
     std::stringstream ss;
-    ss << "\"" << exe_path << "\"";
+    ss << quote_windows_argument(exe_path);
     for (const auto& arg : args) {
-        ss << " " << arg;
+        ss << " " << quote_windows_argument(arg);
     }
     std::string cmd_line = ss.str();
+    const auto exe_directory = std::filesystem::path(exe_path).parent_path().string();
+    char inherited_working_directory[MAX_PATH] = {};
+    if (const DWORD size = GetEnvironmentVariableA("HLIECPP_WORKING_DIR", inherited_working_directory, MAX_PATH);
+        size == 0 || size >= MAX_PATH || GetFileAttributesA(inherited_working_directory) == INVALID_FILE_ATTRIBUTES) {
+        if (GetCurrentDirectoryA(MAX_PATH, inherited_working_directory) == 0 ||
+            GetFileAttributesA(inherited_working_directory) == INVALID_FILE_ATTRIBUTES) {
+            strncpy_s(inherited_working_directory, exe_directory.c_str(), _TRUNCATE);
+        }
+    }
+    const std::string working_directory = inherited_working_directory;
+    const DWORD original_path_size = GetEnvironmentVariableA("PATH", nullptr, 0);
+    std::string original_path;
+    if (original_path_size > 0) {
+        original_path.resize(original_path_size);
+        GetEnvironmentVariableA("PATH", original_path.data(), original_path_size);
+        if (!original_path.empty() && original_path.back() == '\0') {
+            original_path.pop_back();
+        }
+    }
+    SetEnvironmentVariableA("PATH", (working_directory + ";" + original_path).c_str());
 
     STARTUPINFOA si = { sizeof(si) };
-    PROCESS_INFORMATION pi;
+    PROCESS_INFORMATION pi{};
 
     const BOOL ok = CreateProcessA(
-        nullptr,                 // lpApplicationName
+        exe_path.c_str(),        // lpApplicationName
         cmd_line.data(),         // lpCommandLine
         nullptr,                 // lpProcessAttrs
         nullptr,                 // lpThreadAttrs
         FALSE,                   // bInheritHandles
         CREATE_NEW_PROCESS_GROUP, // dwCreationFlags
         nullptr,                 // lpEnvironment
-        nullptr,                 // lpCurrentDir
+        working_directory.empty() ? nullptr : working_directory.c_str(), // lpCurrentDir
         &si,
         &pi
     );
+    if (original_path_size > 0) {
+        SetEnvironmentVariableA("PATH", original_path.c_str());
+    } else {
+        SetEnvironmentVariableA("PATH", nullptr);
+    }
 
     if (!ok) {
-        LOG_ERROR("Failed to CreateProcessA with cmd {}", cmd_line);
+        const DWORD error = GetLastError();
+        LOG_ERROR("Failed to CreateProcessA with cmd {}, error {} ({})", cmd_line, error, windows_error_message(error));
         return 0;
     }
 
     CloseHandle(pi.hThread);
+
+    if (WaitForSingleObject(pi.hProcess, 100) == WAIT_OBJECT_0) {
+        DWORD exit_code = 0;
+        if (!GetExitCodeProcess(pi.hProcess, &exit_code)) {
+            exit_code = GetLastError();
+        }
+        LOG_ERROR("Child process PID[{}] exited immediately with code {}, cmd {}", pi.dwProcessId, exit_code, cmd_line);
+        CloseHandle(pi.hProcess);
+        return 0;
+    }
+
+    LOG_INFO("Created child process PID[{}] instance_id[{}] cwd={} exe_dir={} cmd={}",
+             pi.dwProcessId, instance_id, working_directory, exe_directory, cmd_line);
 
     ProcessInfo info;
     info.uuid = HlieUtil::uuid();
@@ -323,6 +406,9 @@ void HLIEProcessManager::monitor_processes() {
         }
         DWORD code = STILL_ACTIVE;
         if (!GetExitCodeProcess(info.process_handle, &code)) {
+            const DWORD error = GetLastError();
+            LOG_ERROR("Failed to query child process PID[{}] instance_id[{}], error {} ({})",
+                      info.process_id, info.instance_id, error, windows_error_message(error));
             // 无法获取，认为已结束
             info.is_running = false;
             CloseHandle(info.process_handle);
@@ -331,6 +417,8 @@ void HLIEProcessManager::monitor_processes() {
         } else {
             info.is_running = (code == STILL_ACTIVE);
             if (!info.is_running) {
+                LOG_ERROR("Child process PID[{}] instance_id[{}] exited with code {}, cmd {}",
+                          info.process_id, info.instance_id, code, info.params);
                 CloseHandle(info.process_handle);
                 info.process_handle = nullptr;
                 to_remove.push_back(kv.first);

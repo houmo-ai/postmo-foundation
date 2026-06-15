@@ -1146,7 +1146,8 @@ std::vector<float> CosyVoiceModelService::speech(const CosyVoiceRequest& request
 
             // Run token2wav (flow decoder)
             std::vector<float> utterance_audio = cosyvoice_model_->token2wav(this_tts_speech_token, model_input.flow_prompt_speech_token,
-                                                                             model_input.prompt_speech_feat, model_input.embedding, 1.0f);
+                                                                             model_input.prompt_speech_feat, model_input.embedding, 1.0f,
+                                                                             request.steps);
 
             // Clean up
             {
@@ -1183,6 +1184,19 @@ void CosyVoiceModelService::handle_speech(const httplib::Request& req, httplib::
         cosy_voice_request.content = content;
         cosy_voice_request.prompt_text = json_value(body, "prompt_text", std::string());
         cosy_voice_request.prompt_wav_path = json_value(body, "prompt_wav_path", std::string());
+        if (body.contains("steps")) {
+            if (!body["steps"].is_number_integer()) {
+                res.status = 400;
+                res.set_content(R"({"error":"steps must be an integer between 5 and 10"})", "application/json");
+                return;
+            }
+            cosy_voice_request.steps = body["steps"].get<int>();
+            if (cosy_voice_request.steps < 3 || cosy_voice_request.steps > 10) {
+                res.status = 400;
+                res.set_content(R"({"error":"steps must be between 3 and 10"})", "application/json");
+                return;
+            }
+        }
 
         if (auto [success, wav, error_message, predicted_ms] = speech_sync(cosy_voice_request); !success) {
             // handle failure or early abort
