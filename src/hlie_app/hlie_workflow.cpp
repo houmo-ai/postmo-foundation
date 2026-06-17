@@ -677,10 +677,20 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         std::unique_lock lock(mutex_);
         if (devices == "undefined") {
             std::vector<int> devices_vec;
-            if (device_service_->acquire_mem_on_device_count(required_device_num, mem_est, devices_vec, true, model_name) < 0) {
-                res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
-                                                     ERROR_TYPE_UNAVAILABLE, 80004));
-                return res;
+            if (required_device_num == 1) {
+                uint32_t device = 0;
+                if (device_service_->acquire_mem(mem_est, device, true, true, model_name) < 0) {
+                    res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
+                                                         ERROR_TYPE_UNAVAILABLE, 80004));
+                    return res;
+                }
+                devices_vec.push_back(static_cast<int>(device));
+            } else {
+                if (device_service_->acquire_mem_on_device_count(required_device_num, mem_est, devices_vec, true, model_name) < 0) {
+                    res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
+                                                         ERROR_TYPE_UNAVAILABLE, 80004));
+                    return res;
+                }
             }
             devices = HlieUtil::join_devices(devices_vec);
         } else {
@@ -1698,7 +1708,7 @@ std::vector<server_model_meta> HLIEWorkflow::get_all_model_metas() {
     return result;
 }
 
-void HLIEWorkflow::register_model_instance(HLIEModelInfo model_info) {
+void HLIEWorkflow::register_model_instance(HLIEModelInfo& model_info) {
     ModelInstance model_instance;
     const std::string model_key = HLIEModelInfo::build_model_key(model_info);
 
@@ -1710,7 +1720,7 @@ void HLIEWorkflow::register_model_instance(HLIEModelInfo model_info) {
     model_instance.path = model_info.get_model_path();
     model_instance.path_mmproj = model_info.get_mm_proj_path();
     model_instance.meta = std::move(meta);
-    model_instance.model_info = std::move(model_info);
+    model_instance.model_info = model_info;
 
     model_instances_[model_key] = std::move(model_instance);
     const auto& registered = model_instances_.at(model_key);

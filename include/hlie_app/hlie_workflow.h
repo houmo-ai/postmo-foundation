@@ -103,7 +103,7 @@ private:
 
     std::optional<server_model_meta> get_model_meta(const std::string& name);
     std::optional<std::reference_wrapper<ModelInstance>> get_model_inst(const std::string& model_name);
-    void register_model_instance(HLIEModelInfo model_info);
+    void register_model_instance(HLIEModelInfo& model_info);
 
     static int generate_instance_id() {
         static std::atomic counter{0};

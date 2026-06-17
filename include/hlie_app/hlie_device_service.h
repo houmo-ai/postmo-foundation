@@ -34,7 +34,8 @@ public:
 
     int init();
 
-    int acquire_mem(uint32_t size, uint32_t& out_device, bool dry_run = false);
+    int acquire_mem(uint32_t size, uint32_t& out_device, bool dry_run = false, bool allow_capacity_limit = false,
+                    const std::string& model_name = "");
     server_http_res_ptr acquire_mem(const server_http_req& req);
     int acquire_mem_on_devices(const std::vector<int>& devices, uint32_t total_size, bool exclusive = false, bool dry_run = false,
                                const std::string& model_name = "");
@@ -53,15 +54,20 @@ public:
                                     const std::string& model_name = "");
 
 private:
-    int acquire_card_first(uint32_t size, uint32_t& out_device, bool dry_run);
-    int acquire_mem_first(uint32_t size, uint32_t& out_device, bool dry_run);
-    int acquire_exclusive(uint32_t size, uint32_t& out_device, bool dry_run);
-    int try_idle_first(uint32_t size, uint32_t& out_device, bool dry_run);
-    int try_used_first(uint32_t size, uint32_t& out_device, bool dry_run);
+    int acquire_card_first(uint32_t size, uint32_t& out_device, bool dry_run, bool allow_capacity_limit,
+                           const std::string& model_name);
+    int acquire_mem_first(uint32_t size, uint32_t& out_device, bool dry_run, bool allow_capacity_limit,
+                          const std::string& model_name);
+    int acquire_exclusive(uint32_t size, uint32_t& out_device, bool dry_run, bool allow_capacity_limit,
+                          const std::string& model_name);
+    int try_idle_first(uint32_t size, uint32_t& out_device, bool dry_run, bool allow_capacity_limit,
+                       const std::string& model_name);
+    int try_used_first(uint32_t size, uint32_t& out_device, bool dry_run, bool allow_capacity_limit,
+                       const std::string& model_name);
 
     std::map<int, HLIEDeviceInfo> devices_;
-    MemApplyMode mode_;
-    int total_mem_;
+    MemApplyMode mode_ = MemApplyMode::PreferIdleCard;
+    int total_mem_ = 0;
     std::mutex mutex_;
 };
 

@@ -254,7 +254,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
 
     LOG_INFO("LLM load model done");
 
-    model_key_ = model_info.model_key_;
+    model_key_ = model_info.model_key_.empty() ? HLIEModelInfo::build_model_key(model_info) : model_info.model_key_;
     llama_server_routes_->update_meta(*llama_server_);
     is_ready.store(true);
     LOG_DEBUG("LLM init done");

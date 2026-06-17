@@ -346,7 +346,8 @@ int HLIEDeviceService::init() {
 }
 
 
-int HLIEDeviceService::acquire_mem(uint32_t size, uint32_t& out_device, bool dry_run) {
+int HLIEDeviceService::acquire_mem(uint32_t size, uint32_t& out_device, bool dry_run, bool allow_capacity_limit,
+                                   const std::string& model_name) {
     std::unique_lock lock(mutex_);
     LOG_INFO("acquire_mem");
     for (auto [dev, _] : devices_) {
@@ -356,11 +357,11 @@ int HLIEDeviceService::acquire_mem(uint32_t size, uint32_t& out_device, bool dry
 
     switch (mode_) {
     case MemApplyMode::PreferIdleCard:
-        return acquire_card_first(size, out_device, dry_run);
+        return acquire_card_first(size, out_device, dry_run, allow_capacity_limit, model_name);
     case MemApplyMode::PreferUsedCard:
-        return acquire_mem_first(size, out_device, dry_run);
+        return acquire_mem_first(size, out_device, dry_run, allow_capacity_limit, model_name);
     case MemApplyMode::ExclusiveCard:
-        return acquire_exclusive(size, out_device, dry_run);
+        return acquire_exclusive(size, out_device, dry_run, allow_capacity_limit, model_name);
     default:
         return -1;
     }
@@ -638,28 +639,31 @@ bool HLIEDeviceService::check_mem_available(const uint32_t device, const uint32_
     return mem_info.mem_avail > size + BACK_UP_MEM;
 }
 
-int HLIEDeviceService::acquire_card_first(const uint32_t size, uint32_t& out_device, const bool dry_run) {
-    if (try_idle_first(size, out_device, dry_run) == 0)
+int HLIEDeviceService::acquire_card_first(const uint32_t size, uint32_t& out_device, const bool dry_run,
+                                          const bool allow_capacity_limit, const std::string& model_name) {
+    if (try_idle_first(size, out_device, dry_run, allow_capacity_limit, model_name) == 0)
         return 0;
 
     LOG_INFO("CARD_FIRST fallback to used cards");
-    return try_used_first(size, out_device, dry_run);
+    return try_used_first(size, out_device, dry_run, allow_capacity_limit, model_name);
 }
 
-int HLIEDeviceService::acquire_mem_first(const uint32_t size, uint32_t& out_device, const bool dry_run) {
-    if (try_used_first(size, out_device, dry_run) == 0)
+int HLIEDeviceService::acquire_mem_first(const uint32_t size, uint32_t& out_device, const bool dry_run,
+                                         const bool allow_capacity_limit, const std::string& model_name) {
+    if (try_used_first(size, out_device, dry_run, allow_capacity_limit, model_name) == 0)
         return 0;
 
     LOG_INFO("MEM_FIRST fallback to idle cards");
-    return try_idle_first(size, out_device, dry_run);
+    return try_idle_first(size, out_device, dry_run, allow_capacity_limit, model_name);
 }
 
-int HLIEDeviceService::acquire_exclusive(uint32_t size, uint32_t& out_device, const bool dry_run) {
+int HLIEDeviceService::acquire_exclusive(uint32_t size, uint32_t& out_device, const bool dry_run,
+                                         const bool allow_capacity_limit, const std::string& model_name) {
     for (auto& [id, info] : devices_) {
         if (info.mem_used != 0 || info.exclusive)
             continue;
 
-        if (check_mem_available(id, size)) {
+        if (check_mem_available(id, size, allow_capacity_limit, model_name)) {
             if (!dry_run) {
                 info.mem_used += size;
                 info.exclusive = true;
@@ -674,13 +678,14 @@ int HLIEDeviceService::acquire_exclusive(uint32_t size, uint32_t& out_device, co
     return -1;
 }
 
-int HLIEDeviceService::try_idle_first(const uint32_t size, uint32_t& out_device, const bool dry_run) {
+int HLIEDeviceService::try_idle_first(const uint32_t size, uint32_t& out_device, const bool dry_run,
+                                      const bool allow_capacity_limit, const std::string& model_name) {
     for (auto& [id, info] : devices_) {
 
         if (info.mem_used != 0 || info.exclusive)
             continue;
 
-        if (!check_mem_available(id, size)) {
+        if (!check_mem_available(id, size, allow_capacity_limit, model_name)) {
             LOG_WARN("try_idle_first: device {} insufficient mem", id);
             continue;
         }
@@ -697,13 +702,14 @@ int HLIEDeviceService::try_idle_first(const uint32_t size, uint32_t& out_device,
     return -1;
 }
 
-int HLIEDeviceService::try_used_first(const uint32_t size, uint32_t& out_device, const bool dry_run) {
+int HLIEDeviceService::try_used_first(const uint32_t size, uint32_t& out_device, const bool dry_run,
+                                      const bool allow_capacity_limit, const std::string& model_name) {
     for (auto& [id, info] : devices_) {
 
         if (info.mem_used == 0 || info.exclusive)
             continue;
 
-        if (!check_mem_available(id, size)) {
+        if (!check_mem_available(id, size, allow_capacity_limit, model_name)) {
             LOG_WARN("try_used_first: device {} insufficient mem", id);
             continue;
         }
