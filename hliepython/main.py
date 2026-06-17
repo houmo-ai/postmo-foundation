@@ -498,7 +498,7 @@ async def _build_req_body(request: Any, raw_request: Request) -> Dict[str, Any]:
     if request is None:
         req_body = dict(raw_body)
     elif hasattr(request, "model_dump"):
-        req_body = request.model_dump(exclude_none=True)
+        req_body = request.model_dump(mode="json", exclude_none=True)
     else:
         req_body = request.dict(exclude_none=True)
 
