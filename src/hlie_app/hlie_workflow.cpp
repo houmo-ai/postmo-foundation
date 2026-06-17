@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <map>
 #include <server/server-http.h>
 #include <unordered_set>
 
@@ -373,6 +374,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                 if (model_instances_.find(default_model_info.model_key_) == model_instances_.end()) {
                     ModelInstance model_instance;
                     server_model_meta meta;
+                    meta.name = default_model_info.model_key_;
                     model_instance.path = default_model_info.get_model_path();
                     model_instance.path_mmproj = default_model_info.get_mm_proj_path();
                     model_instance.meta = std::move(meta);
@@ -419,8 +421,7 @@ void HLIEWorkflow::run() {
         it->second.meta.status = SERVER_MODEL_STATUS_LOADED;
 
         if (is_slave_ && !replicas_mode_) {
-            const std::string model_name = it->second.model_info.get_model_name();
-            std::thread([this, model_key, model_name] {
+            std::thread([this, model_key] {
                 const auto inst = model_instances_.find(model_key);
                 if (inst == model_instances_.end()) {
                     LOG_ERROR("LLM model instance is missing before status update: key={}", json(model_key).dump());
@@ -428,7 +429,7 @@ void HLIEWorkflow::run() {
                 }
                 inst->second.meta.port = port_;
                 std::this_thread::sleep_for(std::chrono::seconds(3));
-                update_status(master_port_, model_name, port_);
+                update_status(master_port_, model_key, port_);
             }).detach();
         }
     }
@@ -560,8 +561,21 @@ server_http_res_ptr HLIEWorkflow::handle_models(const server_http_req& req) {
     auto res = std::make_unique<server_res_generator_light>();
     json models_json = json::array();
     const auto all_models = get_all_model_metas();
-    std::time_t t = std::time(nullptr);
+    std::map<std::string, server_model_meta> public_models;
     for (const auto& meta : all_models) {
+        if (meta.name.empty()) {
+            continue;
+        }
+
+        auto it = public_models.find(meta.name);
+        if (it == public_models.end() ||
+            (it->second.status != SERVER_MODEL_STATUS_LOADED && meta.status == SERVER_MODEL_STATUS_LOADED)) {
+            public_models[meta.name] = meta;
+        }
+    }
+
+    std::time_t t = std::time(nullptr);
+    for (const auto& [_, meta] : public_models) {
         json status{
             {"value", server_model_status_to_string(meta.status)},
             {"args", meta.args},
@@ -740,11 +754,11 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
             ModelInstance model_instance;
             server_model_meta model_meta;
-            model_meta.name = model_info_tmp.get_model_name();
+            const auto model_key = HLIEModelInfo::build_model_key(model_info_tmp);
+            model_meta.name = model_key;
             model_instance.path = model_info_tmp.get_model_path();
             model_instance.path_mmproj = model_info_tmp.get_mm_proj_path();
             model_instance.meta = std::move(model_meta);
-            const auto model_key = HLIEModelInfo::build_model_key(model_info_tmp);
             model_info_tmp.model_key_ = model_key;
             model_instance.model_info = model_info_tmp;
             model_instance.key = model_key;
@@ -1713,7 +1727,7 @@ void HLIEWorkflow::register_model_instance(HLIEModelInfo& model_info) {
     const std::string model_key = HLIEModelInfo::build_model_key(model_info);
 
     server_model_meta meta;
-    meta.name = model_info.get_model_name();
+    meta.name = model_key;
     model_info.model_key_ = model_key;
 
     model_instance.key = model_key;

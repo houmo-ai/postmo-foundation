@@ -326,8 +326,7 @@ std::string HLIEModelInfo::build_model_key(const HLIEModelInfo& model_info) {
         return model_info.get_model_name() + "_" + model_info.vl_spec_;
     }
 
-    const std::filesystem::path mmproj_path(model_info.get_mm_proj_path());
-    return model_info.get_model_name() + "_mmproj_" + mmproj_path.stem().string();
+    return model_info.get_model_name();
 }
 
 bool HLIEModelInfo::is_embedding_model() const {
