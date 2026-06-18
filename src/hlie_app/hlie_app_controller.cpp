@@ -9,6 +9,7 @@
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_logger.h"
+#include "hlie_base/hlie_rk_performance.h"
 #include "hlie_base/hlie_util.h"
 
 HLIE_NAMESPACE_BEGIN
@@ -133,6 +134,7 @@ namespace {
         const auto tcim_log_level = config_services->get_int("log", "tcim_level", 2);
         HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(tcim_log_level));
         HlieUtil::set_env("TCIM_BACKEND", "Xh2HalBackend");
+        HLIERkPerformance::apply_for_process();
 
         return 0;
     }

@@ -12,6 +12,7 @@
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_logger.h"
+#include "hlie_base/hlie_rk_performance.h"
 #include "hlie_base/hlie_singleton.h"
 #include "hlie_base/hlie_util.h"
 #include "spdlog/fmt/bundled/base.h"
@@ -136,11 +137,13 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         params_.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
     }
 
+    model_key_ = model_info.model_key_.empty() ? HLIEModelInfo::build_model_key(model_info) : model_info.model_key_;
     params_.model.name = model_info.get_model_name();
 
-    // for consistency between server router mode and single-model mode, we set the same model name as alias
-    if (params_.model_alias.empty() && !params_.model.name.empty()) {
-        params_.model_alias.insert(params_.model.name);
+    // Keep OpenAI response "model" aligned with /v1/models id, especially for mmproj variants.
+    if (!model_key_.empty()) {
+        params_.model_alias.clear();
+        params_.model_alias.insert(model_key_);
     }
 
     // 兼容绝对路径与相对路径
@@ -254,7 +257,6 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
 
     LOG_INFO("LLM load model done");
 
-    model_key_ = model_info.model_key_.empty() ? HLIEModelInfo::build_model_key(model_info) : model_info.model_key_;
     llama_server_routes_->update_meta(*llama_server_);
     is_ready.store(true);
     LOG_DEBUG("LLM init done");
@@ -275,6 +277,7 @@ void LLModelService::run() {
 }
 
 void LLModelService::process() {
+    HLIERkPerformance::apply_for_current_thread();
     llama_server_->start_loop();
 }
 
