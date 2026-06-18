@@ -93,7 +93,7 @@ RUN pip3 install --no-cache-dir numpy==2.2.6 \
                                 bitsandbytes==0.46.1 \
                                 psutil==7.0.0 \
                                 sentencepiece==0.2.0 \
-                                transformers==4.51.0 \
+                                transformers==5.12.1 \
                                 opencv-python==4.11.0.86 \
                                 opencv-python-headless==4.11.0.86 \
                                 datasets==4.0.0 \
@@ -167,9 +167,11 @@ COPY houmo/${hlievllm} /houmo/temp/${hlievllm}
 COPY houmo/${hlievllm_plugin} /houmo/temp/${hlievllm_plugin}
 COPY houmo/${hliepython} /houmo/temp/${hliepython}
 
+RUN pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
 # 安装后摩版本 vllm
 RUN cd /houmo/temp && unzip -q ${hlievllm} && cd ${hlievllm%.zip} && \
-    VLLM_TARGET_DEVICE=cpu pip install -e . --no-build-isolation \
+    VLLM_TARGET_DEVICE=cpu pip install -e . \
         --extra-index-url https://download.pytorch.org/whl/cpu \
         -i https://mirrors.aliyun.com/pypi/simple/
 
