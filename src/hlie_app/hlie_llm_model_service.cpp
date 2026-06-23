@@ -250,7 +250,12 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     llama_server_routes_ = std::make_shared<server_routes>(params_, *llama_server_);
     LOG_INFO("LLM start to load model");
     if (!llama_server_->load_model(params_)) {
-        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+        if (is_multi_instance_) {
+            Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+        } else {
+            const auto mem_est = estimated_mem_mb_ > 0 ? estimated_mem_mb_ : HLIEModelInfo::estimate_mem(model_key_);
+            device_service_->release_mem_on_devices(devices_, mem_est);
+        }
         devices_.clear();
         return -1;
     }
@@ -282,22 +287,29 @@ void LLModelService::process() {
 }
 
 void LLModelService::stop() {
-    if (!worker_thread_) {
-        return;
+    if (worker_thread_) {
+        if (llama_server_) {
+            llama_server_->terminate();
+        }
+        if (worker_thread_->joinable()) {
+            worker_thread_->join();
+        }
+        worker_thread_.reset();
     }
 
-    llama_server_->terminate();
-    if (worker_thread_->joinable()) {
-        worker_thread_->join();
+    if (!devices_.empty()) {
+        if (is_multi_instance_) {
+            Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+        } else if (device_service_) {
+            const auto mem_est = estimated_mem_mb_ > 0 ? estimated_mem_mb_ : HLIEModelInfo::estimate_mem(model_key_);
+            device_service_->release_mem_on_devices(devices_, mem_est);
+        }
+        devices_.clear();
     }
-    worker_thread_.reset();
-    if (is_multi_instance_) {
-        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
-    } else {
-        const auto mem_est = estimated_mem_mb_ > 0 ? estimated_mem_mb_ : HLIEModelInfo::estimate_mem(model_key_);
-        device_service_->release_mem_on_devices(devices_, mem_est);
-    }
-    devices_.clear();
+
+    llama_server_routes_.reset();
+    llama_server_.reset();
+    is_ready.store(false);
     // if (is_embedding_) {
     //     return;
     // }

@@ -193,6 +193,29 @@ namespace {
             get_mem_info =
                 reinterpret_cast<hm_sys_get_mem_info_t>(GetProcAddress(static_cast<HMODULE>(handle), "hm_sys_get_mem_info"));
 #else
+            const std::filesystem::path custom_hal_dirs[] = {
+                "/opt/system/lib/xpu/houmo",
+                "/usr/lib/xpu/houmo",
+            };
+
+            for (const auto& dir : custom_hal_dirs) {
+                const auto path = dir / library_name();
+                std::error_code error;
+                if (!std::filesystem::exists(path, error) || error) {
+                    LOG_INFO("custom HAL candidate does not exist: {}", path.string());
+                    continue;
+                }
+
+                handle = dlopen(path.string().c_str(), RTLD_LAZY | RTLD_LOCAL);
+                if (handle) {
+                    LOG_INFO("loaded custom Houmo HAL library from {}", path.string());
+                    HlieUtil::set_env("TCIM_RUNTIME_PATH", path.parent_path().string());
+                    break;
+                }
+
+                LOG_ERROR("custom HAL candidate exists but failed to load: {}, error {}", path.string(), dlerror());
+            }
+
             const char* env_paths[] = {
                 std::getenv("HOUMO_SDK_PATH"),
                 std::getenv("HOUMO_DRV_PATH"),
@@ -203,16 +226,19 @@ namespace {
                 nullptr,
             };
 
-            for (const char** env_path = env_paths; *env_path != nullptr; ++env_path) {
-                if (!*env_path || !**env_path) {
-                    continue;
-                }
+            if (!handle) {
+                for (const char** env_path = env_paths; *env_path != nullptr; ++env_path) {
+                    if (!*env_path || !**env_path) {
+                        continue;
+                    }
 
-                const std::string path = std::string(*env_path) + "/" + library_name();
-                handle = dlopen(path.c_str(), RTLD_LAZY | RTLD_LOCAL);
-                if (handle) {
-                    LOG_INFO("loaded Houmo HAL library from {}", path);
-                    break;
+                    const auto path = std::filesystem::path(*env_path) / library_name();
+                    handle = dlopen(path.string().c_str(), RTLD_LAZY | RTLD_LOCAL);
+                    if (handle) {
+                        LOG_INFO("loaded Houmo HAL library from {}", path.string());
+                        HlieUtil::set_env("TCIM_RUNTIME_PATH", path.parent_path().string());
+                        break;
+                    }
                 }
             }
 
