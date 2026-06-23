@@ -43,6 +43,10 @@ from hliepython.model_server.engines.protocol.chat_completions import (
     ChatCompletionLogProbsContent,
     Logprob
 )
+from hliepython.model_server.utils.gguf_metadata import (
+    apply_gguf_metadata_defaults_to_vllm_engine_args,
+    get_gguf_metadata,
+)
 
 from vllm.outputs import RequestOutput
 from vllm.v1.engine.exceptions import EngineDeadError
@@ -59,8 +63,6 @@ from vllm.entrypoints.openai.models.serving import OpenAIServingModels
 from vllm.entrypoints.openai.models.protocol import BaseModelPath
 from vllm.entrypoints.serve.render.serving import OpenAIServingRender
 
-from vllm_houmo.models.export_meta_from_gguf import parse_gguf
-
 class TextEngine(InferenceEngine):
     """文本推理引擎"""
 
@@ -68,7 +70,7 @@ class TextEngine(InferenceEngine):
         
         self.model_name = instance_config.get("model_name", "")
         self.model_path = instance_config.get("model_path", "")
-        self.model_type = instance_config.get("model_type", "text")
+        self.model_type = instance_config.get("model_type", "llm")
         self.vllm_config = instance_config.get(
             "vllm_config",
             instance_config.get("vllm_extra_config", {}),
@@ -76,8 +78,6 @@ class TextEngine(InferenceEngine):
         self.additional_config = instance_config.get(
             "additional_config", {}
         ) or {}
-
-        self.tokenizer = None
 
         self.response_role = "assistant"
         self.default_enable_think = False
@@ -178,13 +178,12 @@ class TextEngine(InferenceEngine):
                 vllm_engine_args,
                 additional_config,
             )
-
-            parse_gguf(self.model_path)
-
-            self.tokenizer = AutoTokenizer.from_pretrained(
+            vllm_engine_args = apply_gguf_metadata_defaults_to_vllm_engine_args(
                 self.model_path,
-                trust_remote_code=True,
+                vllm_engine_args,
             )
+
+            # parse_gguf(self.model_path)
 
             # 配置 vLLM 引擎参数
             engine_arg_kwargs = {
@@ -205,6 +204,11 @@ class TextEngine(InferenceEngine):
             logger.info(f"模型配置：{self.engine.vllm_config.model_config}")
             logger.info(f"并行配置：{self.engine.vllm_config.parallel_config}")
             logger.info(f"TextEngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
+
+            self.tokenizer = self.engine.get_tokenizer()
+
+            gguf_metadata = get_gguf_metadata(self.model_path, include_tensors=False)
+            logger.debug(f"GGUF Metadata: {gguf_metadata}")
 
         except Exception as e:
             logger.error(f"TextEngine: vLLM 引擎加载失败 {e}")

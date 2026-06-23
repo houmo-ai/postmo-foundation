@@ -86,6 +86,7 @@ async def api_key_middleware(request: Request, call_next):
 
 # 子进程绑定的模型和端口
 MODEL_NAME = ""
+ALLOWED_MODEL_NAMES: set[str] = set()
 PORT = 0
 
 # 子进程实例配置
@@ -139,6 +140,7 @@ async def health_check():
     return {
         "status": "ok",
         "model": MODEL_NAME,
+        "allowed_models": sorted(ALLOWED_MODEL_NAMES),
         "port": PORT,
         "engine_loaded": engine is not None
     }
@@ -487,10 +489,10 @@ def create_route_handler(method_name: str):
             request_model = str(req_data.get("model", ""))
 
             # 安全校验：端口必须匹配模型
-            if request_model != MODEL_NAME:
+            if request_model not in ALLOWED_MODEL_NAMES:
                 return JSONResponse(
                     status_code=400,
-                    content={"error": f"端口{PORT}只允许模型 {MODEL_NAME}，不允许 {request_model}"}
+                    content={"error": f"端口{PORT}只允许模型 {sorted(ALLOWED_MODEL_NAMES)}，不允许 {request_model}"}
                 )
 
             if not engine:
@@ -559,25 +561,48 @@ def run_worker(
     model_path=None,
     vllm_config=None,
     additional_config=None,
-    model_type="text",
+    model_type="llm",
     logging_config=None,
 ):
     import uvicorn
-    global MODEL_NAME, PORT, INSTANCE_CONFIG, logger, sync_logger
+    global MODEL_NAME, ALLOWED_MODEL_NAMES, PORT, INSTANCE_CONFIG, logger, sync_logger
+
+    try:
+        _, _, api_server_args, unknown_args = split_vllm_config(vllm_config or {})
+    except Exception as exc:
+        api_server_args = {}
+        unknown_args = {}
+
+    configured_model_name = api_server_args.get("server_model_name")
+    if configured_model_name is None:
+        configured_model_name = api_server_args.get("served_model_name")
+    if isinstance(configured_model_name, list):
+        configured_model_names = [str(name) for name in configured_model_name if str(name)]
+    elif configured_model_name not in (None, ""):
+        configured_model_names = [str(configured_model_name)]
+    else:
+        configured_model_names = []
+
+    served_model_name = configured_model_names[0] if configured_model_names else str(model_name)
+    allowed_model_names = set(configured_model_names or [str(model_name)])
+    allowed_model_names.add(served_model_name)
+
     configure_logging(
         logging_config,
         process_role="worker",
         port=int(port),
-        model_name=model_name,
+        model_name=served_model_name,
     )
-    MODEL_NAME = model_name
+    MODEL_NAME = served_model_name
+    ALLOWED_MODEL_NAMES = allowed_model_names
     PORT = port
-    logger = get_async_logger(f"worker:{model_name}:{port}")
-    sync_logger = get_sync_logger(f"worker:{model_name}:{port}")
+    logger = get_async_logger(f"worker:{served_model_name}:{port}")
+    sync_logger = get_sync_logger(f"worker:{served_model_name}:{port}")
     additional_config = additional_config or {}
     device_ids = additional_config.get("device_ids", [])
     INSTANCE_CONFIG = {
-        "model_name": model_name,
+        "model_name": served_model_name,
+        "request_model_names": sorted(ALLOWED_MODEL_NAMES),
         "device_ids": device_ids or [],
         "model_path": model_path,
         "model_type": model_type,
@@ -593,18 +618,11 @@ def run_worker(
     #     os.environ["NVIDIA_VISIBLE_DEVICES"] = ",".join(str(d) for d in device_ids)
 
     sync_logger.info(
-        f"启动子进程, 模型={MODEL_NAME} 端口={PORT} 设备={device_ids} 路径={model_path}"
+        f"启动子进程, 模型={MODEL_NAME} 允许模型={sorted(ALLOWED_MODEL_NAMES)} 端口={PORT} 设备={device_ids} 路径={model_path}"
     )
 
     # 通用配置可根据 model_path/additional_config 动态设置
     # 这里可扩展为加载本地模型路径或专用调参
-    try:
-        _, _, api_server_args, unknown_args = split_vllm_config(vllm_config or {})
-    except Exception as exc:
-        sync_logger.warning(f"解析 vLLM api-server 层参数失败，使用默认 worker server 参数: {exc}")
-        api_server_args = {}
-        unknown_args = {}
-
     if unknown_args:
         sync_logger.warning(f"vLLM 未识别参数: {unknown_args}")
     if api_server_args:

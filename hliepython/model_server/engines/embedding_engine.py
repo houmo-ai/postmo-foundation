@@ -20,6 +20,7 @@ from hliepython.model_server.engines.utils import (
     move_vllm_engine_args_from_additional_config,
     normalize_vllm_engine_args,
 )
+from hliepython.model_server.utils.gguf_metadata import apply_gguf_metadata_defaults_to_vllm_engine_args
 
 try:
     from vllm import AsyncLLMEngine, PoolingParams
@@ -72,6 +73,10 @@ class EmbeddingEngine(InferenceEngine):
             vllm_engine_args, additional_config = move_vllm_engine_args_from_additional_config(
                 vllm_engine_args,
                 additional_config,
+            )
+            vllm_engine_args = apply_gguf_metadata_defaults_to_vllm_engine_args(
+                self.model_path,
+                vllm_engine_args,
             )
 
             # vLLM 新版本通过 runner/convert 指定 pooling/embed；部分旧版本

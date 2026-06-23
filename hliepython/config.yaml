@@ -1,54 +1,51 @@
 # 服务运行配置
 server:
-  main_port: 7800
-  log_level: "info"
-  model_root_dir: "/data/useradmin/models/v1.3.0"
+  # 用于增加一些额外的其他配置项
 
 # 模型配置
 models:
-  # Qwen3.5-9B 模型
-  - name: "Qwen3.5-9B"
-    instances:
-      - port: 7801
-        model_path: "Qwen3.5-9B"
-        model_type: "text"    # text、embedding、asr、tts
-        vllm_config:
-          engine:
-            max-model-len: 65536
-            max-num-seqs: 1
-            no-enable-prefix-caching: true
-            max-num-batched-tokens: 65536
-        additional_config:
-          device_ids: [0]
-          enable_cacheprompt: "False"
-
-  # # CoPaw-Flash-9B 模型
-  # - name: "CoPaw-Flash-9B"
+  # # Qwen3.5-9B 模型
+  # - name: "Qwen3.5-9B"
   #   instances:
   #     - port: 7801
-  #       model_path: "CoPaw-Flash-9B"
-  #       model_type: "text"    # text、embedding、asr、tts
+  #       model_path: "Qwen3.5-9B"
+  #       model_type: "llm"    # llm、embedding、asr、tts
   #       vllm_config:
+  #         engine:
+  #           max-model-len: 65536
+  #           max-num-seqs: 1
+  #           no-enable-prefix-caching: true
+  #           max-num-batched-tokens: 65536
+  #       additional_config:
+  #         device_ids: [0]
+  #         enable_cacheprompt: "False"
+
+  # # CoPaw-Flash-9B 模型
+  # - model_path: "CoPaw-Flash-9B"
+  #   model_type: "llm"    # llm、embedding、asr、tts
+  #   instances:
+  #     - vllm_config:
   #         engine:
   #           max-model-len: 131072
   #           max-num-seqs: 1
   #           no-enable-prefix-caching: true
   #           max-num-batched-tokens: 131072
+  #         api-server:
+  #           trust-request-chat-template: true
+  #           port: 7801
+  #           server-model-name: "CoPaw-Flash-9B"
   #       additional_config:
   #         enable_cacheprompt: "False"
 
-  # - name: "Qwen3.6-27B_mtp"
+  # - model_path: "Qwen3.6-27B_mtp"
+  #   model_type: "llm"    # llm、embedding、asr、tts
   #   instances:
-  #     - port: 7801
-  #       model_path: "Qwen3.6-27B_mtp"
-  #       model_type: "text"    # text、embedding、asr、tts
-  #       vllm_config:
+  #     - vllm_config:
   #         engine:
   #           max-model-len: 262144
   #           max-num-seqs: 1
   #           no-enable-prefix-caching: true
   #           max-num-batched-tokens: 262144
-  #           # 推荐：直接写 YAML 对象，会透传为 AsyncEngineArgs.speculative_config
   #           speculative-config:
   #             model: "/home/ywh/workspace/models/v1.4.0/Qwen3.6-27B_mtp"
   #             method: "mtp"
@@ -56,32 +53,66 @@ models:
   #         serving:
   #           enable-auto-tool-choice: true
   #           tool-call-parser: "qwen3_coder"
-
-  # # Qwen3.6-27B 模型
-  # - name: "Qwen3.6-27B"
-  #   instances:
-  #     - port: 7802
-  #       model_path: "Qwen3.6-27B"
-  #       model_type: "text"
-  #       vllm_config:
+  #         api-server:
+  #           trust-request-chat-template: true
+  #           port: 7802
+  #           server-model-name: "Qwen3.6-27B_mtp"
+  #       additional_config:
+  #         device_ids: [1]
+  #         enable_cacheprompt: "False"
+  #     - vllm_config:
   #         engine:
-  #           max-model-len: 131072
+  #           max-model-len: 262144
   #           max-num-seqs: 1
   #           no-enable-prefix-caching: true
-  #           max-num-batched-tokens: 131072
+  #           max-num-batched-tokens: 262144
+  #           speculative-config:
+  #             model: "/home/ywh/workspace/models/v1.4.0/Qwen3.6-27B_mtp"
+  #             method: "mtp"
+  #             num_speculative_tokens: 5
   #         serving:
   #           enable-auto-tool-choice: true
   #           tool-call-parser: "qwen3_coder"
+  #         api-server:
+  #           trust-request-chat-template: true
+  #           port: 7803
+  #           server-model-name: "Qwen3.6-27B_mtp"
   #       additional_config:
-  #         device_ids: [0]
-  #         enable_cacheprompt: "False"
+  #         device_ids: [3]
+  #         enable_cacheprompt: "True"
+
+  # # Qwen3.6-27B 模型
+  # - model_path: "HiModel_xh2_qwen3.6_27b_256_128k_b1_1chip_2cores_v1.3.0_20260603.gguf"
+  #   model_type: "llm"
+  #   instances:
+  #     - vllm_config:
+  #         serving:
+  #           enable-auto-tool-choice: true
+  #           tool-call-parser: "qwen3_coder"
+  #         api-server:
+  #           port: 8803
+  #           server-model-name: "Qwen3.6-27B"
+  #       additional_config:
+  #         "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
+
+  # - model_path: "Qwen3.6-27B"
+  #   model_type: "llm"
+  #   instances:
+  #     - vllm_config:
+  #         serving:
+  #           enable-auto-tool-choice: true
+  #           tool-call-parser: "qwen3_coder"
+  #         api-server:
+  #           port: 7803
+  #           server-model-name: "Qwen3.6-27B"
+  #       additional_config:
   #         "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
 
   # - name: "Gemma4-26B_a4b"
   #   instances:
   #     - port: 7802
   #       model_path: "Gemma4-26B_a4b"
-  #       model_type: "text"
+  #       model_type: "llm"
   #       vllm_config:
   #         engine:
   #           max-model-len: 131072
@@ -132,7 +163,7 @@ models:
   #   instances:
   #     - port: 7802
   #       model_path: "glm-ocr"
-  #       model_type: "text"
+  #       model_type: "llm"
   #       vllm_config:
   #         engine:
   #           max-model-len: 2048

@@ -6,7 +6,7 @@
 
 ## 架构
 
-- **主进程 (main.py)**: 运行在主端口（默认8000），负责根据模型名或端口号将请求转发到对应的子进程
+- **主进程 (main.py)**: 运行在主端口（默认7800），负责根据模型名或端口号将请求转发到对应的子进程
 - **子进程 (worker.py)**: 每个子进程绑定一个模型和端口，处理具体的 API 请求
 - **推理适配器 (inference_adapter.py)**: 工厂类，创建不同类型的推理引擎
 - **推理引擎 (engines/)**: 具体实现，支持文本、图像、TTS 等推理
@@ -18,6 +18,8 @@
 - `/v1/chat/completions` - 聊天完成（支持流式和非流式）
 - `/v1/images/generations` - 图片生成
 - `/v1/audio/speech` - 文本到语音（TTS）
+- `POST /models/load` - 动态加载模型
+- `POST /models/unload` - 动态卸载模型
 
 ## 推理引擎类型
 
@@ -29,7 +31,7 @@
 
 config.yaml:
 ```yaml
-main_port: 8000
+main_port: 7800
 models:
   - name: "qwen3_4b"
     instances:
@@ -111,30 +113,52 @@ routes: Dict[str, str] = {
 
 ### 不同模型单实例
 ```bash
-curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+curl -X POST http://127.0.0.1:7800/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"llama3_4b", "messages":[{"role":"user","content":"Hello"}]}'
 ```
 
 ### 相同模型多实例
 ```bash
-curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+curl -X POST http://127.0.0.1:7800/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"qwen3_4b", "port":8001, "messages":[{"role":"user","content":"Hello"}]}'
 ```
 
 ### 图像生成
 ```bash
-curl -X POST http://127.0.0.1:8000/v1/images/generations \
+curl -X POST http://127.0.0.1:7800/v1/images/generations \
   -H "Content-Type: application/json" \
   -d '{"model":"sd_xl_1","prompt":"a cute cat","size":"512x512"}'
 ```
 
 ### TTS
 ```bash
-curl -X POST http://127.0.0.1:8000/v1/audio/speech \
+curl -X POST http://127.0.0.1:7800/v1/audio/speech \
   -H "Content-Type: application/json" \
   -d '{"model":"tts_en","text":"Hello world","voice":"en"}'
+```
+
+### 动态加载模型
+```bash
+curl -X POST http://127.0.0.1:7800/models/load \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3_4b"}'
+```
+
+### 动态卸载模型
+按模型卸载：
+```bash
+curl -X POST http://127.0.0.1:7800/models/unload \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3_4b"}'
+```
+
+按端口卸载：
+```bash
+curl -X POST http://127.0.0.1:7800/models/unload \
+  -H "Content-Type: application/json" \
+  -d '{"port":8001}'
 ```
 
 ## 启动服务

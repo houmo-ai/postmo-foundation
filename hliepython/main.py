@@ -3,16 +3,22 @@ import time
 import json
 import asyncio
 import multiprocessing
+import re
 import uuid
+import socket
+from copy import deepcopy
 import httpx
 import uvicorn
+from pathlib import Path
 from typing import Any, Dict, Optional
+import yaml
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response, StreamingResponse, JSONResponse
 from starlette.datastructures import UploadFile
 from hliepython.utils.logging import configure_logging, get_async_logger, get_sync_logger
 from hliepython.config import AppConfig, load_app_config
+from hliepython.config.utils import resolve_model_file_path
 
 from hliepython.model_server.engines.protocol.chat_completions import (
     ChatCompletionRequest,
@@ -25,7 +31,7 @@ from hliepython.model_server.engines.protocol.embeddings import (
 )
 from hliepython.model_server.worker import run_worker
 
-main_app = FastAPI(title="主进程 8000")
+main_app = FastAPI(title="主进程 7800")
 logger = get_async_logger("main")
 sync_logger = get_sync_logger("main")
 
@@ -37,14 +43,113 @@ WORKER_PROCESS_MAP: Dict[int, multiprocessing.Process] = {}
 DYNAMIC_MODEL_INSTANCES: Dict[str, list[int]] = {}
 APP_CONFIG = AppConfig()
 RUNTIME_SETTINGS: Dict[str, Any] = {
-    "main_port": 8000,
+    "main_port": 7800,
     "log_level": "info",
     "vllm_log_level": "warning",
     "model_root_dir": "/houmo/llm/models",
 }
 AVAILABLE_MODEL_PATHS: Dict[str, str] = {}
+AVAILABLE_MODEL_ADDITIONAL_CONFIG: Dict[str, Dict[str, Any]] = {}
+AVAILABLE_MODEL_BASE_NAMES: Dict[str, str] = {}
 WORKER_RUNTIME_MAP: Dict[int, Dict[str, Any]] = {}
 NEXT_INSTANCE_ID = 1
+DEFAULT_MODEL_ARGS: Dict[str, Any] = {}
+
+_VERSION_RE = re.compile(r"v\d+\.\d+\.\d+", re.IGNORECASE)
+_XH_RE = re.compile(r"xh\s*(\d+)", re.IGNORECASE)
+_PARAM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[bBmM]", re.IGNORECASE)
+_BUILD_TIME_RE = re.compile(r"(\d{8}|\d{14})")
+_VIT_SPEC_RE = re.compile(r"vit_(\d+)(?:[_x](\d+))?", re.IGNORECASE)
+_MMPROJ_FAMILY_RE = re.compile(
+    r"qwen2\.5-vl|qwen3-vl|qwen3\.5|qwen3\.6|gemma4[-_]26b[-_]a4b|gemma4|qwen3[-_]asr|qwen3[-_]forcedaligner|glm-ocr",
+    re.IGNORECASE,
+)
+_OPTIONAL_MMPROJ_VL_FAMILY_RE = re.compile(r"qwen3\.5|qwen3\.6", re.IGNORECASE)
+
+
+class ModelLoadManager:
+    """记录服务进程内模型加载与实例运行信息。"""
+
+    def __init__(self):
+        self.models: Dict[str, Dict[str, Any]] = {}
+
+    @staticmethod
+    def _storage_form(model_path: str, model_name: str = "") -> str:
+        if model_name.lower().endswith(".gguf"):
+            return "file"
+        if os.path.isfile(model_path):
+            return "file"
+        return "directory"
+
+    def register_instance(
+        self,
+        *,
+        model_name: str,
+        model_path: str,
+        model_type: str,
+        instance_cfg: Dict[str, Any],
+        process: multiprocessing.Process,
+        source: str,
+    ) -> None:
+        record = self.models.setdefault(
+            model_name,
+            {
+                "model_name": model_name,
+                "model_path": model_path,
+                "model_type": model_type,
+                "storage_form": self._storage_form(model_path, model_name),
+                "load_count": 0,
+                "instances": [],
+            },
+        )
+        record.update(
+            {
+                "model_path": model_path,
+                "model_type": model_type,
+                "storage_form": self._storage_form(model_path, model_name),
+            }
+        )
+
+        port = int(instance_cfg["port"])
+        record["instances"] = [
+            inst for inst in record["instances"] if int(inst.get("port", -1)) != port
+        ]
+        record["instances"].append(
+            {
+                "port": port,
+                "process_id": process.pid or 0,
+                "source": source,
+                "vllm_config": deepcopy(instance_cfg.get("vllm_config", {})),
+                "additional_config": deepcopy(instance_cfg.get("additional_config", {})),
+            }
+        )
+        record["instances"].sort(key=lambda item: int(item.get("port", 0)))
+        record["load_count"] = len(record["instances"])
+
+    def unregister_instance(self, *, model_name: Optional[str], port: int) -> None:
+        target_model = model_name
+        if target_model is None:
+            for name, record in self.models.items():
+                if any(int(inst.get("port", -1)) == int(port) for inst in record["instances"]):
+                    target_model = name
+                    break
+
+        if not target_model or target_model not in self.models:
+            return
+
+        record = self.models[target_model]
+        record["instances"] = [
+            inst for inst in record["instances"] if int(inst.get("port", -1)) != int(port)
+        ]
+        record["load_count"] = len(record["instances"])
+        if record["load_count"] <= 0:
+            self.models.pop(target_model, None)
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {name: deepcopy(record) for name, record in sorted(self.models.items())}
+
+
+MODEL_LOAD_MANAGER = ModelLoadManager()
 
 
 async def validate_json_request(raw_request: Request):
@@ -168,21 +273,171 @@ def get_runtime_settings(cfg: AppConfig) -> Dict[str, Any]:
     }
 
 
+def _is_local_hidden_entry(name: str) -> bool:
+    return name.startswith(".")
+
+
+def _build_mmproj_match_key(name: str) -> str:
+    family_match = _MMPROJ_FAMILY_RE.search(name)
+    xh_match = _XH_RE.search(name)
+    param_match = _PARAM_RE.search(name)
+    version_match = _VERSION_RE.search(name)
+    if not family_match or not xh_match or not param_match or not version_match:
+        return ""
+
+    family = family_match.group(0).lower().replace("_", "-")
+    xh = xh_match.group(0).lower()
+    param = param_match.group(0).lower()
+    version = version_match.group(0).lower()
+    build_time_match = _BUILD_TIME_RE.search(name)
+
+    if (
+        build_time_match
+        and not _OPTIONAL_MMPROJ_VL_FAMILY_RE.search(name)
+    ):
+        return f"{xh}_{family}_{param}_{version}_{build_time_match.group(0)}"
+
+    return f"{xh}_{family}_{param}_{version}"
+
+
+def _parse_mmproj_vit_spec(name: str) -> str:
+    match = _VIT_SPEC_RE.search(name)
+    if not match:
+        return "unknown"
+    if match.group(2):
+        return f"vit_{match.group(1)}_{match.group(2)}"
+    return f"vit_{match.group(1)}"
+
+
+def _is_mmproj_file_name(name: str) -> bool:
+    return "mmproj" in name.lower()
+
+
+def _is_mmproj_main_model_name(name: str) -> bool:
+    return not _is_mmproj_file_name(name) and bool(_MMPROJ_FAMILY_RE.search(name))
+
+
+def _is_local_gguf_model_file(name: str) -> bool:
+    lower_name = name.lower()
+    return lower_name.endswith(".gguf") and not _is_mmproj_file_name(lower_name)
+
+
+def _build_mmproj_model_key(model_name: str, mmproj_name: str) -> str:
+    vit_spec = _parse_mmproj_vit_spec(mmproj_name)
+    if vit_spec and vit_spec != "unknown":
+        return f"{Path(model_name).stem}_{vit_spec}.gguf"
+    return model_name
+
+
 def scan_available_models(model_root_dir: str) -> Dict[str, str]:
+    global AVAILABLE_MODEL_ADDITIONAL_CONFIG, AVAILABLE_MODEL_BASE_NAMES
     if not os.path.exists(model_root_dir):
         logger.warning(f"模型目录不存在: {model_root_dir}")
+        AVAILABLE_MODEL_ADDITIONAL_CONFIG = {}
+        AVAILABLE_MODEL_BASE_NAMES = {}
         return {}
 
     if not os.path.isdir(model_root_dir):
         logger.warning(f"模型目录配置不是文件夹: {model_root_dir}")
+        AVAILABLE_MODEL_ADDITIONAL_CONFIG = {}
+        AVAILABLE_MODEL_BASE_NAMES = {}
+        return {}
+
+    try:
+        with os.scandir(model_root_dir) as entries:
+            local_entries = sorted(entries, key=lambda e: e.name.lower())
+    except OSError as exc:
+        logger.warning(f"扫描模型目录失败: root={model_root_dir}, error={exc}")
+        AVAILABLE_MODEL_ADDITIONAL_CONFIG = {}
+        AVAILABLE_MODEL_BASE_NAMES = {}
         return {}
 
     model_paths: Dict[str, str] = {}
-    for entry in sorted(os.scandir(model_root_dir), key=lambda e: e.name):
-        if entry.is_dir() and not entry.name.startswith("."):
-            model_paths[entry.name] = entry.path
+    model_additional_config: Dict[str, Dict[str, Any]] = {}
+    model_base_names: Dict[str, str] = {}
+    mmproj_main_files: list[os.DirEntry[str]] = []
+    mmproj_files: list[os.DirEntry[str]] = []
+    skipped_mmproj_files = 0
+    for entry in local_entries:
+        if _is_local_hidden_entry(entry.name):
+            continue
+
+        try:
+            if entry.is_dir():
+                model_paths[entry.name] = entry.path
+                continue
+
+            if not entry.is_file():
+                continue
+        except OSError as exc:
+            logger.warning(f"读取模型目录条目失败: path={entry.path}, error={exc}")
+            continue
+
+        if not entry.name.lower().endswith(".gguf"):
+            continue
+
+        if _is_mmproj_file_name(entry.name):
+            mmproj_files.append(entry)
+            skipped_mmproj_files += 1
+            continue
+
+        if _is_mmproj_main_model_name(entry.name):
+            mmproj_main_files.append(entry)
+
+        if not _is_local_gguf_model_file(entry.name):
+            skipped_mmproj_files += 1
+            continue
+
+        try:
+            model_paths[entry.name] = str(_ensure_gguf_runtime_dir(entry.path))
+        except (OSError, ValueError) as exc:
+            logger.warning(f"准备 GGUF 模型运行目录失败: path={entry.path}, error={exc}")
+
+    if skipped_mmproj_files:
+        logger.info(f"跳过 mmproj GGUF 文件: root={model_root_dir}, count={skipped_mmproj_files}")
+
+    mmproj_index: Dict[str, list[os.DirEntry[str]]] = {}
+    for mmproj in mmproj_files:
+        match_key = _build_mmproj_match_key(mmproj.name)
+        if match_key:
+            mmproj_index.setdefault(match_key, []).append(mmproj)
+
+    paired_count = 0
+    for main_model in mmproj_main_files:
+        match_key = _build_mmproj_match_key(main_model.name)
+        if not match_key:
+            logger.warning(f"视觉主模型名称解析失败，无法匹配 mmproj: path={main_model.path}")
+            continue
+
+        matched_mmproj_files = mmproj_index.get(match_key, [])
+        if not matched_mmproj_files:
+            logger.warning(f"未找到匹配的 mmproj 文件: model={main_model.name}, key={match_key}")
+            continue
+
+        main_model_path = model_paths.get(main_model.name)
+        if not main_model_path:
+            continue
+
+        for mmproj in sorted(matched_mmproj_files, key=lambda e: e.name.lower()):
+            model_key = _build_mmproj_model_key(main_model.name, mmproj.name)
+            model_paths[model_key] = main_model_path
+            model_additional_config[model_key] = {"vit_model_name": mmproj.path}
+            model_base_names[model_key] = main_model.name
+            paired_count += 1
+
+    if paired_count:
+        logger.info(f"视觉模型 mmproj 配对完成: root={model_root_dir}, count={paired_count}")
+
+    AVAILABLE_MODEL_ADDITIONAL_CONFIG = model_additional_config
+    AVAILABLE_MODEL_BASE_NAMES = model_base_names
 
     return model_paths
+
+
+def _ensure_gguf_runtime_dir(gguf_path: str) -> str:
+    from hliepython.config.utils import resolve_gguf_runtime_dir
+
+    return resolve_gguf_runtime_dir(Path(gguf_path))
 
 
 def refresh_available_models():
@@ -192,6 +447,91 @@ def refresh_available_models():
     logger.info(
         f"可用模型目录扫描完成: root={model_root_dir}, count={len(AVAILABLE_MODEL_PATHS)}"
     )
+
+
+def load_default_model_args() -> Dict[str, Any]:
+    default_args_path = Path(__file__).resolve().parent / "default_model_args.yaml"
+    if not default_args_path.exists():
+        logger.warning(f"默认模型启动配置不存在: {default_args_path}")
+        return {}
+
+    with default_args_path.open("r", encoding="utf-8") as f:
+        loaded = yaml.safe_load(f) or {}
+
+    if not isinstance(loaded, dict):
+        logger.warning(f"默认模型启动配置格式不是对象: {default_args_path}")
+        return {}
+
+    return loaded
+
+
+def _resolve_additional_config_model_refs(additional_config: Dict[str, Any]) -> Dict[str, Any]:
+    resolved = deepcopy(additional_config)
+    vit_model_name = resolved.get("vit_model_name")
+    if isinstance(vit_model_name, str) and vit_model_name.strip():
+        resolved["vit_model_name"] = resolve_model_file_path(
+            vit_model_name,
+            str(RUNTIME_SETTINGS.get("model_root_dir", "/houmo/llm/models")),
+        )
+    return resolved
+
+
+def _default_dynamic_server_config(model_name: str) -> Dict[str, Any]:
+    model_defaults = DEFAULT_MODEL_ARGS.get("models", {})
+    if not isinstance(model_defaults, dict):
+        model_defaults = {}
+
+    base_model_name = AVAILABLE_MODEL_BASE_NAMES.get(model_name, "")
+    default_cfg = (
+        model_defaults.get(model_name)
+        or model_defaults.get(Path(model_name).name)
+        or (model_defaults.get(base_model_name) if base_model_name else None)
+        or (model_defaults.get(Path(base_model_name).name) if base_model_name else None)
+    )
+    if default_cfg is None:
+        return {}
+    if not isinstance(default_cfg, dict):
+        raise ValueError(f"default_model_args.yaml 中模型 {model_name} 的配置必须是对象")
+
+    server_config = deepcopy(default_cfg)
+    if "model_model_type" in server_config and "model_type" not in server_config:
+        server_config["model_type"] = server_config.pop("model_model_type")
+    server_config.pop("model_path", None)
+    return server_config
+
+
+def _merge_dynamic_server_config(
+    model_name: str,
+    request_server_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    default_cfg = _default_dynamic_server_config(model_name)
+    endpoint_model_type = request_server_config.get("endpoint_model_type", "llm")
+
+    if "vllm_config" in request_server_config:
+        vllm_config = deepcopy(request_server_config.get("vllm_config") or {})
+    else:
+        vllm_config = deepcopy(default_cfg.get("vllm_config") or {})
+
+    if "additional_config" in request_server_config:
+        additional_config = deepcopy(request_server_config.get("additional_config") or {})
+    else:
+        additional_config = deepcopy(default_cfg.get("additional_config") or {})
+
+    auto_additional_config = AVAILABLE_MODEL_ADDITIONAL_CONFIG.get(model_name, {})
+    for key, value in auto_additional_config.items():
+        additional_config.setdefault(key, value)
+
+    if "model_type" in default_cfg:
+        model_type = default_cfg["model_type"]
+    else:
+        model_type = endpoint_model_type or "llm"
+
+    merged: Dict[str, Any] = {
+        "vllm_config": vllm_config,
+        "additional_config": _resolve_additional_config_model_refs(additional_config),
+        "model_type": model_type,
+    }
+    return merged
 
 
 def validate_dynamic_model_name(model_name: str):
@@ -204,7 +544,7 @@ def validate_dynamic_model_name(model_name: str):
 
 def _normalize_server_config(
     server_config_raw: Any,
-    endpoint_model_type: str = "text",
+    endpoint_model_type: str = "llm",
     allow_empty: bool = False,
 ) -> Dict[str, Any]:
     if server_config_raw is None:
@@ -215,49 +555,53 @@ def _normalize_server_config(
     if not isinstance(server_config_raw, dict):
         raise ValueError("请求中必须包含对象类型的 server_config 字段")
 
-    vllm_config = server_config_raw.get("vllm_config", {})
-    if not isinstance(vllm_config, dict):
+    has_vllm_config = "vllm_config" in server_config_raw
+    vllm_config = server_config_raw.get("vllm_config") if has_vllm_config else None
+    if has_vllm_config and not isinstance(vllm_config, dict):
         raise ValueError("server_config.vllm_config 必须是对象")
 
-    additional_config = server_config_raw.get("additional_config", {})
-    if not isinstance(additional_config, dict):
+    has_additional_config = "additional_config" in server_config_raw
+    additional_config_raw = (
+        server_config_raw.get("additional_config") if has_additional_config else {}
+    )
+    additional_config: Dict[str, Any] = {}
+    if has_additional_config and not isinstance(additional_config_raw, dict):
         raise ValueError("server_config.additional_config 必须是对象")
+    if isinstance(additional_config_raw, dict):
+        additional_config = dict(additional_config_raw)
 
     if "device_ids" not in additional_config and "device_ids" in server_config_raw:
-        additional_config = dict(additional_config)
         additional_config["device_ids"] = server_config_raw["device_ids"]
 
-    device_ids = additional_config.get("device_ids", [0])
-    if not isinstance(device_ids, list):
+    if "device_ids" in additional_config and not isinstance(
+        additional_config["device_ids"], list
+    ):
         raise ValueError("server_config.additional_config.device_ids 必须是数组")
-    additional_config = dict(additional_config)
-    additional_config["device_ids"] = device_ids
 
     if "enable_cacheprompt" in additional_config and not isinstance(
         additional_config["enable_cacheprompt"], str
     ):
         raise ValueError("server_config.additional_config.enable_cacheprompt 必须是字符串")
-    additional_config.setdefault("enable_cacheprompt", "")
 
-    model_type = server_config_raw.get("model_type")
-    if model_type is not None and not isinstance(model_type, str):
-        raise ValueError("server_config.model_type 必须是字符串")
+    if "model_type" in server_config_raw:
+        raise ValueError("动态加载不支持 server_config.model_type；模型类型由 default_model_args.yaml 模板决定")
 
-    port = server_config_raw.get("port")
+    if "port" in server_config_raw:
+        raise ValueError(
+            "动态加载不支持 server_config.port；如需指定端口和模型 ID，请在 server_config.vllm_config.api-server 中提供完整配置"
+        )
 
-    normalized: Dict[str, Any] = {
-        "vllm_config": vllm_config,
-        "additional_config": additional_config,
-        "model_type": model_type or endpoint_model_type,
-    }
-    if port is not None:
-        normalized["port"] = int(port)
+    normalized: Dict[str, Any] = {"endpoint_model_type": endpoint_model_type}
+    if has_vllm_config:
+        normalized["vllm_config"] = vllm_config
+    if has_additional_config or additional_config:
+        normalized["additional_config"] = additional_config
     return normalized
 
 
 def _resolve_model_type_from_path(path: str) -> Optional[str]:
     path_alias = {
-        "/v1/chat/completions": "text",
+        "/v1/chat/completions": "llm",
         "/v1/embeddings": "embedding",
         "/score": "reranker",
         "/v1/score": "reranker",
@@ -271,9 +615,34 @@ def _resolve_model_type_from_path(path: str) -> Optional[str]:
     return path_alias.get(path)
 
 
+def _extract_port_from_vllm_config(vllm_config: Dict[str, Any]) -> Optional[int]:
+    for section_key in ("api-server", "api_server", "api_server_args", "server"):
+        section = vllm_config.get(section_key)
+        if isinstance(section, dict) and section.get("port") is not None:
+            return int(section["port"])
+    return None
+
+
+def _is_port_available(port: int) -> bool:
+    if port in PORT_MODEL_MAP or port in WORKER_PROCESS_MAP:
+        return False
+
+    main_port = int(RUNTIME_SETTINGS.get("main_port", 8000))
+    if int(port) == main_port:
+        return False
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("0.0.0.0", int(port)))
+        except OSError:
+            return False
+    return True
+
+
 def _allocate_port(start_port: int = 7900) -> int:
     port = start_port
-    while port in PORT_MODEL_MAP:
+    while not _is_port_available(port):
         port += 1
     return port
 
@@ -293,6 +662,7 @@ def _register_worker_runtime(
     model_name: str,
     process: multiprocessing.Process,
     instance_cfg: Dict[str, Any],
+    source: str = "dynamic",
 ):
     port = int(instance_cfg["port"])
     runtime = WORKER_RUNTIME_MAP.get(port, {})
@@ -307,6 +677,14 @@ def _register_worker_runtime(
         }
     )
     WORKER_RUNTIME_MAP[port] = runtime
+    MODEL_LOAD_MANAGER.register_instance(
+        model_name=model_name,
+        model_path=str(instance_cfg.get("model_path", "")),
+        model_type=str(instance_cfg.get("model_type", "llm")),
+        instance_cfg=instance_cfg,
+        process=process,
+        source=source,
+    )
 
 
 def _unregister_worker_runtime(port: int):
@@ -416,12 +794,16 @@ def _build_processor_records() -> list[Dict[str, Any]]:
 
 
 def _build_instance_config(model_name: str, server_config: Dict[str, Any]) -> Dict[str, Any]:
-    requested_port = server_config.get("port")
+    server_config = _merge_dynamic_server_config(model_name, server_config)
+    vllm_config = server_config.get("vllm_config", {})
+    requested_port = _extract_port_from_vllm_config(vllm_config)
     if requested_port is not None:
-        port = int(requested_port)
-        bound_model = PORT_MODEL_MAP.get(port)
+        bound_model = PORT_MODEL_MAP.get(requested_port)
         if bound_model is not None and bound_model != model_name:
-            raise ValueError(f"端口 {port} 已被模型 {bound_model} 占用")
+            raise ValueError(f"端口 {requested_port} 已被模型 {bound_model} 占用")
+        if not _is_port_available(requested_port):
+            raise ValueError(f"端口 {requested_port} 已被占用")
+        port = requested_port
     else:
         start_port = int(RUNTIME_SETTINGS.get("main_port", 8000)) + 1
         port = _allocate_port(start_port=start_port)
@@ -433,7 +815,7 @@ def _build_instance_config(model_name: str, server_config: Dict[str, Any]) -> Di
     return {
         "port": int(port),
         "model_path": model_path,
-        "model_type": server_config.get("model_type", "text"),
+        "model_type": server_config.get("model_type", "llm"),
         "vllm_config": server_config.get("vllm_config", {}),
         "additional_config": server_config.get("additional_config", {}),
     }
@@ -596,6 +978,7 @@ def start_workers(config: AppConfig):
                     instance=inst,
                     fallback_model_type=model.model_type,
                 ),
+                source="static",
             )
             sync_logger.info(
                 f"预加载模型成功: model={name} port={p} device={device_ids} pid={proc.pid}"
@@ -618,7 +1001,7 @@ def start_dynamic_worker(model_name: str, server_config: Dict[str, Any]):
             instance_cfg.get("model_path"),
             instance_cfg.get("vllm_config", {}),
             instance_cfg.get("additional_config", {}),
-            instance_cfg.get("model_type", "text"),
+            instance_cfg.get("model_type", "llm"),
             APP_CONFIG.server.logging.to_dict(),
         ),
         daemon=False,
@@ -630,7 +1013,12 @@ def start_dynamic_worker(model_name: str, server_config: Dict[str, Any]):
     PORT_MODEL_MAP[port] = model_name
     MODEL_PORT_MAP.setdefault(model_name, []).append(port)
     DYNAMIC_MODEL_INSTANCES.setdefault(model_name, []).append(port)
-    _register_worker_runtime(model_name=model_name, process=proc, instance_cfg=instance_cfg)
+    _register_worker_runtime(
+        model_name=model_name,
+        process=proc,
+        instance_cfg=instance_cfg,
+        source="dynamic",
+    )
 
     try:
         wait_for_worker_ready(port)
@@ -682,6 +1070,7 @@ def unload_worker(model_name: Optional[str] = None, port: Optional[int] = None):
                 DYNAMIC_MODEL_INSTANCES.pop(loaded_model, None)
 
         _unregister_worker_runtime(target_port)
+        MODEL_LOAD_MANAGER.unregister_instance(model_name=loaded_model, port=target_port)
 
         unloaded.append({"model": loaded_model, "port": target_port})
 
@@ -690,39 +1079,40 @@ def unload_worker(model_name: Optional[str] = None, port: Optional[int] = None):
 
 def _resolve_worker_url(req_body: Dict[str, Any], raw_request: Request) -> str:
     path = raw_request.url.path
-    endpoint_model_type = _resolve_model_type_from_path(path) or "text"
+    endpoint_model_type = _resolve_model_type_from_path(path) or "llm"
 
     model_name = req_body.get("model") or raw_request.headers.get("X-Worker-Model")
-    port = normalize_port(req_body.get("port") or raw_request.headers.get("X-Worker-Port"))
+    requested_port = normalize_port(req_body.get("port") or raw_request.headers.get("X-Worker-Port"))
 
     if not model_name:
         raise ValueError("请求中必须包含 model 字段")
 
-    if port is not None and port in PORT_MODEL_MAP:
-        bound_model = PORT_MODEL_MAP[port]
-        if bound_model != model_name:
-            raise ValueError(f"端口 {port} 已绑定模型 {bound_model}，不能用于模型 {model_name}")
+    if requested_port is not None:
+        if requested_port not in PORT_MODEL_MAP:
+            raise ValueError(
+                f"端口 {requested_port} 未加载模型；推理接口不会按端口创建新实例，"
+                "如需加载指定端口或同模型多实例，请先调用 /models/load"
+            )
 
-    worker_port = resolve_worker_port(model_name=model_name, port=port)
+        bound_model = PORT_MODEL_MAP[requested_port]
+        if bound_model != model_name:
+            raise ValueError(f"端口 {requested_port} 已绑定模型 {bound_model}，不能用于模型 {model_name}")
+
+    worker_port = resolve_worker_port(model_name=model_name, port=requested_port)
 
     if worker_port == "multiple":
         raise ValueError(
-            f"模型 {model_name} 存在多个实例，请通过 server_config.port 或 X-Worker-Port 指定端口: {MODEL_PORT_MAP.get(model_name, [])}"
+            f"模型 {model_name} 存在多个实例，请通过请求体 port 或 X-Worker-Port 指定端口: {MODEL_PORT_MAP.get(model_name, [])}"
         )
 
     if worker_port is None:
         validate_dynamic_model_name(model_name)
 
-        server_config_raw = req_body.get("server_config")
-        if server_config_raw is None:
-            raise ValueError(
-                "模型未加载。请先调用 POST /hlie/v1/models 加载，或在本次请求中提供 server_config 进行动态拉起"
-            )
-
+        server_config_raw = req_body.get("server_config", {})
         server_config = _normalize_server_config(
             server_config_raw,
             endpoint_model_type=endpoint_model_type,
-            allow_empty=False,
+            allow_empty=True,
         )
         instance_cfg = start_dynamic_worker(model_name, server_config)
         worker_port = int(instance_cfg["port"])
@@ -855,7 +1245,6 @@ async def _forward_stream(url: str, request, raw_request: Request):
 
 
 @main_app.get("/v1/models")
-@main_app.get("/hlie/v1/models")
 async def list_models():
     models = _build_model_records()
     return JSONResponse(
@@ -865,24 +1254,35 @@ async def list_models():
     )
 
 
-@main_app.get("/hlie/v1/status")
+@main_app.get("/v1/status")
 async def service_status():
-    return JSONResponse(content={"code": 0, "processor": _build_processor_records()})
+    return JSONResponse(
+        content={
+            "code": 0,
+            "processor": _build_processor_records(),
+            "models": MODEL_LOAD_MANAGER.snapshot(),
+        }
+    )
 
 
-@main_app.post("/hlie/v1/models")
+@main_app.get("/v1/model_loads")
+async def model_loads():
+    return JSONResponse(content={"code": 0, "models": MODEL_LOAD_MANAGER.snapshot()})
+
+
+@main_app.post("/models/load")
 async def load_model(request: Request):
     req_body = await _parse_json_body(request)
-    model_name = req_body.get("model_name")
+    model_name = req_body.get("model")
     if not model_name:
-        raise ValueError("请求中必须包含 model_name 字段")
+        raise ValueError("请求中必须包含 model 字段")
 
     validate_dynamic_model_name(model_name)
 
     raw_server_config = req_body.get("server_config")
     server_config = _normalize_server_config(
         raw_server_config,
-        endpoint_model_type="text",
+        endpoint_model_type="llm",
         allow_empty=True,
     )
     instance_cfg = start_dynamic_worker(model_name, server_config)
@@ -893,15 +1293,34 @@ async def load_model(request: Request):
             "message": f"模型 {model_name} 加载成功",
             "port": worker_port,
             "config": instance_cfg,
+            "model_load": MODEL_LOAD_MANAGER.snapshot().get(model_name),
         }
     )
 
 
-@main_app.delete("/hlie/v1/models/{model_name:path}")
-async def unload_model(model_name: str):
-    unloaded = unload_worker(model_name=model_name)
-    return JSONResponse(content={"message": "模型卸载成功", "unloaded": unloaded})
+@main_app.post("/models/unload")
+async def unload_model(request: Request):
+    req_body = await _parse_json_body(request)
+    model = req_body.get("model")
+    port = req_body.get("port")
 
+    if model in (None, "") and port in (None, ""):
+        raise ValueError("请求中必须包含 model 或 port 字段")
+
+    if port is not None:
+        bound_model = PORT_MODEL_MAP.get(int(port))
+        if model not in (None, "") and bound_model != model:
+            raise ValueError(f"端口 {port} 未绑定模型 {model}，当前绑定模型: {bound_model}")
+        unloaded = unload_worker(port=int(port))
+    else:
+        unloaded = unload_worker(model_name=str(model))
+    return JSONResponse(
+        content={
+            "message": "模型卸载成功",
+            "unloaded": unloaded,
+            "models": MODEL_LOAD_MANAGER.snapshot(),
+        }
+    )
 
 @main_app.post("/v1/chat/completions", dependencies=[Depends(validate_json_request)])
 async def create_chat_completion(request: ChatCompletionRequest, raw_request: Request):
@@ -976,7 +1395,7 @@ async def create_audio_transcriptions(raw_request: Request):
 
 
 def main():
-    global APP_CONFIG, RUNTIME_SETTINGS, logger, sync_logger
+    global APP_CONFIG, RUNTIME_SETTINGS, logger, sync_logger, DEFAULT_MODEL_ARGS
     APP_CONFIG = load_app_config()
     logging_settings = configure_logging(
         APP_CONFIG.server.logging,
@@ -986,6 +1405,7 @@ def main():
     logger = get_async_logger(f"main:{APP_CONFIG.server.main_port}")
     sync_logger = get_sync_logger(f"main:{APP_CONFIG.server.main_port}")
     RUNTIME_SETTINGS = get_runtime_settings(APP_CONFIG)
+    DEFAULT_MODEL_ARGS = load_default_model_args()
     refresh_available_models()
 
     logger.debug(

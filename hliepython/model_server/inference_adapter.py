@@ -7,9 +7,9 @@ class InferenceEngineFactory:
 
     @staticmethod
     def get_engine(instance_config: Dict[str, Any]) -> InferenceEngine:
-        model_type = instance_config.get("model_type", "text")
+        model_type = instance_config.get("model_type", "llm")
 
-        if model_type == "text":
+        if model_type == "llm":
             from hliepython.model_server.engines.text_engine import TextEngine
 
             return TextEngine(instance_config)

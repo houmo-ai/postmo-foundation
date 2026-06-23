@@ -27,6 +27,7 @@ from hliepython.model_server.engines.utils import (
     move_vllm_engine_args_from_additional_config,
     split_vllm_config,
 )
+from hliepython.model_server.utils.gguf_metadata import apply_gguf_metadata_defaults_to_vllm_engine_args
 
 from vllm.entrypoints.utils import get_max_tokens
 from vllm.multimodal.audio import get_audio_duration, split_audio
@@ -194,6 +195,10 @@ class ASREngine(InferenceEngine):
             vllm_engine_args, additional_config = move_vllm_engine_args_from_additional_config(
                 vllm_engine_args,
                 additional_config,
+            )
+            vllm_engine_args = apply_gguf_metadata_defaults_to_vllm_engine_args(
+                self.model_path,
+                vllm_engine_args,
             )
 
             parse_gguf(self.model_path)
