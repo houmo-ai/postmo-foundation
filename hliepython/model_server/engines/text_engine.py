@@ -28,10 +28,9 @@ from hliepython.model_server.engines.utils import (
 from hliepython.model_server.engines.base_engine import InferenceEngine
 from hliepython.model_server.engines.protocol.chat_completions import (
     ChatCompletionRequest,
-    parse_chat_messages,
+    # parse_chat_messages,
     ChatCompletionRequest,
     ChatCompletionResponse,
-    ErrorResponse,
     ChatCompletionResponseStreamChoice,
     DeltaMessage,
     ChatCompletionStreamResponse,
@@ -46,6 +45,11 @@ from hliepython.model_server.engines.protocol.chat_completions import (
 from hliepython.model_server.utils.gguf_metadata import (
     apply_gguf_metadata_defaults_to_vllm_engine_args,
     get_gguf_metadata,
+)
+
+from vllm.entrypoints.chat_utils import parse_chat_messages
+from vllm.entrypoints.openai.engine.protocol import (
+    ErrorResponse,
 )
 
 from vllm.outputs import RequestOutput
@@ -335,17 +339,6 @@ class TextEngine(InferenceEngine):
             "usage": self._build_usage(prompt, content),
         }
 
-    def create_error_response(
-        self,
-        message: str,
-        err_type: str = "BadRequestError",
-        status_code: HTTPStatus = HTTPStatus.BAD_REQUEST,
-    ) -> ErrorResponse:
-        return ErrorResponse(
-            message=message,
-            type=err_type,
-            code=status_code.value
-        )
 
     def get_chat_request_role(self, request: ChatCompletionRequest) -> str:
         logger.debug(f" ---------------------------------------------- ")
@@ -921,19 +914,7 @@ class TextEngine(InferenceEngine):
         )
 
         return response
-    
-    def create_streaming_error_response(
-        self,
-        message: str,
-        err_type: str = "BadRequestError",
-        status_code: HTTPStatus = HTTPStatus.BAD_REQUEST,
-    ) -> str:
-        json_str = json.dumps(
-            self.create_error_response(
-                message=message, err_type=err_type, status_code=status_code
-            ).model_dump()
-        )
-        return json_str
+
 
     def _create_chat_logprobs(
         self,

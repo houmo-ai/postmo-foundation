@@ -20,6 +20,9 @@ from vllm.entrypoints.openai.speech_to_text.protocol import (
     TranscriptionResponse,
     TranslationResponse,
 )
+from vllm.entrypoints.openai.engine.protocol import (
+    ErrorResponse,
+)
 
 from hliepython.model_server.engines.protocol.audio_speech import (
     AudioSpeechRequest,
@@ -27,7 +30,7 @@ from hliepython.model_server.engines.protocol.audio_speech import (
 from hliepython.model_server.engines.protocol.chat_completions import (
     ChatCompletionRequest,
     ChatCompletionResponse,
-    ErrorResponse
+    # ErrorResponse
 )
 from hliepython.model_server.engines.protocol.embeddings import (
     EmbeddingRequest,

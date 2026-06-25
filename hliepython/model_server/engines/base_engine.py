@@ -3,14 +3,20 @@ import io
 import json
 import uuid
 import hashlib
+from http import HTTPStatus
 from typing import Dict, Any, NoReturn
-from hliepython.utils.logging import async_logger as logger
 from fastapi import Request
 from abc import ABC, abstractmethod
 
 from hliepython.model_server.engines.protocol.audio_speech import (
     AudioSpeechRequest,
     AudioSpeechResponse,
+)
+from hliepython.utils.logging import async_logger as logger
+
+from vllm.entrypoints.utils import create_error_response
+from vllm.entrypoints.openai.engine.protocol import (
+    ErrorResponse,
 )
 
 MASK_64_BITS = (1 << 64) - 1
@@ -137,3 +143,29 @@ class InferenceEngine(ABC):
                 raise ValueError(f"Invalid device ID: {s} is not an integer")
 
         return device_ids_list
+
+    @staticmethod
+    def create_error_response(
+        message: str | Exception,
+        err_type: str = "BadRequestError",
+        status_code: HTTPStatus = HTTPStatus.BAD_REQUEST,
+        param: str | None = None,
+    ) -> ErrorResponse:
+        return create_error_response(message, err_type, status_code, param)
+
+    def create_streaming_error_response(
+        self,
+        message: str | Exception,
+        err_type: str = "BadRequestError",
+        status_code: HTTPStatus = HTTPStatus.BAD_REQUEST,
+        param: str | None = None,
+    ) -> str:
+        json_str = json.dumps(
+            self.create_error_response(
+                message=message,
+                err_type=err_type,
+                status_code=status_code,
+                param=param,
+            ).model_dump()
+        )
+        return json_str

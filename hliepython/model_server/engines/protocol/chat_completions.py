@@ -18,6 +18,10 @@ from typing import Annotated, Any, ClassVar, Literal
 from functools import partial
 from collections.abc import Iterable
 
+from vllm.entrypoints.openai.engine.protocol import (
+    OpenAIBaseModel
+)
+
 from vllm.exceptions import VLLMValidationError
 from vllm.sampling_params import (
     BeamSearchParams,
@@ -26,6 +30,12 @@ from vllm.sampling_params import (
     SamplingParams,
     StructuredOutputsParams,
 )
+
+from openai.types.chat.chat_completion_content_part_input_audio_param import InputAudio
+from vllm.entrypoints.chat_utils import (
+    ConversationMessage,
+)
+
 
 
 _INT64_MIN = -(2**63)
@@ -45,47 +55,47 @@ def make_tool_call_id(id_type: str = "random", func_name=None, idx=None):
         # by default return random
         return f"chatcmpl-tool-{random_uuid()}"
 
-class OpenAIBaseModel(BaseModel):
-    # OpenAI API does allow extra fields
-    model_config = ConfigDict(extra="allow")
-    # Cache class field names
-    field_names: ClassVar[Optional[set[str]]] = None
-    @model_validator(mode="wrap")
-    @classmethod
-    def __log_extra_fields__(cls, data, handler):
-        result = handler(data)
-        if not isinstance(data, dict):
-            return result
-        field_names = cls.field_names
-        if field_names is None:
-            # Get all class field names and their potential aliases
-            field_names = set()
-            for field_name, field in cls.model_fields.items():
-                field_names.add(field_name)
-                if alias := getattr(field, "alias", None):
-                    field_names.add(alias)
-            cls.field_names = field_names
-        # Compare against both field names and aliases
-        if any(k not in field_names for k in data):
-            logger.warning(
-                "The following fields were present in the request "
-                "but ignored: %s",
-                data.keys() - field_names,
-            )
-        return result
+# class OpenAIBaseModel(BaseModel):
+#     # OpenAI API does allow extra fields
+#     model_config = ConfigDict(extra="allow")
+#     # Cache class field names
+#     field_names: ClassVar[Optional[set[str]]] = None
+#     @model_validator(mode="wrap")
+#     @classmethod
+#     def __log_extra_fields__(cls, data, handler):
+#         result = handler(data)
+#         if not isinstance(data, dict):
+#             return result
+#         field_names = cls.field_names
+#         if field_names is None:
+#             # Get all class field names and their potential aliases
+#             field_names = set()
+#             for field_name, field in cls.model_fields.items():
+#                 field_names.add(field_name)
+#                 if alias := getattr(field, "alias", None):
+#                     field_names.add(alias)
+#             cls.field_names = field_names
+#         # Compare against both field names and aliases
+#         if any(k not in field_names for k in data):
+#             logger.warning(
+#                 "The following fields were present in the request "
+#                 "but ignored: %s",
+#                 data.keys() - field_names,
+#             )
+#         return result
 
-class ErrorInfo(OpenAIBaseModel):
-    message: str
-    type: str
-    param: str | None = None
-    code: int
+# class ErrorInfo(OpenAIBaseModel):
+#     message: str
+#     type: str
+#     param: str | None = None
+#     code: int
 
-class ErrorResponse(OpenAIBaseModel):
-    object: str = "error"
-    message: str
-    type: str
-    param: Optional[str] = None
-    code: int
+# class ErrorResponse(OpenAIBaseModel):
+#     object: str = "error"
+#     message: str
+#     type: str
+#     param: Optional[str] = None
+#     code: int
 
 
 #####################  Request  #####################
@@ -103,9 +113,9 @@ class ImageURL(TypedDict, total=False):
     detail: Literal["auto", "low", "high"]
 
 
-class InputAudio(TypedDict, total=False):
-    data: Required[str]
-    format: Required[Literal["wav", "mp3"]]
+# class InputAudio(TypedDict, total=False):
+#     data: Required[str]
+#     format: Required[Literal["wav", "mp3"]]
 
 
 class FileFile(TypedDict, total=False):
@@ -214,12 +224,12 @@ ChatCompletionMessageParam: TypeAlias = Union[
 ]
 
 
-class ConversationMessage(TypedDict, total=False):
-    role: Required[str]
-    """The role of the message's author."""
+# class ConversationMessage(TypedDict, total=False):
+#     role: Required[str]
+#     """The role of the message's author."""
 
-    content: Union[Optional[str], list[dict[str, str]]]
-    """The contents of the message"""
+#     content: Union[Optional[str], list[dict[str, str]]]
+#     """The contents of the message"""
 
 
 class StreamOptions(OpenAIBaseModel):
@@ -774,38 +784,6 @@ class ImageGenerationRequest(BaseModel):
 
 #####################  Response  #####################
 
-class ModelPermission(OpenAIBaseModel):
-    id: str = Field(default_factory=lambda: f"modelperm-{random_uuid()}")
-    object: str = "model_permission"
-    created: int = Field(default_factory=lambda: int(time.time()))
-    allow_create_engine: bool = False
-    allow_sampling: bool = True
-    allow_logprobs: bool = True
-    allow_search_indices: bool = False
-    allow_view: bool = True
-    allow_fine_tuning: bool = False
-    organization: str = "*"
-    group: Optional[str] = None
-    is_blocking: bool = False
-
-
-class ModelCard(OpenAIBaseModel):
-    id: str
-    object: str = "model"
-    created: int = Field(default_factory=lambda: int(time.time()))
-    owned_by: str = "houmo"
-    root: Optional[str] = None
-    parent: Optional[str] = None
-    permission: list[ModelPermission] = Field(default_factory=list)
-    # Not OpenAI API parameters
-    # max_model_len: Optional[int] = None
-
-
-class ModelList(OpenAIBaseModel):
-    object: str = "list"
-    data: list[ModelCard] = Field(default_factory=list)
-
-
 class PromptTokenUsageInfo(OpenAIBaseModel):
     cached_tokens: Optional[int] = None
     audio_tokens: Optional[int] = None
@@ -942,219 +920,6 @@ class ImageURL(BaseModel):
 
 class ImageB64JSON(BaseModel):
     b64_json: str
-
-class Timings(BaseModel):
-    predicted_ms: float
-    """Total pipeline time in seconds."""
-
-class ImageGenerationResponse(BaseModel):
-    created: Optional[int] = Field(default_factory=lambda: int(time.time()))
-    data: List[Union[ImageB64JSON, ImageURL]]
-    # model: Optional[str] = None
-    user: Optional[str] = "default_user"
-    timings: Optional[Timings] = None
-
-
-class PILImage(BaseModel):
-    """
-    A PIL.Image.Image object.
-    """
-
-    image_pil: Image.Image
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-
-_ContentPart: TypeAlias = str | dict[str, str] | InputAudio | PILImage | dict[str, PILImage]
-
-_TextParser = partial(cast, ChatCompletionContentPartTextParam)
-_InputAudioParser = partial(cast, ChatCompletionContentPartInputAudioParam)
-# Need to validate url objects
-_ImageParser = TypeAdapter(ChatCompletionContentPartImageParam).validate_python
-
-MM_PARSER_MAP: dict[
-    str,
-    Callable[[ChatCompletionContentPartParam], _ContentPart],
-] = {
-    "text": lambda part: _TextParser(part).get("text", None),
-    # "thinking": lambda part: _ThinkParser(part).get("thinking", None),
-    "input_text": lambda part: _TextParser(part).get("text", None),
-    "output_text": lambda part: _TextParser(part).get("text", None),
-    # "input_image": lambda part: _ResponsesInputImageParser(part).get("image_url", None),
-    "image_url": lambda part: _ImageParser(part).get("image_url", {}).get("url", None),
-    # "image_embeds": lambda part: _ImageEmbedsParser(part).get("image_embeds", None),
-    # "audio_embeds": lambda part: _AudioEmbedsParser(part).get("audio_embeds", None),
-    # "image_pil": lambda part: _PILImageParser(part).get("image_pil", None),
-    # "audio_url": lambda part: _AudioParser(part).get("audio_url", {}).get("url", None),
-    "input_audio": lambda part: _InputAudioParser(part).get("input_audio", None),
-    # "refusal": lambda part: _RefusalParser(part).get("refusal", None),
-    # "video_url": lambda part: _VideoParser(part).get("video_url", {}).get("url", None),
-}
-
-def _parse_chat_message_content_mm_part(
-    part: ChatCompletionContentPartParam
-) -> tuple[str, _ContentPart]:
-    part_type = part.get("type", None)
-    uuid = part.get("uuid", None)
-
-    if part_type is None:
-        raise ValueError("Missing 'type' field in multimodal part.")
-
-    if isinstance(part_type, str) and part_type in MM_PARSER_MAP and uuid is None:
-        content = MM_PARSER_MAP[part_type](part)
-
-        if part_type == "image_url" and part.get("detail", "auto") != "auto":
-            logger.warning(
-                "'image_url.detail' is currently not supported and will be ignored."
-            )
-
-        # logger.debug(f"content: {content}")
-
-        return part_type, content
-
-    if not isinstance(part_type, str):
-        raise ValueError("Invalid 'type' field in multimodal part.")
-    return part_type, "unknown part_type content"
-
-PART_TYPES_TO_SKIP_NONE_CONTENT = (
-    "text",
-    "refusal",
-)
-
-def _parse_chat_message_content_part(
-    part: ChatCompletionContentPartParam,
-    wrap_dicts: bool = False
-) -> _ContentPart | None:
-    if isinstance(part, str):
-        return part
-
-    part_type, content = _parse_chat_message_content_mm_part(part)
-
-    # if part_type is text/refusal/image_url/audio_url/video_url/input_audio but
-    # content is None, log a warning and skip
-    if part_type in PART_TYPES_TO_SKIP_NONE_CONTENT and content is None:
-        logger.warning(
-            "Skipping multimodal part '%s' (type: '%s') "
-            "with empty / unparsable content.",
-            part,
-            part_type,
-        )
-        return None
-
-    if part_type in ("text", "input_text", "output_text", "refusal", "thinking"):
-        str_content = cast(str, content)
-        # if wrap_dicts:
-        #     return {"type": "text", "text": str_content}
-        # else:
-        #     return str_content
-        return {"type": "text", "text": str_content}
-
-    # For media items, if a user has provided one, use it. Otherwise, insert
-    # a placeholder empty uuid.
-    uuid = part.get("uuid", None)
-    if uuid is not None:
-        uuid = str(uuid)
-
-    modality = None
-    if part_type in ("image_url", "input_image"):
-        str_content = cast(str, content)
-        # mm_parser.parse_image(str_content, uuid)
-        mm_parse_res = str_content
-        modality = "image"
-    # elif part_type == "image_pil":
-    #     image_content = cast(Image.Image, content) if content is not None else None
-    #     mm_parser.parse_image_pil(image_content, uuid)
-    #     modality = "image"
-    # elif part_type == "image_embeds":
-    #     content = cast(str | dict[str, str], content) if content is not None else None
-    #     mm_parser.parse_image_embeds(content, uuid)
-    #     modality = "image"
-    # elif part_type == "audio_embeds":
-    #     content = cast(str | dict[str, str], content) if content is not None else None
-    #     mm_parser.parse_audio_embeds(content, uuid)
-    #     modality = "audio"
-    # elif part_type == "audio_url":
-    #     str_content = cast(str, content)
-    #     mm_parser.parse_audio(str_content, uuid)
-    #     modality = "audio"
-    # elif part_type == "input_audio":
-    #     dict_content = cast(InputAudio, content)
-    #     mm_parser.parse_input_audio(dict_content, uuid)
-    #     modality = "audio"
-    # elif part_type == "video_url":
-    #     str_content = cast(str, content)
-    #     mm_parser.parse_video(str_content, uuid)
-    #     modality = "video"
-    else:
-        raise NotImplementedError(f"Unknown part type: {part_type}")
-
-    # return (
-    #     {"type": modality}
-    #     if wrap_dicts
-    #     else (MODALITY_PLACEHOLDERS_MAP[modality] if interleave_strings else None)
-    # )
-    # if wrap_dicts:
-    #     return {"type": modality, modality: mm_parse_res}
-    # else:
-    #     return mm_parse_res
-    return {"type": part_type, part_type: mm_parse_res}
-
-def _parse_chat_message_content_parts(
-    role: str,
-    parts: Iterable[ChatCompletionContentPartParam],
-    wrap_dicts: bool = False,
-) -> list[ConversationMessage]:
-    content = list[_ContentPart]()
-
-    for part in parts:
-        # logger.debug(f"part: {part}")
-        parse_res = _parse_chat_message_content_part(part, wrap_dicts=wrap_dicts)
-        # logger.debug(f"res: {parse_res}")
-        if parse_res is not None:
-            content.append(parse_res)
-
-    if True:
-        # Parsing wraps images and texts as interleaved dictionaries
-        return [ConversationMessage(role=role, content=content)]
-
-    for con in content:
-        logger.info(f"con: {con}")
-    texts = "\n".join(content)
-    logger.info(f"texts: {texts}")
-    return [ConversationMessage(role=role, content=texts)]
-
-def parse_chat_message_content(
-    message: ChatCompletionMessageParam
-) -> list[ConversationMessage]:
-    role = message["role"]
-    content = message.get("content")
-    reasoning = message.get("reasoning") or message.get("reasoning_content")
-
-    if isinstance(content, str):
-        return [ConversationMessage(role=role, content=content)]
-
-    result = _parse_chat_message_content_parts(
-        role,
-        content,
-        wrap_dicts=False,
-    )
-
-    # logger.debug(f"result: {result}")
-
-    return result
-
-def parse_chat_messages(
-    messages: list[ChatCompletionMessageParam]
-) -> list[ConversationMessage]:
-    conversation: list[ConversationMessage] = []
-
-    for msg in messages:
-        # logger.debug(f"msg: {msg}")
-        sub_messages = parse_chat_message_content(msg)
-
-        conversation.extend(sub_messages)
-
-    # logger.info(f"conversation: {conversation}")
-    return conversation
 
 
 #####################  Embedding  #####################
