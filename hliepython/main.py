@@ -857,6 +857,21 @@ def wait_for_worker_ready(port: int, timeout: float = 120.0):
     raise RuntimeError(f"Worker {port} 启动超时: {last_error}")
 
 
+def _resolve_worker_startup_timeout(instance_cfg: Dict[str, Any]) -> float:
+    additional_config = instance_cfg.get("additional_config") or {}
+    timeout = additional_config.get("worker_startup_timeout")
+    if timeout is None:
+        vllm_config = instance_cfg.get("vllm_config") or {}
+        timeout = vllm_config.get("worker_startup_timeout")
+    if timeout is None:
+        return 120.0
+    try:
+        return max(float(timeout), 1.0)
+    except (TypeError, ValueError):
+        sync_logger.warning(f"忽略非法 worker_startup_timeout={timeout!r}")
+        return 120.0
+
+
 def resolve_worker_port(model_name: Optional[str] = None, port: Optional[int] = None):
     if port is not None:
         return port if port in PORT_MODEL_MAP else None
@@ -1021,7 +1036,7 @@ def start_dynamic_worker(model_name: str, server_config: Dict[str, Any]):
     )
 
     try:
-        wait_for_worker_ready(port)
+        wait_for_worker_ready(port, timeout=_resolve_worker_startup_timeout(instance_cfg))
     except Exception:
         unload_worker(port=port)
         raise

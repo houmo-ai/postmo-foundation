@@ -21,6 +21,10 @@ class InferenceEngineFactory:
             from hliepython.model_server.engines.asr_engine import ASREngine
 
             return ASREngine(instance_config)
+        elif model_type == "forced_aligner":
+            from hliepython.model_server.engines.forced_aligner_engine import ForcedAlignerEngine
+
+            return ForcedAlignerEngine(instance_config)
         elif model_type == "tts":
             from hliepython.model_server.engines.tts_engine import TTSEngine
 

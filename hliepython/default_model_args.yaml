@@ -46,8 +46,8 @@ profiles:
       engine:
         load-format: "dummy"
 
-  asr_forced_aligner: &profile_asr_forced_aligner
-    model_type: "asr"
+  forced_aligner: &profile_forced_aligner
+    model_type: "forced_aligner"
     vllm_config:
       engine:
         load-format: "dummy"
@@ -55,8 +55,11 @@ profiles:
           architectures: ["Qwen3ASRForcedAlignerForTokenClassification"]
         enforce-eager: true
         runner: "pooling"
+        max-model-len: 411
       serving:
         trust-request-chat-template: true
+    additional_config:
+      worker_startup_timeout: 600
 
   embedding: &profile_embedding
     model_type: "embedding"
@@ -174,7 +177,7 @@ models:
     <<: *profile_reranker_qwen3
 
   HiModel_xh2_qwen3-ForcedAligner_0.6b_2cores_v1.3.0_20260525.gguf:
-    <<: *profile_asr_forced_aligner
+    <<: *profile_forced_aligner
 
   HiModel_xh2_glm-ocr_0.9b_256_8k_b1_1chip_2cores_v1.3.0_20260519.gguf:
     <<: *profile_llm
