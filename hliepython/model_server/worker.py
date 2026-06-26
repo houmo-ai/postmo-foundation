@@ -23,6 +23,11 @@ from vllm.entrypoints.openai.speech_to_text.protocol import (
 from vllm.entrypoints.openai.engine.protocol import (
     ErrorResponse,
 )
+from vllm.entrypoints.openai.responses.protocol import (
+    ResponsesRequest,
+    ResponsesResponse,
+    StreamingResponsesResponse,
+)
 
 from hliepython.model_server.engines.protocol.audio_speech import (
     AudioSpeechRequest,
@@ -108,6 +113,7 @@ VLLM_MAX_NUM_SEQS: int = 1
 # 路由注册表
 routes: Dict[str, str] = {
     "/v1/chat/completions": "create_chat_completions",
+    "/v1/responses": "create_responses",
     "/v1/embeddings": "create_embeddings",
     "/score": "create_score",
     "/v1/score": "create_score",
@@ -534,6 +540,16 @@ def _to_response(result: Any) -> Response:
     return JSONResponse(content=jsonable_encoder(content), status_code=int(status_code))
 
 
+async def _convert_responses_stream_to_sse_events(
+    generator: AsyncGenerator[StreamingResponsesResponse, None],
+) -> AsyncGenerator[str, None]:
+    """Convert vLLM Responses API stream objects to SSE events."""
+    async for event in generator:
+        event_type = getattr(event, "type", "unknown")
+        event_data = event.model_dump_json(indent=None, by_alias=True)
+        yield f"event: {event_type}\ndata: {event_data}\n\n"
+
+
 def create_route_handler(method_name: str):
     """动态创建路由处理器"""
     async def handler(raw_request: Request):
@@ -565,6 +581,8 @@ def create_route_handler(method_name: str):
             method_input: Any = req_data
             if method_name == "create_chat_completions":
                 method_input = ChatCompletionRequest(**req_data)
+            elif method_name == "create_responses":
+                method_input = ResponsesRequest.model_validate(req_data)
             elif method_name == "create_embeddings":
                 method_input = EmbeddingRequest(**req_data)
             elif method_name == "create_score":
@@ -592,6 +610,21 @@ def create_route_handler(method_name: str):
                         return JSONResponse(status_code=499, content={"error": "客户端已断开，推理已取消"})
                     await asyncio.sleep(0.05)
                 result = await infer_task
+
+            if isinstance(result, ErrorResponse):
+                return JSONResponse(
+                    content=result.model_dump(mode="json", by_alias=True),
+                    status_code=result.error.code,
+                )
+
+            if isinstance(result, ResponsesResponse):
+                return JSONResponse(content=result.model_dump(mode="json", by_alias=True))
+
+            if method_name == "create_responses" and isinstance(result, AsyncGenerator):
+                return StreamingResponse(
+                    content=_convert_responses_stream_to_sse_events(result),
+                    media_type="text/event-stream",
+                )
 
             return _to_response(result)
 

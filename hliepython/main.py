@@ -29,6 +29,7 @@ from hliepython.model_server.engines.protocol.audio_speech import (
 from hliepython.model_server.engines.protocol.embeddings import (
     EmbeddingRequest,
 )
+from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
 from hliepython.model_server.worker import run_worker
 
 main_app = FastAPI(title="主进程 7800")
@@ -602,6 +603,7 @@ def _normalize_server_config(
 def _resolve_model_type_from_path(path: str) -> Optional[str]:
     path_alias = {
         "/v1/chat/completions": "llm",
+        "/v1/responses": "llm",
         "/v1/embeddings": "embedding",
         "/score": "reranker",
         "/v1/score": "reranker",
@@ -1385,6 +1387,18 @@ async def unload_model(request: Request):
 
 @main_app.post("/v1/chat/completions", dependencies=[Depends(validate_json_request)])
 async def create_chat_completion(request: ChatCompletionRequest, raw_request: Request):
+    req_body = await _build_req_body(request=request, raw_request=raw_request)
+    worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
+
+    stream = bool(req_body.get("stream", False))
+    if stream:
+        return await _forward_stream(worker_url, request=req_body, raw_request=raw_request)
+
+    return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+
+
+@main_app.post("/v1/responses", dependencies=[Depends(validate_json_request)])
+async def create_responses(request: ResponsesRequest, raw_request: Request):
     req_body = await _build_req_body(request=request, raw_request=raw_request)
     worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
 

@@ -92,6 +92,14 @@ class InferenceEngine(ABC):
         """文本聊天完成（子类按需实现）"""
         return self._unsupported("create_chat_completions")
 
+    def create_responses(
+        self,
+        request: Dict[str, Any],
+        raw_request: Request | None = None,
+    ) -> Dict[str, Any]:
+        """OpenAI Responses API（子类按需实现）"""
+        return self._unsupported("create_responses")
+
     def create_images_generations(
         self,
         request: Dict[str, Any],

@@ -65,6 +65,8 @@ from vllm.entrypoints.openai.chat_completion.protocol import (
 from vllm.entrypoints.openai.chat_completion.serving import OpenAIServingChat
 from vllm.entrypoints.openai.models.serving import OpenAIServingModels
 from vllm.entrypoints.openai.models.protocol import BaseModelPath
+from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
+from vllm.entrypoints.openai.responses.serving import OpenAIServingResponses
 from vllm.entrypoints.serve.render.serving import OpenAIServingRender
 
 class TextEngine(InferenceEngine):
@@ -93,6 +95,7 @@ class TextEngine(InferenceEngine):
         self.openai_serving_models = None
         self.openai_serving_render = None
         self.openai_serving_chat = None
+        self.openai_serving_responses = None
         self.use_vllm_openai_serving = True
         self.chat_template = None
         self.chat_template_kwargs: dict[str, Any] = {}
@@ -295,6 +298,28 @@ class TextEngine(InferenceEngine):
             self.openai_serving_chat = OpenAIServingChat(
                 **{key: value for key, value in chat_kwargs.items() if key in allowed}
             )
+            responses_kwargs = {
+                "engine_client": self.engine,
+                "models": self.openai_serving_models,
+                "openai_serving_render": self.openai_serving_render,
+                "request_logger": request_logger,
+                "chat_template": resolved_chat_template,
+                "chat_template_content_format": getattr(frontend_args, "chat_template_content_format", "auto"),
+                "return_tokens_as_token_ids": self.return_tokens_as_token_ids,
+                "reasoning_parser": reasoning_parser,
+                "enable_auto_tools": bool(getattr(frontend_args, "enable_auto_tool_choice", False)),
+                "tool_parser": getattr(frontend_args, "tool_call_parser", None),
+                "enable_prompt_tokens_details": bool(
+                    getattr(frontend_args, "enable_prompt_tokens_details", False)
+                ),
+                "enable_force_include_usage": self.enable_force_include_usage,
+                "enable_log_outputs": bool(getattr(frontend_args, "enable_log_outputs", False)),
+                "default_chat_template_kwargs": self.chat_template_kwargs,
+            }
+            allowed = set(inspect.signature(OpenAIServingResponses).parameters)
+            self.openai_serving_responses = OpenAIServingResponses(
+                **{key: value for key, value in responses_kwargs.items() if key in allowed}
+            )
             logger.info(f"vLLM OpenAI chat serving 层初始化完成: {vllm_frontend_args}")
         except Exception as exc:
             self.use_vllm_openai_serving = False
@@ -307,6 +332,13 @@ class TextEngine(InferenceEngine):
         if payload.get("return_tokens_as_token_ids") is None:
             payload["return_tokens_as_token_ids"] = self.return_tokens_as_token_ids
         return VllmChatCompletionRequest.model_validate(payload)
+
+    def _to_vllm_responses_request(self, request: ResponsesRequest) -> ResponsesRequest:
+        payload = request.model_dump(mode="json", exclude_none=True)
+        payload.pop("server_config", None)
+        payload.pop("port", None)
+        payload.setdefault("model", self.model_name)
+        return ResponsesRequest.model_validate(payload)
 
 
     def _build_usage(self, prompt: str, content: str) -> Dict[str, int]:
@@ -539,6 +571,24 @@ class TextEngine(InferenceEngine):
         except ValueError as e:
             # TODO: Use a vllm-specific Validation Error
             return self.create_error_response(str(e))
+
+    async def create_responses(
+        self,
+        request: ResponsesRequest,
+        raw_request: Request | None = None,
+    ):
+        if not self.use_vllm_openai_serving or self.openai_serving_responses is None:
+            return self.create_error_response("当前模型不支持 Responses API")
+
+        try:
+            vllm_request = self._to_vllm_responses_request(request)
+            return await self.openai_serving_responses.create_responses(
+                vllm_request,
+                raw_request,
+            )
+        except Exception as exc:
+            logger.exception(f"vLLM Responses API 处理失败: {exc}")
+            return self.create_error_response(str(exc))
 
 
     async def chat_completion_stream_generator(
