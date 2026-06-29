@@ -92,6 +92,8 @@ private:
     server_http_res_ptr route_llm_request(const server_http_req& req, const RequestHandler& handler,
                                           const std::string& method = "POST");
 
+    server_http_res_ptr handle_transcriptions_pipeline(const server_http_req& req, const json& body);
+
     server_http_res_ptr stop_service(const server_http_req& req);
 
     [[nodiscard]] server_http_res_ptr handle_get_status(const server_http_req& req);

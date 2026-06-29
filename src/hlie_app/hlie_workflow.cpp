@@ -132,6 +132,116 @@ namespace {
         return body.dump();
     }
 
+    std::string trim_copy(const std::string& value) {
+        const auto first = std::find_if_not(value.begin(), value.end(), [](const unsigned char c) { return std::isspace(c); });
+        const auto last = std::find_if_not(value.rbegin(), value.rend(), [](const unsigned char c) { return std::isspace(c); }).base();
+        if (first >= last) {
+            return {};
+        }
+        return {first, last};
+    }
+
+    std::string clean_asr_pipeline_text(std::string text) {
+        const std::string asr_text_tag = "<asr_text>";
+        if (const auto pos = text.find(asr_text_tag); pos != std::string::npos) {
+            text = text.substr(pos + asr_text_tag.size());
+        }
+
+        const std::string end_tag = "</asr_text>";
+        if (const auto pos = text.find(end_tag); pos != std::string::npos) {
+            text = text.substr(0, pos);
+        }
+
+        return trim_copy(text);
+    }
+
+    bool json_boolish(const json& body, const std::string& key) {
+        if (!body.contains(key) || body.at(key).is_null()) {
+            return false;
+        }
+        const auto& value = body.at(key);
+        if (value.is_boolean()) {
+            return value.get<bool>();
+        }
+        if (value.is_string()) {
+            const std::string s = normalize_model_name(value.get<std::string>());
+            return s == "true" || s == "1" || s == "yes";
+        }
+        return false;
+    }
+
+    std::string json_string_value(const json& body, const std::string& key) {
+        if (!body.contains(key) || body.at(key).is_null()) {
+            return {};
+        }
+        const auto& value = body.at(key);
+        if (value.is_string()) {
+            return value.get<std::string>();
+        }
+        return value.dump();
+    }
+
+    bool json_array_or_string_contains(const json& body, const std::string& key, const std::string& expected) {
+        if (!body.contains(key) || body.at(key).is_null()) {
+            return false;
+        }
+        const auto& value = body.at(key);
+        if (value.is_array()) {
+            for (const auto& item : value) {
+                if (item.is_string() && normalize_model_name(item.get<std::string>()) == expected) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (value.is_string()) {
+            return normalize_model_name(value.get<std::string>()) == expected;
+        }
+        return false;
+    }
+
+    bool requests_word_timestamps(const json& body) {
+        return json_array_or_string_contains(body, "timestamp_granularities", "word") ||
+               json_array_or_string_contains(body, "timestamp_granularities[]", "word");
+    }
+
+    bool is_force_aligner_name(const std::string& name) {
+        return HlieUtil::contains_ignore_case(name, "forcealigner") ||
+               HlieUtil::contains_ignore_case(name, "forcedaligner") ||
+               HlieUtil::contains_ignore_case(name, "force-aligner") ||
+               HlieUtil::contains_ignore_case(name, "forced-aligner") ||
+               HlieUtil::contains_ignore_case(name, "force aligner");
+    }
+
+    bool is_qwen3_asr_name(const std::string& name) {
+        return HlieUtil::contains_ignore_case(name, "qwen3_asr") ||
+               HlieUtil::contains_ignore_case(name, "qwen3-asr") ||
+               HlieUtil::contains_ignore_case(name, "qwen3asr");
+    }
+
+    std::string read_http_response_body(const server_http_res_ptr& response) {
+        if (!response) {
+            return {};
+        }
+        if (!response->is_stream()) {
+            return response->data;
+        }
+
+        std::string data;
+        std::string chunk;
+        while (response->next(chunk)) {
+            data += chunk;
+            chunk.clear();
+        }
+        return data;
+    }
+
+    void normalize_openai_timestamp_granularities(json& body) {
+        if (!body.contains("timestamp_granularities") && body.contains("timestamp_granularities[]")) {
+            body["timestamp_granularities"] = body["timestamp_granularities[]"];
+        }
+    }
+
     std::vector<HLIEModelInfo> load_model_info_files_from_directory(const std::string& directory_path) {
         std::vector<HLIEModelInfo> model_infos;
 
@@ -1314,6 +1424,201 @@ server_http_res_ptr HLIEWorkflow::proxy_request(const server_http_req & req, con
     return proxy;
 }
 
+server_http_res_ptr HLIEWorkflow::handle_transcriptions_pipeline(const server_http_req& req, const json& body) {
+    auto res = std::make_unique<server_res_generator_light>();
+
+    if (!requests_word_timestamps(body)) {
+        res->error(format_error_response("ASR pipeline requires timestamp_granularities[]=word", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    const std::string response_format = json_value(body, "response_format", std::string("json"));
+    if (response_format != "verbose_json") {
+        res->error(format_error_response(
+            "timestamp_granularities requires response_format to be verbose_json", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    if (req.files.find("file") == req.files.end()) {
+        res->error(format_error_response("No input file found for transcription", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    const std::string requested_model = json_value(body, "model", std::string());
+    std::string asr_model;
+    if (!requested_model.empty() &&
+        !is_force_aligner_name(requested_model) &&
+        !is_whisper_transcription_model(requested_model) &&
+        get_model_inst(requested_model).has_value()) {
+        asr_model = requested_model;
+    }
+    if (asr_model.empty()) {
+        for (const auto& [key, inst] : model_instances_) {
+            if (is_qwen3_asr_name(key) || is_qwen3_asr_name(inst.model_info.get_model_name())) {
+                asr_model = key;
+                break;
+            }
+        }
+    }
+
+    std::string aligner_model = json_string_value(body, "force_aligner_model");
+    if (aligner_model.empty()) {
+        aligner_model = json_string_value(body, "aligner_model");
+    }
+    if (aligner_model.empty()) {
+        aligner_model = json_string_value(body, "timestamp_model");
+    }
+    if (aligner_model.empty()) {
+        for (const auto& [key, inst] : model_instances_) {
+            if (is_force_aligner_name(key) || is_force_aligner_name(inst.model_info.get_model_name())) {
+                aligner_model = key;
+                break;
+            }
+        }
+    }
+
+    if (asr_model.empty()) {
+        res->error(format_error_response(
+            "ASR model is missing; pass a Qwen3 ASR model in the model field for word timestamp transcription",
+            ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    if (aligner_model.empty()) {
+        res->error(format_error_response(
+            "ForceAligner model is missing; pass aligner_model or load a Qwen3 ForceAligner model",
+            ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    LOG_INFO("ASR word timestamp pipeline: asr_model={}, aligner_model={}, file_count={}",
+             json(asr_model).dump(), json(aligner_model).dump(), req.files.size());
+
+    json asr_body = body;
+    asr_body["model"] = asr_model;
+    asr_body["response_format"] = "json";
+    asr_body["stream"] = "false";
+    asr_body.erase("timestamp_granularities");
+    asr_body.erase("timestamp_granularities[]");
+    asr_body.erase("asr_model");
+    asr_body.erase("transcription_model");
+    asr_body.erase("force_aligner_model");
+    asr_body.erase("aligner_model");
+    asr_body.erase("timestamp_model");
+    asr_body.erase("asr_force_align");
+    asr_body.erase("force_align");
+    asr_body.erase("text");
+
+    server_http_req asr_req{
+        req.params,
+        req.headers,
+        req.path,
+        req.query_string,
+        asr_body.dump(),
+        req.files,
+        req.should_stop,
+    };
+
+    const auto asr_response = route_llm_request(
+        asr_req,
+        [this](const server_http_req& routed_req) {
+            return call_llm_service(llm_model_service_, [&](const LLModelService& service) {
+                return service.handle_transcriptions(routed_req);
+            });
+        });
+    if (!asr_response) {
+        res->error(format_error_response("ASR transcription returned no response", ERROR_TYPE_SERVER));
+        return res;
+    }
+
+    const std::string asr_data = read_http_response_body(asr_response);
+    if (asr_response->status < 200 || asr_response->status >= 300) {
+        LOG_ERROR("ASR pipeline transcription failed: status={}, body={}", asr_response->status, asr_data);
+        auto failed = std::make_unique<server_http_res>();
+        failed->status = asr_response->status;
+        failed->content_type = asr_response->content_type;
+        failed->data = asr_data;
+        return failed;
+    }
+
+    const std::string transcript = clean_asr_pipeline_text(parse_asr_text_response(asr_data));
+    if (transcript.empty() || transcript == "HLIECpp-FAILED-888") {
+        res->error(format_error_response("ASR transcription did not return text", ERROR_TYPE_SERVER));
+        return res;
+    }
+
+    json align_body = body;
+    normalize_openai_timestamp_granularities(align_body);
+    align_body["model"] = aligner_model;
+    align_body["response_format"] = "verbose_json";
+    align_body["stream"] = "false";
+    align_body["asr_force_align"] = "true";
+    align_body["text"] = transcript;
+    if (!align_body.contains("timestamp_granularities")) {
+        align_body["timestamp_granularities"] = json::array({"word"});
+    }
+    align_body.erase("timestamp_granularities[]");
+    align_body.erase("asr_model");
+    align_body.erase("transcription_model");
+    align_body.erase("force_aligner_model");
+    align_body.erase("aligner_model");
+    align_body.erase("timestamp_model");
+
+    server_http_req align_req{
+        req.params,
+        req.headers,
+        req.path,
+        req.query_string,
+        align_body.dump(),
+        req.files,
+        req.should_stop,
+    };
+
+    const auto align_response = route_llm_request(
+        align_req,
+        [this](const server_http_req& routed_req) {
+            return call_llm_service(llm_model_service_, [&](const LLModelService& service) {
+                return service.handle_transcriptions(routed_req);
+            });
+        });
+    if (!align_response) {
+        res->error(format_error_response("ForceAligner returned no response", ERROR_TYPE_SERVER));
+        return res;
+    }
+
+    const std::string align_data = read_http_response_body(align_response);
+    if (align_response->status < 200 || align_response->status >= 300) {
+        LOG_ERROR("ASR pipeline force alignment failed: status={}, body={}", align_response->status, align_data);
+        auto failed = std::make_unique<server_http_res>();
+        failed->status = align_response->status;
+        failed->content_type = align_response->content_type;
+        failed->data = align_data;
+        return failed;
+    }
+
+    json final_body = json::parse(align_data, nullptr, false);
+    if (final_body.is_discarded() || !final_body.is_object()) {
+        res->error(format_error_response("ForceAligner returned invalid JSON", ERROR_TYPE_SERVER));
+        return res;
+    }
+    if (final_body.contains("error")) {
+        auto failed = std::make_unique<server_http_res>();
+        failed->status = 500;
+        failed->data = safe_json_to_str(final_body);
+        return failed;
+    }
+
+    final_body["text"] = transcript;
+    if (!final_body.contains("task")) {
+        final_body["task"] = "transcribe";
+    }
+    if (body.contains("language") && body.at("language").is_string() && !final_body.contains("language")) {
+        final_body["language"] = body.at("language");
+    }
+
+    res->ok(final_body);
+    return res;
+}
+
 server_http_res_ptr HLIEWorkflow::route_llm_request(
     const server_http_req& req, const RequestHandler& handler, const std::string& method) {
     auto res = std::make_unique<server_res_generator_light>();
@@ -1442,6 +1747,18 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 [this, route_llm](const server_http_req& req) -> server_http_res_ptr {
                     const json body = json::parse(req.body);
                     const std::string model_name = json_value(body, "model", std::string());
+                    const bool force_align_direct = json_boolish(body, "asr_force_align") || json_boolish(body, "force_align");
+                    const bool pipeline_requested =
+                        requests_word_timestamps(body) &&
+                        !force_align_direct &&
+                        (!is_whisper_transcription_model(model_name) ||
+                         body.contains("force_aligner_model") ||
+                         body.contains("aligner_model") ||
+                         body.contains("timestamp_model"));
+                    if (pipeline_requested) {
+                        return handle_transcriptions_pipeline(req, body);
+                    }
+
                     if (model_name.empty() || HlieUtil::contains_ignore_case(model_name, WHISPER)) {
                         auto res = std::make_unique<server_res_generator_light>();
                         if (!whisper_model_service_ || whisper_model_service_->get_state() != SERVER_STATE_READY) {
