@@ -165,7 +165,6 @@ private:
 
     std::shared_ptr<HLIEBlockingQueue<QueueItem>> blocking_queue_;
 
-    std::unique_ptr<HLIEWebSocketService> websocket_service_;
 
     std::unique_ptr<std::thread> worker_thread_; // 工作线程
     std::atomic<bool> should_stop_{false}; // 线程停止标志

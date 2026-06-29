@@ -190,16 +190,21 @@ Content-Type: application/json
   "n_tokens": 5
 }
 
-### embed
+### audio transcription
 POST http://127.0.0.1:7901/v1/audio/transcriptions
 Content-Type: multipart/form-data; boundary=WebAppBoundary
 
 --WebAppBoundary
 Content-Disposition: form-data; name="file"; filename="jfk.wav"
 
-< E:/test_data/audio/long_2.wav
---WebAppBoundary--
+< E:/test_data/audio/61-70968-0000.wav
 
+--WebAppBoundary
+Content-Disposition: form-data; name="model"
+
+HiModel_xh2_qwen3-asr_0.6b_b1_1chip_2cores_v1.3.0_20260522
+
+--WebAppBoundary
 Content-Disposition: form-data; name="temperature"
 
 0.0
@@ -208,8 +213,6 @@ Content-Disposition: form-data; name="temperature"
 Content-Disposition: form-data; name="temperature_inc"
 
 0.2
-
-
 
 --WebAppBoundary--
 

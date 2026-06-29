@@ -44,6 +44,10 @@ void AudioBuffer::append(const std::vector<float>& chunk) {
     data_.insert(data_.end(), chunk.begin(), chunk.end());
 }
 
+void AudioBuffer::reserve(const size_t sample_count) {
+    data_.reserve(sample_count);
+}
+
 std::vector<float> AudioBuffer::consume() {
     auto result = std::move(data_);
     data_.clear();
@@ -76,6 +80,11 @@ void Session::init(
     submitter_ = std::move(submitter);
     sender_ = std::move(sender);
     connection_ = std::move(connection);
+}
+
+void Session::setInitialContext(std::string model, std::string path) {
+    model_ = std::move(model);
+    path_ = std::move(path);
 }
 
 void Session::onMessage(auto* ws, const std::string_view msg, const uWS::OpCode op_code) {
@@ -118,6 +127,13 @@ void Session::handleTextMessage(const std::string_view msg) {
                 if (input.contains("format") && input["format"].is_object()) {
                     input_sample_rate_ = input["format"].value("rate", input_sample_rate_);
                 }
+                if (input.contains("transcription") && input["transcription"].is_object()) {
+                    const auto& transcription = input["transcription"];
+                    model_ = transcription.value("model", model_);
+                    prompt_ = transcription.value("prompt", prompt_);
+                    language_ = transcription.value("language", language_);
+                    response_format_ = transcription.value("response_format", response_format_);
+                }
                 if (input.contains("turn_detection")) {
                     const auto& turn_detection = input["turn_detection"];
                     server_vad_enabled_ = !turn_detection.is_null();
@@ -138,6 +154,13 @@ void Session::handleTextMessage(const std::string_view msg) {
                 }
             } else if (session.contains("input_audio_format") && session["input_audio_format"].is_object()) {
                 input_sample_rate_ = session["input_audio_format"].value("rate", input_sample_rate_);
+                if (session.contains("input_audio_transcription") && session["input_audio_transcription"].is_object()) {
+                    const auto& transcription = session["input_audio_transcription"];
+                    model_ = transcription.value("model", model_);
+                    prompt_ = transcription.value("prompt", prompt_);
+                    language_ = transcription.value("language", language_);
+                    response_format_ = transcription.value("response_format", response_format_);
+                }
                 if (session.contains("turn_detection")) {
                     const auto& turn_detection = session["turn_detection"];
                     server_vad_enabled_ = !turn_detection.is_null();
@@ -153,6 +176,15 @@ void Session::handleTextMessage(const std::string_view msg) {
                     resetTurnState();
                 }
             }
+            const size_t target_reserve =
+                static_cast<size_t>(std::max(input_sample_rate_, 1)) *
+                static_cast<size_t>(std::max(max_turn_duration_ms_, 1000)) / 1000 + 8192;
+            if (target_reserve > reserved_buffer_samples_) {
+                buffer_.reserve(target_reserve);
+                reserved_buffer_samples_ = target_reserve;
+            }
+            LOG_INFO("Websocket session updated: path={}, model={}, sample_rate={}, vad={}, max_turn_duration_ms={}",
+                     path_, model_.empty() ? "<default>" : model_, input_sample_rate_, server_vad_enabled_, max_turn_duration_ms_);
             sendSessionEvent("session.updated");
         } else if (type == "input_audio_buffer.append") {
             appendPcm16(request.value("audio", ""));
@@ -268,7 +300,18 @@ void Session::commit(const bool automatic) {
                      {"item_id", item_id}}
                     .dump());
     }
-    submitter_(std::move(audio), input_sample_rate_, item_id);
+    WhisperStreamRequest request;
+    request.pcmf32 = std::move(audio);
+    request.sample_rate = input_sample_rate_;
+    request.model = model_;
+    request.prompt = prompt_;
+    request.language = language_;
+    request.response_format = response_format_;
+    request.path = path_;
+    LOG_INFO("Websocket audio committed: item_id={}, model={}, sample_rate={}, samples={}, duration_ms={}",
+             item_id, request.model.empty() ? "<default>" : request.model, request.sample_rate, request.pcmf32.size(),
+             request.sample_rate > 0 ? request.pcmf32.size() * 1000 / request.sample_rate : 0);
+    submitter_(std::move(request), item_id);
     resetTurnState();
 }
 
@@ -308,7 +351,11 @@ void Session::sendSessionEvent(const std::string& type) const {
                    {"audio",
                     {{"input",
                       {{"format", {{"type", "audio/pcm"}, {"rate", input_sample_rate_}}},
-                       {"transcription", {{"model", "whisper-1"}}},
+                       {"transcription",
+                        {{"model", model_.empty() ? "whisper-1" : model_},
+                         {"prompt", prompt_},
+                         {"language", language_},
+                         {"response_format", response_format_}}},
                        {"turn_detection",
                         server_vad_enabled_
                             ? json{{"type", "server_vad"},
@@ -352,13 +399,27 @@ void HLIEWebSocketService::run(AudioHandler handler, const int port) {
                 "/*",
                 {.maxPayloadLength = 16 * 1024 * 1024,
                  .idleTimeout = 60,
+                 .maxBackpressure = 4 * 1024 * 1024,
+                 .closeOnBackpressureLimit = false,
+                 .resetIdleTimeoutOnSend = true,
+                 .sendPingsAutomatically = false,
+                 .upgrade =
+                     [](auto* res, auto* req, auto* context) {
+                         Session session;
+                         session.setInitialContext(std::string(req->getQuery("model")), std::string(req->getUrl()));
+                         std::string_view sec_websocket_key = req->getHeader("sec-websocket-key");
+                         std::string_view sec_websocket_protocol = req->getHeader("sec-websocket-protocol");
+                         std::string_view sec_websocket_extensions = req->getHeader("sec-websocket-extensions");
+                         res->template upgrade<Session>(std::move(session), sec_websocket_key, sec_websocket_protocol,
+                                                        sec_websocket_extensions, context);
+                     },
                  .open =
                      [this](auto* ws) {
                          auto connection = std::make_shared<SessionConnectionState>();
                          auto* session = ws->getUserData();
                          session->init(
-                             [this, ws, connection](std::vector<float> audio, const int sample_rate, std::string item_id) {
-                                 enqueue({ws, connection, std::move(audio), sample_rate, std::move(item_id)});
+                             [this, ws, connection](WhisperStreamRequest request, std::string item_id) {
+                                 enqueue({ws, connection, std::move(request), std::move(item_id)});
                              },
                              [this, ws, connection](std::string event) {
                                  InferenceTask target{ws, connection};
@@ -424,8 +485,9 @@ void HLIEWebSocketService::processInferenceTasks() {
             continue;
         }
 
-        WhisperStreamRequest request;
-        request.pcmf32 = resample(task.audio, task.sample_rate, 16000);
+        WhisperStreamRequest request = std::move(task.request);
+        request.pcmf32 = resample(request.pcmf32, request.sample_rate, 16000);
+        request.sample_rate = 16000;
         std::string streamed_text;
 
         const auto on_delta = [this, &task, &streamed_text](const std::string& delta) {
@@ -478,7 +540,10 @@ void HLIEWebSocketService::sendEvent(const InferenceTask& task, std::string even
     }
     loop_->defer([task, event = std::move(event)] {
         if (task.connection && task.connection->active && task.ws) {
-            task.ws->send(event, uWS::OpCode::TEXT);
+            if (!task.ws->send(event, uWS::OpCode::TEXT)) {
+                LOG_WARN("Websocket send backpressure: item_id={}, buffered={}",
+                         task.item_id, task.ws->getBufferedAmount());
+            }
         }
     });
 }

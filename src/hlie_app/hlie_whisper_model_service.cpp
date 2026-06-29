@@ -385,9 +385,6 @@ int WhisperModelService::init(const std::string& model_dir, const HLIEModelInfo&
 
     default_params_ = params_;
     model_key_ = model_info.model_key_;
-    websocket_service_ = std::make_unique<HLIEWebSocketService>();
-
-    websocket_service_->init();
 
     return 0;
 }
@@ -399,11 +396,6 @@ void WhisperModelService::run() {
     }
 
     // Todo 判断配置是否支持WS
-    websocket_service_->run(
-        [this](const WhisperStreamRequest& req, const TranscriptCallback& callback) {
-            return this->handle_stream(req, callback);
-        });
-
     state_.store(SERVER_STATE_READY);
     should_stop_ = false;
     worker_thread_ = std::make_unique<std::thread>(&WhisperModelService::process, this);
@@ -447,11 +439,6 @@ void WhisperModelService::process() {
 void WhisperModelService::stop() {
     if (!worker_thread_) {
         return;
-    }
-
-    // Stop WebSocket inference before releasing the shared whisper context.
-    if (websocket_service_) {
-        websocket_service_->stop();
     }
 
     should_stop_ = true;

@@ -26,16 +26,23 @@ HLIE_NAMESPACE_BEGIN
 struct WhisperStreamRequest {
     std::vector<float> pcmf32; // mono-channel F32 PCM at 16 kHz
     std::vector<std::vector<float>> pcmf32s;
+    int sample_rate = 16000;
+    std::string model;
+    std::string prompt;
+    std::string language;
+    std::string response_format = "json";
+    std::string path;
 };
 
 using TranscriptCallback = std::function<void(const std::string&)>;
 using AudioHandler = std::function<std::string(const WhisperStreamRequest&, const TranscriptCallback&)>;
-using AudioSubmitter = std::function<void(std::vector<float>, int, std::string)>;
+using AudioSubmitter = std::function<void(WhisperStreamRequest, std::string)>;
 using EventSender = std::function<void(std::string)>;
 
 class AudioBuffer {
 public:
     void append(const std::vector<float>& chunk);
+    void reserve(size_t sample_count);
     std::vector<float> consume();
     void clear();
     void retainLast(size_t sample_count);
@@ -56,6 +63,7 @@ public:
         AudioSubmitter submitter,
         EventSender sender,
         std::shared_ptr<SessionConnectionState> connection);
+    void setInitialContext(std::string model, std::string path);
     void onMessage(auto* ws, std::string_view msg, uWS::OpCode op_code);
     void close();
     void sendSessionEvent(const std::string& type) const;
@@ -85,6 +93,12 @@ private:
     int silence_ms_ = 0;
     int64_t total_audio_samples_ = 0;
     std::string pending_item_id_;
+    std::string model_;
+    std::string prompt_;
+    std::string language_;
+    std::string response_format_ = "json";
+    std::string path_;
+    size_t reserved_buffer_samples_ = 0;
 };
 
 class HLIE_API HLIEWebSocketService {
@@ -102,8 +116,7 @@ private:
     struct InferenceTask {
         WebSocketPtr ws = nullptr;
         std::shared_ptr<SessionConnectionState> connection;
-        std::vector<float> audio;
-        int sample_rate = 16000;
+        WhisperStreamRequest request;
         std::string item_id;
     };
 

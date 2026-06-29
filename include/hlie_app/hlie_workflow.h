@@ -10,6 +10,7 @@
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_model_info.h"
 #include "hlie_model_service.h"
+#include "hlie_ws_service.h"
 #include "httplib.h"
 
 HLIE_NAMESPACE_BEGIN
@@ -99,6 +100,9 @@ private:
 
     server_http_res_ptr handle_unload_model(const server_http_req& req);
 
+    void ensure_asr_websocket();
+    std::string handle_asr_stream(const WhisperStreamRequest& request, const std::function<void(const std::string&)>& callback);
+
     std::vector<server_model_meta> get_all_model_metas();
 
     std::optional<server_model_meta> get_model_meta(const std::string& name);
@@ -114,6 +118,7 @@ private:
     std::shared_ptr<SDModelService> sd_model_service_;
     std::shared_ptr<WhisperModelService> whisper_model_service_;
     std::shared_ptr<CosyVoiceModelService> cosy_voice_model_service_;
+    std::unique_ptr<HLIEWebSocketService> asr_websocket_service_;
     std::map<std::string, ModelInstance> model_instances_;
 
     std::shared_ptr<HLIEDeviceService> device_service_;

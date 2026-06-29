@@ -23,6 +23,7 @@
 #include "hlie_app/hlie_sd_model_service.h"
 #include "hlie_app/hlie_whisper_model_service.h"
 #include "hlie_app/hlie_cosyvoice_model_service.h"
+#include "hlie_app/hlie_ws_service.h"
 
 HLIE_NAMESPACE_BEGIN
 
@@ -68,6 +69,67 @@ namespace {
         }
 
         return handler(*service);
+    }
+
+    bool is_whisper_transcription_model(const std::string& model) {
+        return model.empty() || HlieUtil::contains_ignore_case(model, "whisper");
+    }
+
+    void append_le_u16(raw_buffer& out, const uint16_t value) {
+        out.push_back(static_cast<uint8_t>(value & 0xff));
+        out.push_back(static_cast<uint8_t>((value >> 8) & 0xff));
+    }
+
+    void append_le_u32(raw_buffer& out, const uint32_t value) {
+        out.push_back(static_cast<uint8_t>(value & 0xff));
+        out.push_back(static_cast<uint8_t>((value >> 8) & 0xff));
+        out.push_back(static_cast<uint8_t>((value >> 16) & 0xff));
+        out.push_back(static_cast<uint8_t>((value >> 24) & 0xff));
+    }
+
+    raw_buffer pcmf32_to_wav_bytes(const std::vector<float>& pcmf32, const int sample_rate) {
+        raw_buffer out;
+        const uint16_t channels = 1;
+        const uint16_t bits_per_sample = 16;
+        const uint16_t block_align = channels * bits_per_sample / 8;
+        const uint32_t byte_rate = static_cast<uint32_t>(std::max(sample_rate, 1)) * block_align;
+        const uint32_t data_size = static_cast<uint32_t>(pcmf32.size() * sizeof(int16_t));
+        const uint32_t riff_size = 36 + data_size;
+
+        out.reserve(44 + data_size);
+        out.insert(out.end(), {'R', 'I', 'F', 'F'});
+        append_le_u32(out, riff_size);
+        out.insert(out.end(), {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
+        append_le_u32(out, 16);
+        append_le_u16(out, 1);
+        append_le_u16(out, channels);
+        append_le_u32(out, static_cast<uint32_t>(std::max(sample_rate, 1)));
+        append_le_u32(out, byte_rate);
+        append_le_u16(out, block_align);
+        append_le_u16(out, bits_per_sample);
+        out.insert(out.end(), {'d', 'a', 't', 'a'});
+        append_le_u32(out, data_size);
+
+        for (const float sample : pcmf32) {
+            const auto clipped = std::clamp(sample, -1.0f, 1.0f);
+            const auto pcm = static_cast<int16_t>(clipped * 32767.0f);
+            append_le_u16(out, static_cast<uint16_t>(pcm));
+        }
+        return out;
+    }
+
+    std::string parse_asr_text_response(const std::string& data) {
+        const auto body = json::parse(data, nullptr, false);
+        if (body.is_discarded()) {
+            return data;
+        }
+        if (body.contains("text") && body["text"].is_string()) {
+            return body["text"].get<std::string>();
+        }
+        if (body.contains("error")) {
+            return "HLIECpp-FAILED-888";
+        }
+        return body.dump();
     }
 
     std::vector<HLIEModelInfo> load_model_info_files_from_directory(const std::string& directory_path) {
@@ -469,9 +531,16 @@ void HLIEWorkflow::run() {
             }).detach();
         }
     }
+
+    ensure_asr_websocket();
 }
 
 void HLIEWorkflow::stop() {
+    if (asr_websocket_service_) {
+        asr_websocket_service_->stop();
+        asr_websocket_service_.reset();
+    }
+
     if (sd_model_service_) {
         if (is_slave_ && !replicas_mode_) {
             update_status(master_port_, HLIEModelType::SD3, port_, SERVER_MODEL_STATUS_UNLOADED);
@@ -495,6 +564,99 @@ void HLIEWorkflow::stop() {
         }
         llm_model_service_->stop();
     }
+}
+
+void HLIEWorkflow::ensure_asr_websocket() {
+    if (asr_websocket_service_ || (!whisper_model_service_ && !llm_model_service_)) {
+        return;
+    }
+
+    asr_websocket_service_ = std::make_unique<HLIEWebSocketService>();
+    asr_websocket_service_->init();
+    asr_websocket_service_->run(
+        [this](const WhisperStreamRequest& request, const TranscriptCallback& callback) {
+            return this->handle_asr_stream(request, callback);
+        },
+        7999);
+    LOG_INFO("ASR websocket router started on port 7999");
+}
+
+std::string HLIEWorkflow::handle_asr_stream(
+    const WhisperStreamRequest& request,
+    const std::function<void(const std::string&)>& callback) {
+    const std::string model = request.model.empty() ? "whisper-1" : request.model;
+    if (is_whisper_transcription_model(request.model)) {
+        if (!whisper_model_service_ || whisper_model_service_->get_state() != SERVER_STATE_READY) {
+            LOG_WARN("ASR websocket routed to Whisper, but Whisper service is not ready");
+            return "HLIECpp-FAILED-888";
+        }
+        LOG_INFO("ASR websocket route: backend=whisper, model={}, samples={}", model, request.pcmf32.size());
+        return whisper_model_service_->handle_stream(request, callback);
+    }
+
+    LOG_INFO("ASR websocket route: backend=llm, model={}, samples={}, sample_rate={}",
+             model, request.pcmf32.size(), request.sample_rate);
+    const raw_buffer wav = pcmf32_to_wav_bytes(request.pcmf32, request.sample_rate);
+    const json body = {
+        {"model", model},
+        {"response_format", request.response_format.empty() ? "json" : request.response_format},
+        {"stream", "false"},
+    };
+    json request_body = body;
+    if (!request.prompt.empty()) {
+        request_body["prompt"] = request.prompt;
+    }
+    if (!request.language.empty()) {
+        request_body["language"] = request.language;
+    }
+
+    std::function<bool()> should_stop = [] { return false; };
+    server_http_req transcription_req{
+        {},
+        {},
+        "/v1/audio/transcriptions",
+        "",
+        request_body.dump(),
+        {{"file", uploaded_file{wav, "audio.wav", "audio/wav"}}},
+        should_stop,
+    };
+
+    const auto response = route_llm_request(
+        transcription_req,
+        [this](const server_http_req& routed_req) {
+            return call_llm_service(llm_model_service_, [&](const LLModelService& service) {
+                return service.handle_transcriptions(routed_req);
+            });
+        });
+    if (!response) {
+        LOG_ERROR("ASR websocket LLM transcription returned null response");
+        return "HLIECpp-FAILED-888";
+    }
+    if (response->status < 200 || response->status >= 300) {
+        LOG_ERROR("ASR websocket LLM transcription failed: status={}, body={}", response->status, response->data);
+        return "HLIECpp-FAILED-888";
+    }
+
+    std::string transcript;
+    if (response->is_stream()) {
+        std::string chunk;
+        while (response->next(chunk)) {
+            if (!chunk.empty()) {
+                transcript += chunk;
+                callback(chunk);
+            }
+            chunk.clear();
+        }
+    } else {
+        transcript = parse_asr_text_response(response->data);
+    }
+
+    if (transcript == "HLIECpp-FAILED-888") {
+        LOG_ERROR("ASR websocket LLM transcription response contains error: {}", response->data);
+        return transcript;
+    }
+    LOG_INFO("ASR websocket LLM transcription completed: chars={}", transcript.size());
+    return transcript;
 }
 
 std::shared_ptr<IHLIEModelService> HLIEWorkflow::get_model_service(const std::string& type) const {
@@ -797,6 +959,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             }
 
             llm_model_service_->run();
+            ensure_asr_websocket();
             model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
             model_inst->get().meta.port = port_;
             if (port_ != master_port_ && !replicas_mode_) {
@@ -970,6 +1133,7 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         }
 
         whisper_model_service_->run();
+        ensure_asr_websocket();
         model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
         model_inst->get().meta.port = port_;
         if (port_ != master_port && !replicas_mode_) {

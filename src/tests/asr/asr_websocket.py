@@ -1,428 +1,412 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-Whisper.cpp / miniaudio Compatible WebSocket Audio Stream Client
+"""OpenAI-compatible HLIECpp ASR WebSocket smoke test.
 
-功能:
-    1. 读取 wav 音频
-    2. 转 mono
-    3. 重采样到 16k
-    4. 转 float32 PCM [-1,1]
-    5. websocket 流式发送
-
-目标:
-    与 whisper.cpp 中 miniaudio 的行为尽可能一致
-
-数据格式:
-    float32 PCM
-    16000Hz
-    mono
-
-发送协议:
-    binary:
-        float32 PCM bytes
-
-    text:
-        EOS
+Protocol used by HLIECpp:
+    1. Server sends ``session.created`` after the WebSocket opens.
+    2. Client sends ``session.update`` with transcription audio settings.
+    3. Client streams base64-encoded little-endian PCM16 chunks with
+       ``input_audio_buffer.append``.
+    4. Server VAD sends ``input_audio_buffer.committed`` and transcription
+       delta/completed events. With ``--manual-commit``, the client sends
+       ``input_audio_buffer.commit`` after upload instead.
 """
 
+from __future__ import annotations
+
+import argparse
 import asyncio
 import base64
 import json
+import math
+import struct
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
-import soundfile as sf
-import websockets
-from loguru import logger
-from scipy import signal
 
-# =============================================================================
-# Config
-# =============================================================================
 
-TARGET_SAMPLE_RATE = 24000
-
-# Send small chunks so audio upload resembles a live microphone.
+DEFAULT_URI = "ws://127.0.0.1:7999"
+DEFAULT_AUDIO_FILE = "E:/test_data/audio/long_2.wav"
+TARGET_SAMPLE_RATE = 24_000
 CHUNK_DURATION_MS = 250
-
-# Trailing silence lets server VAD close the final speech turn.
 TRAILING_SILENCE_MS = 750
-
-# websocket uri
-WS_URI = "ws://10.65.32.191:7999"
-
-# audio file
-AUDIO_FILE = "D:/workspace/wtt/houmo/llm/hi.cpp/samples/zero_shot_prompt.wav"
-
-# =============================================================================
-# Logger
-# =============================================================================
-
-logger.remove()
-
-logger.add(
-    sink=lambda msg: print(msg, end=""),
-    level="INFO",
-    format=(
-        "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-        "<level>{level: <8}</level> | "
-        "{message}"
-    ),
-)
-
-logger.add(
-    "asr_websocket_test.log",
-    level="DEBUG",
-    rotation="10 MB",
-    retention=5,
-    encoding="utf-8",
-)
+RECEIVE_TIMEOUT_SECONDS = 2.0
+FINAL_TIMEOUT_SECONDS = 1800.0
 
 
-# =============================================================================
-# Audio Process
-# =============================================================================
-
-def load_audio(file_path: str) -> np.ndarray:
-    """
-    加载音频并转换成:
-
-        float32
-        mono
-        16000Hz
-        [-1,1]
-
-    尽量模拟 miniaudio 行为
-    """
-
-    logger.info(f"Loading audio: {file_path}")
-
-    # soundfile:
-    #   int16 wav -> int16
-    #   float wav -> float
-    data, sample_rate = sf.read(file_path)
-
-    logger.info(
-        f"Original audio info: "
-        f"sample_rate={sample_rate}, "
-        f"shape={data.shape}, "
-        f"dtype={data.dtype}"
-    )
-
-    # =========================================================================
-    # Convert to mono
-    # =========================================================================
-
-    if data.ndim > 1:
-        logger.info(
-            f"Convert multi-channel -> mono "
-            f"(channels={data.shape[1]})"
-        )
-
-        # IMPORTANT:
-        # whisper.cpp/miniaudio:
-        #   left + right
-        #
-        # NOT:
-        #   (left + right) / 2
-        #
-        # 这里使用 sum 更接近 whisper.cpp
-        data = np.sum(data, axis=1)
-
-    # =========================================================================
-    # Resample to 16k
-    # =========================================================================
-
-    if sample_rate != TARGET_SAMPLE_RATE:
-        logger.info(
-            f"Resample audio: "
-            f"{sample_rate}Hz -> {TARGET_SAMPLE_RATE}Hz"
-        )
-
-        num_samples = int(
-            len(data)
-            * TARGET_SAMPLE_RATE
-            / sample_rate
-        )
-
-        data = signal.resample(
-            data,
-            num_samples,
-        )
-
-        sample_rate = TARGET_SAMPLE_RATE
-
-    # =========================================================================
-    # Convert to float32
-    # =========================================================================
-
-    if data.dtype == np.int16:
-
-        logger.info("Convert int16 -> float32")
-
-        data = data.astype(np.float32) / 32768.0
-
-    elif data.dtype == np.int32:
-
-        logger.info("Convert int32 -> float32")
-
-        data = data.astype(np.float32) / 2147483648.0
-
-    elif data.dtype != np.float32:
-
-        logger.info(f"Convert {data.dtype} -> float32")
-
-        data = data.astype(np.float32)
-
-    # =========================================================================
-    # Clip
-    # =========================================================================
-
-    # 防止 stereo 相加后超过 [-1,1]
-    data = np.clip(data, -1.0, 1.0)
-
-    duration = len(data) / TARGET_SAMPLE_RATE
-
-    logger.success(
-        f"Audio ready: "
-        f"samples={len(data)}, "
-        f"duration={duration:.2f}s, "
-        f"dtype={data.dtype}"
-    )
-
-    return data
+def log(level: str, message: str) -> None:
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"{now} | {level:<7} | {message}", flush=True)
 
 
-# =============================================================================
-# WebSocket Stream
-# =============================================================================
+def read_wav_pcm(path: Path) -> tuple[np.ndarray, int]:
+    data = path.read_bytes()
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise ValueError(f"Unsupported audio file, expected RIFF/WAVE: {path}")
 
-async def stream_audio(
+    audio_format = None
+    channels = None
+    sample_rate = None
+    bits_per_sample = None
+    frames = None
+
+    offset = 12
+    while offset + 8 <= len(data):
+        chunk_id = data[offset : offset + 4]
+        chunk_size = struct.unpack_from("<I", data, offset + 4)[0]
+        chunk_start = offset + 8
+        chunk_end = chunk_start + chunk_size
+        if chunk_end > len(data):
+            raise ValueError(f"Invalid WAV chunk size in {path}")
+
+        if chunk_id == b"fmt ":
+            if chunk_size < 16:
+                raise ValueError("Invalid WAV fmt chunk")
+            audio_format, channels, sample_rate, _, _, bits_per_sample = struct.unpack_from(
+                "<HHIIHH", data, chunk_start
+            )
+        elif chunk_id == b"data":
+            frames = data[chunk_start:chunk_end]
+
+        offset = chunk_end + (chunk_size % 2)
+
+    if audio_format is None or channels is None or sample_rate is None or bits_per_sample is None or frames is None:
+        raise ValueError(f"Missing WAV fmt/data chunk: {path}")
+
+    sample_width = bits_per_sample // 8
+    if audio_format == 1 and sample_width == 1:
+        samples = (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+    elif audio_format == 1 and sample_width == 2:
+        samples = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+    elif audio_format == 1 and sample_width == 4:
+        samples = np.frombuffer(frames, dtype="<i4").astype(np.float32) / 2147483648.0
+    elif audio_format == 3 and sample_width == 4:
+        samples = np.frombuffer(frames, dtype="<f4").astype(np.float32)
+    elif audio_format == 3 and sample_width == 8:
+        samples = np.frombuffer(frames, dtype="<f8").astype(np.float32)
+    else:
+        raise ValueError(f"Unsupported WAV format={audio_format}, sample_width={sample_width} bytes")
+
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1)
+
+    return samples.astype(np.float32, copy=False), sample_rate
+
+
+def resample_linear(samples: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
+    if source_rate == target_rate or samples.size == 0:
+        return samples.astype(np.float32, copy=False)
+
+    output_size = max(1, math.ceil(samples.size * target_rate / source_rate))
+    source_x = np.arange(samples.size, dtype=np.float64)
+    target_x = np.arange(output_size, dtype=np.float64) * source_rate / target_rate
+    return np.interp(target_x, source_x, samples).astype(np.float32)
+
+
+def load_audio(path: Path, target_rate: int) -> np.ndarray:
+    log("INFO", f"Loading audio: {path}")
+    samples, sample_rate = read_wav_pcm(path)
+    log("INFO", f"Original audio: sample_rate={sample_rate}, samples={samples.size}")
+
+    samples = resample_linear(samples, sample_rate, target_rate)
+    samples = np.clip(samples, -1.0, 1.0).astype(np.float32, copy=False)
+
+    duration = samples.size / target_rate
+    log("SUCCESS", f"Audio ready: sample_rate={target_rate}, samples={samples.size}, duration={duration:.2f}s")
+    return samples
+
+
+def pcm16_base64(samples: np.ndarray) -> str:
+    pcm16 = (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2", copy=False)
+    return base64.b64encode(pcm16.tobytes()).decode("ascii")
+
+
+async def send_json(websocket: Any, event: dict[str, Any]) -> None:
+    await websocket.send(json.dumps(event, separators=(",", ":")))
+
+
+async def recv_json(websocket: Any, timeout: float | None = None) -> dict[str, Any]:
+    raw = await asyncio.wait_for(websocket.recv(), timeout=timeout)
+    event = json.loads(raw)
+    if not isinstance(event, dict):
+        raise RuntimeError(f"Expected JSON object event, got: {event!r}")
+    return event
+
+
+async def configure_session(
+    websocket: Any,
+    sample_rate: int,
+    model: str,
+    prompt: str,
+    language: str,
+    response_format: str,
+    vad_enabled: bool,
+    vad_threshold: float,
+    silence_duration_ms: int,
+    max_turn_duration_ms: int,
+) -> None:
+    turn_detection = None
+    if vad_enabled:
+        turn_detection = {
+            "type": "server_vad",
+            "threshold": vad_threshold,
+            "prefix_padding_ms": 300,
+            "silence_duration_ms": silence_duration_ms,
+            "max_turn_duration_ms": max_turn_duration_ms,
+        }
+
+    transcription: dict[str, str] = {}
+    if model:
+        transcription["model"] = model
+    if prompt:
+        transcription["prompt"] = prompt
+    if language:
+        transcription["language"] = language
+    if response_format:
+        transcription["response_format"] = response_format
+
+    await send_json(
         websocket,
-        pcmf32: np.ndarray,
-):
-    """
-    websocket 流式发送 float32 PCM
-    """
-
-    chunk_size = int(
-        TARGET_SAMPLE_RATE
-        * CHUNK_DURATION_MS
-        / 1000
+        {
+            "type": "session.update",
+            "session": {
+                "type": "transcription",
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": sample_rate},
+                        "transcription": transcription,
+                        "turn_detection": turn_detection,
+                    }
+                },
+            },
+        },
     )
-
-    total_chunks = (
-                           len(pcmf32)
-                           + chunk_size
-                           - 1
-                   ) // chunk_size
-
-    logger.info(
-        f"Start streaming: "
-        f"chunk_duration={CHUNK_DURATION_MS}ms, "
-        f"chunk_size={chunk_size}, "
-        f"total_chunks={total_chunks}"
-    )
-
-    start_time = time.time()
-
-    for chunk_index, start in enumerate(
-            range(0, len(pcmf32), chunk_size),
-            start=1,
-    ):
-        end = start + chunk_size
-
-        chunk = pcmf32[start:end]
-
-        pcm16 = np.clip(chunk, -1.0, 1.0)
-        pcm16 = (pcm16 * 32767.0).astype("<i2").tobytes()
-        await websocket.send(json.dumps({
-            "type": "input_audio_buffer.append",
-            "audio": base64.b64encode(pcm16).decode("ascii"),
-        }))
-
-        chunk_duration = (
-                len(chunk)
-                / TARGET_SAMPLE_RATE
-        )
-
-        logger.info(
-            f"[Chunk {chunk_index}/{total_chunks}] "
-            f"samples={len(chunk)}, "
-            f"bytes={len(pcm16)}, "
-            f"duration={chunk_duration:.3f}s"
-        )
-
-        # 模拟真实实时发送
-        await asyncio.sleep(chunk_duration)
-
-    silence_samples = TARGET_SAMPLE_RATE * TRAILING_SILENCE_MS // 1000
-    silence = np.zeros(silence_samples, dtype=np.float32)
-    for start in range(0, len(silence), chunk_size):
-        chunk = silence[start:start + chunk_size]
-        pcm16 = chunk.astype("<i2").tobytes()
-        await websocket.send(json.dumps({
-            "type": "input_audio_buffer.append",
-            "audio": base64.b64encode(pcm16).decode("ascii"),
-        }))
-        await asyncio.sleep(len(chunk) / TARGET_SAMPLE_RATE)
-
-    elapsed = time.time() - start_time
-
-    logger.success(
-        f"Audio stream completed (elapsed={elapsed:.2f}s)"
-    )
-
-
-async def receive_transcripts(
-        websocket,
-        sender_done: asyncio.Event,
-) -> str:
-    completed_turns = 0
-    committed_turns = 0
-    transcripts = []
 
     while True:
+        event = await recv_json(websocket, timeout=RECEIVE_TIMEOUT_SECONDS)
+        event_type = event.get("type")
+        log("INFO", f"Session event: {event_type}")
+        if event_type in {"session.updated", "transcription_session.updated"}:
+            return
+        if event_type == "error":
+            raise RuntimeError(event.get("error", {}).get("message", "session.update failed"))
+
+
+async def stream_audio(
+    websocket: Any,
+    samples: np.ndarray,
+    sample_rate: int,
+    chunk_duration_ms: int,
+    trailing_silence_ms: int,
+    realtime: bool,
+    log_every_chunks: int,
+) -> None:
+    chunk_size = max(1, sample_rate * chunk_duration_ms // 1000)
+    total_chunks = math.ceil(samples.size / chunk_size)
+    log("INFO", f"Streaming audio: chunk_ms={chunk_duration_ms}, chunks={total_chunks}")
+
+    started = time.time()
+    for index, start in enumerate(range(0, samples.size, chunk_size), start=1):
+        chunk = samples[start : start + chunk_size]
+        await send_json(
+            websocket,
+            {
+                "type": "input_audio_buffer.append",
+                "audio": pcm16_base64(chunk),
+            },
+        )
+        if index == 1 or index == total_chunks or (log_every_chunks > 0 and index % log_every_chunks == 0):
+            log("INFO", f"Sent chunk {index}/{total_chunks}: samples={chunk.size}")
+        if realtime:
+            await asyncio.sleep(chunk.size / sample_rate)
+
+    if trailing_silence_ms > 0:
+        silence_samples = sample_rate * trailing_silence_ms // 1000
+        silence = np.zeros(silence_samples, dtype=np.float32)
+        for start in range(0, silence.size, chunk_size):
+            chunk = silence[start : start + chunk_size]
+            await send_json(
+                websocket,
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": pcm16_base64(chunk),
+                },
+            )
+            if realtime:
+                await asyncio.sleep(chunk.size / sample_rate)
+
+    log("SUCCESS", f"Audio upload finished in {time.time() - started:.2f}s")
+
+
+def is_connection_closed_error(exc: BaseException) -> bool:
+    name = exc.__class__.__name__.lower()
+    return "connectionclosed" in name or "connection closed" in str(exc).lower()
+
+
+async def receive_transcripts(websocket: Any, sender_done: asyncio.Event, final_timeout: float) -> str:
+    committed_turns = 0
+    completed_turns = 0
+    transcripts: list[str] = []
+    deadline = time.monotonic() + final_timeout
+
+    while True:
+        remaining = max(0.1, min(RECEIVE_TIMEOUT_SECONDS, deadline - time.monotonic()))
         try:
-            event = json.loads(await asyncio.wait_for(websocket.recv(), timeout=2.0))
+            event = await recv_json(websocket, timeout=remaining)
         except asyncio.TimeoutError:
-            if sender_done.is_set() and completed_turns >= committed_turns:
+            if time.monotonic() >= deadline:
+                log("WARN", "Timed out waiting for transcription completion; returning partial result")
+                break
+            if sender_done.is_set() and committed_turns > 0 and completed_turns >= committed_turns:
                 break
             continue
+        except Exception as exc:
+            if is_connection_closed_error(exc):
+                log("WARN", f"WebSocket closed while receiving; returning partial result: {exc}")
+                break
+            raise
 
         event_type = event.get("type")
 
-        if event_type == "input_audio_buffer.committed":
-            committed_turns += 1
-            logger.info(f"Server accepted turn: {event.get('item_id')}")
+        if event_type == "session.created":
+            log("INFO", "Session created")
+        elif event_type == "session.updated":
+            log("INFO", "Session updated")
         elif event_type == "input_audio_buffer.speech_started":
-            logger.info(f"Speech started: {event.get('item_id')}")
+            log("INFO", f"Speech started: {event.get('item_id')}")
         elif event_type == "input_audio_buffer.speech_stopped":
-            logger.info(f"Speech stopped: {event.get('item_id')}")
+            log("INFO", f"Speech stopped: {event.get('item_id')}")
+        elif event_type == "input_audio_buffer.committed":
+            committed_turns += 1
+            log("INFO", f"Committed turn {committed_turns}: {event.get('item_id')}")
         elif event_type == "conversation.item.input_audio_transcription.delta":
             print(event.get("delta", ""), end="", flush=True)
         elif event_type == "conversation.item.input_audio_transcription.completed":
             transcript = event.get("transcript", "").strip()
             transcripts.append(transcript)
             completed_turns += 1
-            logger.success(
-                f"\nCompleted turn {completed_turns}/{committed_turns}: "
-                f"{transcript}"
-            )
+            log("SUCCESS", f"\nCompleted turn {completed_turns}/{committed_turns}: {transcript}")
         elif event_type == "conversation.item.input_audio_transcription.failed":
             completed_turns += 1
-            raise RuntimeError(event.get("error", {}).get("message", "Transcription failed"))
+            error = event.get("error", {})
+            raise RuntimeError(error.get("message", "Transcription failed"))
         elif event_type == "error":
-            raise RuntimeError(event.get("error", {}).get("message", "WebSocket error"))
+            error = event.get("error", {})
+            raise RuntimeError(error.get("message", "WebSocket error"))
+        else:
+            log("DEBUG", f"Ignoring event: {event_type}")
 
     return " ".join(text for text in transcripts if text)
 
 
-# =============================================================================
-# Main
-# =============================================================================
-
-async def simulate_frontend_stream(
-        file_path: str,
-        uri: str,
-):
-    if not Path(file_path).exists():
-        logger.error(
-            f"Audio file not found: {file_path}"
-        )
-
-        return
-
-    # load audio
-    pcmf32 = load_audio(file_path)
-
-    logger.info(f"Connecting websocket: {uri}")
-
+async def run(args: argparse.Namespace) -> str:
     try:
+        import websockets
+    except ImportError as exc:
+        raise RuntimeError("Missing dependency: install test requirements with `pip install -r src/tests/requirements.txt`") from exc
 
-        async with websockets.connect(
-                uri,
-                max_size=20 * 1024 * 1024,
-                ping_interval=20,
-                ping_timeout=20,
-        ) as websocket:
+    audio_path = Path(args.audio).expanduser().resolve()
+    if not audio_path.exists():
+        raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-            logger.success("WebSocket connected")
+    samples = load_audio(audio_path, args.sample_rate)
+    log("INFO", f"Connecting WebSocket: {args.uri}")
 
-            created = json.loads(await websocket.recv())
-            logger.info(f"Session event: {created['type']}")
+    async with websockets.connect(
+        args.uri,
+        max_size=20 * 1024 * 1024,
+        ping_interval=None if args.ping_interval <= 0 else args.ping_interval,
+        ping_timeout=None if args.ping_timeout <= 0 else args.ping_timeout,
+    ) as websocket:
+        created = await recv_json(websocket, timeout=RECEIVE_TIMEOUT_SECONDS)
+        log("INFO", f"Session event: {created.get('type')}")
+        if created.get("type") != "session.created":
+            raise RuntimeError(f"Expected session.created, got: {created}")
 
-            await websocket.send(json.dumps({
-                "type": "session.update",
-                "session": {
-                    "type": "transcription",
-                    "audio": {
-                        "input": {
-                            "format": {"type": "audio/pcm", "rate": TARGET_SAMPLE_RATE},
-                            "transcription": {"model": "whisper-1"},
-                            "turn_detection": {
-                                "type": "server_vad",
-                                "threshold": 0.5,
-                                "prefix_padding_ms": 300,
-                                "silence_duration_ms": 500,
-                            },
-                        }
-                    },
-                },
-            }))
-            updated = json.loads(await websocket.recv())
-            logger.info(f"Session event: {updated['type']}")
+        await configure_session(
+            websocket,
+            sample_rate=args.sample_rate,
+            model=args.model,
+            prompt=args.prompt,
+            language=args.language,
+            response_format=args.response_format,
+            vad_enabled=not args.manual_commit,
+            vad_threshold=args.vad_threshold,
+            silence_duration_ms=args.silence_duration_ms,
+            max_turn_duration_ms=args.max_turn_duration_ms,
+        )
 
-            sender_done = asyncio.Event()
-            receiver_task = asyncio.create_task(
-                receive_transcripts(websocket, sender_done)
-            )
-
+        sender_done = asyncio.Event()
+        receiver = asyncio.create_task(receive_transcripts(websocket, sender_done, args.final_timeout))
+        stream_error: BaseException | None = None
+        try:
             try:
-                await stream_audio(websocket, pcmf32)
-            finally:
-                sender_done.set()
+                await stream_audio(
+                    websocket,
+                    samples,
+                    sample_rate=args.sample_rate,
+                    chunk_duration_ms=args.chunk_ms,
+                    trailing_silence_ms=0 if args.manual_commit else args.trailing_silence_ms,
+                    realtime=not args.no_realtime,
+                    log_every_chunks=args.log_every_chunks,
+                )
+                if args.manual_commit:
+                    await send_json(websocket, {"type": "input_audio_buffer.commit"})
+            except Exception as exc:
+                stream_error = exc
+                if is_connection_closed_error(exc):
+                    log("WARN", f"WebSocket closed while sending audio; stopping gracefully: {exc}")
+                else:
+                    raise
+        finally:
+            sender_done.set()
 
-            final_transcript = await receiver_task
+        try:
+            transcript = await receiver
+        except Exception as exc:
+            if stream_error is not None and is_connection_closed_error(exc):
+                log("WARN", f"Receiver stopped after send failure: {exc}")
+                transcript = ""
+            else:
+                raise
 
-            logger.success(f"\nASR Result:\n{final_transcript}")
+        if stream_error is not None and not transcript:
+            return ""
 
-    except asyncio.TimeoutError:
-
-        logger.error(
-            "Timeout waiting ASR result"
-        )
-
-    except websockets.ConnectionClosed as e:
-
-        logger.error(
-            f"WebSocket closed: "
-            f"code={e.code}, "
-            f"reason={e.reason}"
-        )
-
-    except Exception as e:
-
-        logger.exception(
-            f"Unexpected error: {e}"
-        )
-
-    finally:
-
-        logger.info("Test finished")
+        log("SUCCESS", f"ASR Result: {transcript}")
+        return transcript
 
 
-# =============================================================================
-# Entry
-# =============================================================================
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--uri", default=DEFAULT_URI, help=f"WebSocket URI, default: {DEFAULT_URI}")
+    parser.add_argument("--audio", default=str(DEFAULT_AUDIO_FILE), help="Path to a PCM WAV file")
+    parser.add_argument("--sample-rate", type=int, default=TARGET_SAMPLE_RATE, help="Input sample rate declared to server")
+    parser.add_argument("--model", default="", help="Optional transcription model; overrides model in the WebSocket URI")
+    parser.add_argument("--prompt", default="", help="Optional transcription prompt")
+    parser.add_argument("--language", default="", help="Optional transcription language hint")
+    parser.add_argument("--response-format", default="json", help="Transcription response format")
+    parser.add_argument("--chunk-ms", type=int, default=CHUNK_DURATION_MS, help="Audio chunk duration in milliseconds")
+    parser.add_argument("--trailing-silence-ms", type=int, default=TRAILING_SILENCE_MS, help="Silence sent to trigger VAD")
+    parser.add_argument("--vad-threshold", type=float, default=0.5, help="OpenAI server_vad threshold")
+    parser.add_argument("--silence-duration-ms", type=int, default=500, help="OpenAI server_vad silence duration")
+    parser.add_argument("--max-turn-duration-ms", type=int, default=3000, help="HLIECpp max VAD turn duration")
+    parser.add_argument("--manual-commit", action="store_true", help="Disable server VAD and send input_audio_buffer.commit")
+    parser.add_argument("--no-realtime", action="store_true", help="Send chunks without sleeping between them")
+    parser.add_argument("--final-timeout", type=float, default=FINAL_TIMEOUT_SECONDS, help="Seconds to wait for final transcripts")
+    parser.add_argument("--ping-interval", type=float, default=0.0, help="WebSocket ping interval seconds; 0 disables client pings")
+    parser.add_argument("--ping-timeout", type=float, default=0.0, help="WebSocket ping timeout seconds; 0 disables ping timeout")
+    parser.add_argument("--log-every-chunks", type=int, default=20, help="Log one sent-chunk line every N chunks; 0 disables periodic chunk logs")
+    return parser.parse_args()
+
 
 if __name__ == "__main__":
-    asyncio.run(
-        simulate_frontend_stream(
-            AUDIO_FILE,
-            WS_URI,
-        )
-    )
+    try:
+        asyncio.run(run(parse_args()))
+    except KeyboardInterrupt:
+        log("WARN", "Interrupted")
+    except Exception as exc:
+        log("ERROR", str(exc))

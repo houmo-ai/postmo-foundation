@@ -19,8 +19,8 @@ HLIECpp是Houmo软件平台为Windows/Linux下打造的使用C++开发的推理�
 2. 软件要求
 
 - 操作系统：Windows 11/10
-- 星汉2驱动版本：v0.6.0 (最新Release)
-- 星汉2固件版本：v0.6.0 (最新Release)
+- 星汉2驱动版本：v1.3.0 (最新Release)
+- 星汉2固件版本：v1.3.0 (最新Release)
 
 ## Windows服务部署
 
@@ -40,40 +40,6 @@ HLIECpp是Houmo软件平台为Windows/Linux下打造的使用C++开发的推理�
 ## 服务配置
 ### 推理服务配置
 配置文件位于安装目录(默认： C:\Program Files\HoumoAI\HLIECpp)的config下面，sys.cfg
-```ini
-[server]
-port = 7901
-# HOUMO设备ID, 以数字表示，默认只有0，多个设备用逗号隔开, 如 0,1
-devices = 0
-# 实例副本数量，会启动多个进程，端口会递增+1， 用于负载均衡，多个设备同时运行同一种模型
-replicas = 1
-
-[log]
-# debug, info, warn, info
-level = info
-
-# 4-debug, 3-warn, 2-error 1-info
-tcim_level = 2
-# max files to keep
-max_files = 7
-# Just for Windows Mode, Linux Service use fixed path： /opt/HLIECpp/logs
-location = C:\ProgramData\HoumoAI\HLIECpp\logs\
-
-# SDK & Demo using
-open_console_window = true
-
-[llm_params]
-#llama-server的参数透传，请参考下面或者llamacpp的设置, 请使用完整option: --xxx = xx， 没有值的请留空
---jinja =
---reasoning-format = none
-#--reasoning_budget = 0
-
-[model]
-cur_model = D:\models
-
-
-```
-
 修改配置后，需要重启HLIECpp Service， 可以打开Windows服务，找到HLIECpp Service，然后右键进行重启。
 
 ## 服务使用
