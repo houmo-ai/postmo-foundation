@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <map>
 #include <server/server-http.h>
@@ -10,6 +11,7 @@
 #include "INIReader.h"
 #include "hlie_app/hlie_infer_service.h"
 #include "hlie_app/hlie_llm_model_service.h"
+#include "hlie_app/hlie_model_residency_manager.h"
 #include "hlie_app/hlie_model_service.h"
 #include "hlie_app/hlie_process_manager.h"
 #include "hlie_app/hlie_server_http_proxy.h"
@@ -17,6 +19,7 @@
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_logger.h"
+#include "hlie_base/hlie_rk_performance.h"
 #include "hlie_base/hlie_util.h"
 
 #include "hlie_app/hlie_device_service.h"
@@ -139,6 +142,138 @@ namespace {
             return {};
         }
         return {first, last};
+    }
+
+    std::vector<std::string> split_model_list(const std::string& value) {
+        std::vector<std::string> result;
+        std::stringstream ss(value);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            token = trim_copy(token);
+            if (!token.empty()) {
+                result.push_back(token);
+            }
+        }
+        return result;
+    }
+
+    HLIEModelResidencyPolicy build_residency_policy() {
+        const auto& config = Singleton<HLIEConfigService>::instance();
+        HLIEModelResidencyPolicy policy;
+        policy.auto_unload = config->get_bool("model", "auto_unload", false, true);
+        policy.idle_ttl_sec = config->get_int("model", "idle_ttl_sec", 0, true);
+        policy.max_loaded_models = config->get_int("model", "max_loaded_models", 0, true);
+        policy.default_model = config->get_string("model", "default", "", true);
+
+        const auto pinned = config->get_string("model", "pinned_models", "", true);
+        for (const auto& model : split_model_list(pinned)) {
+            policy.pinned_models.insert(model);
+        }
+
+        return policy;
+    }
+
+    std::optional<HLIEModelEvictionCandidate> select_eviction_candidate(const HLIEModelRegistry& registry,
+                                                                        const std::string& requested_model,
+                                                                        const int required_mem_mb,
+                                                                        HLIEModelResidencyPolicy& out_policy) {
+        const auto policy = build_residency_policy();
+        out_policy = policy;
+        const HLIEModelResidencyManager residency(policy);
+        const auto candidate = residency.select_lru_candidate(registry.get_all_instances(), requested_model);
+        if (!candidate) {
+            LOG_WARN("Model residency: no LRU eviction candidate for requested_model={}, required_mem={}MB, auto_unload={}",
+                     json(requested_model).dump(), required_mem_mb, policy.auto_unload);
+            return std::nullopt;
+        }
+
+        LOG_WARN("Model residency: LRU eviction candidate for requested_model={}, required_mem={}MB is key={}, model_name={}, port={}, estimated_mem={}MB, hits={}, auto_unload={}",
+                 json(requested_model).dump(), required_mem_mb, json(candidate->key).dump(), json(candidate->model_name).dump(),
+                 candidate->port, candidate->estimated_mem_mb, candidate->hit_count, policy.auto_unload);
+        return candidate;
+    }
+
+    std::optional<HLIEModelEvictionCandidate> select_loaded_limit_candidate(const HLIEModelRegistry& registry,
+                                                                            const std::string& requested_model,
+                                                                            HLIEModelResidencyPolicy& out_policy) {
+        const auto policy = build_residency_policy();
+        out_policy = policy;
+        const HLIEModelResidencyManager residency(policy);
+        const auto candidate = residency.select_for_loaded_limit(registry.get_all_instances(), requested_model);
+        if (!candidate) {
+            LOG_DEBUG("Model residency: no max_loaded_models eviction needed for requested_model={}, max_loaded_models={}, auto_unload={}",
+                      json(requested_model).dump(), policy.max_loaded_models, policy.auto_unload);
+            return std::nullopt;
+        }
+
+        LOG_WARN("Model residency: max_loaded_models candidate for requested_model={} is key={}, model_name={}, port={}, max_loaded_models={}, auto_unload={}",
+                 json(requested_model).dump(), json(candidate->key).dump(), json(candidate->model_name).dump(),
+                 candidate->port, policy.max_loaded_models, policy.auto_unload);
+        return candidate;
+    }
+
+    class ModelRequestLease {
+    public:
+        ModelRequestLease(HLIEModelRegistry& registry, std::string model_key)
+            : registry_(&registry), model_key_(std::move(model_key)), active_(registry_->begin_request(model_key_)) {
+        }
+
+        ~ModelRequestLease() {
+            if (active_) {
+                registry_->end_request(model_key_);
+            }
+        }
+
+        ModelRequestLease(const ModelRequestLease&) = delete;
+        ModelRequestLease& operator=(const ModelRequestLease&) = delete;
+
+        bool active() const {
+            return active_;
+        }
+
+        void release() {
+            active_ = false;
+        }
+
+    private:
+        HLIEModelRegistry* registry_;
+        std::string model_key_;
+        bool active_ = false;
+    };
+
+    struct ActiveModelResponse final : server_http_res {
+        ActiveModelResponse(server_http_res_ptr inner, HLIEModelRegistry& registry, std::string model_key)
+            : inner_(std::move(inner)), registry_(registry), model_key_(std::move(model_key)) {
+            content_type = inner_->content_type;
+            status = inner_->status;
+            data = std::move(inner_->data);
+            headers = std::move(inner_->headers);
+            if (inner_->is_stream()) {
+                next = [this](std::string& out) {
+                    return inner_->next(out);
+                };
+            }
+        }
+
+        ~ActiveModelResponse() override {
+            registry_.end_request(model_key_);
+        }
+
+    private:
+        server_http_res_ptr inner_;
+        HLIEModelRegistry& registry_;
+        std::string model_key_;
+    };
+
+    server_http_res_ptr attach_model_request_lease(server_http_res_ptr response, HLIEModelRegistry& registry,
+                                                   const std::string& model_key, ModelRequestLease& lease) {
+        if (!response || !lease.active()) {
+            return response;
+        }
+
+        auto wrapped = std::make_unique<ActiveModelResponse>(std::move(response), registry, model_key);
+        lease.release();
+        return wrapped;
     }
 
     std::string clean_asr_pipeline_text(std::string text) {
@@ -543,7 +678,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                 default_model_info.mm_proj_path_ = mmproj_path;
                 default_model_info.vl_spec_ = HLIEModelInfo::parse_mmproj_vl_spec(mmproj_path);
                 default_model_info.model_key_ = HLIEModelInfo::build_model_key(default_model_info);
-                if (model_instances_.find(default_model_info.model_key_) == model_instances_.end()) {
+                if (!model_registry_.contains(default_model_info.model_key_)) {
                     ModelInstance model_instance;
                     server_model_meta meta;
                     meta.name = default_model_info.model_key_;
@@ -552,7 +687,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                     model_instance.meta = std::move(meta);
                     model_instance.key = default_model_info.model_key_;
                     model_instance.model_info = default_model_info;
-                    model_instances_[default_model_info.model_key_] = std::move(model_instance);
+                    model_registry_.upsert(std::move(model_instance));
                 }
             }
 
@@ -585,21 +720,21 @@ void HLIEWorkflow::run() {
         llm_model_service_->run();
 
         const auto model_key = llm_model_service_->get_model_key();
-        const auto it = model_instances_.find(model_key);
-        if (it == model_instances_.end()) {
+        const auto inst = get_model_inst(model_key);
+        if (!inst) {
             LOG_ERROR("LLM model instance is missing after initialization: key={}", json(model_key).dump());
             return;
         }
-        it->second.meta.status = SERVER_MODEL_STATUS_LOADED;
+        model_registry_.mark_loaded(model_key, inst->get().meta.port);
 
         if (is_slave_ && !replicas_mode_) {
             std::thread([this, model_key] {
-                const auto inst = model_instances_.find(model_key);
-                if (inst == model_instances_.end()) {
+                const auto inst = get_model_inst(model_key);
+                if (!inst) {
                     LOG_ERROR("LLM model instance is missing before status update: key={}", json(model_key).dump());
                     return;
                 }
-                inst->second.meta.port = port_;
+                model_registry_.update_port(model_key, port_);
                 std::this_thread::sleep_for(std::chrono::seconds(3));
                 update_status(master_port_, model_key, port_);
             }).detach();
@@ -608,10 +743,10 @@ void HLIEWorkflow::run() {
 
     if (sd_model_service_) {
         sd_model_service_->run();
-        model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADED;
+        model_registry_.mark_loaded(HLIEModelType::SD3, port_);
         if (is_slave_ && !replicas_mode_) {
-            std::thread([&] {
-                model_instances_[HLIEModelType::SD3].meta.port = port_;
+            std::thread([this] {
+                model_registry_.update_port(HLIEModelType::SD3, port_);
                 std::this_thread::sleep_for(std::chrono::seconds(3));
                 update_status(master_port_, HLIEModelType::SD3, port_);
             }).detach();
@@ -620,32 +755,37 @@ void HLIEWorkflow::run() {
 
     if (whisper_model_service_) {
         whisper_model_service_->run();
-        model_instances_[whisper_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_LOADED;
+        const auto model_key = whisper_model_service_->get_model_key();
+        model_registry_.mark_loaded(model_key, port_);
         if (is_slave_ && !replicas_mode_) {
-            std::thread([&] {
-                model_instances_[whisper_model_service_->get_model_key()].meta.port = port_;
+            std::thread([this, model_key] {
+                model_registry_.update_port(model_key, port_);
                 std::this_thread::sleep_for(std::chrono::seconds(3));
-                update_status(master_port_, whisper_model_service_->get_model_key(), port_);
+                update_status(master_port_, model_key, port_);
             }).detach();
         }
     }
 
     if (cosy_voice_model_service_) {
         cosy_voice_model_service_->run();
-        model_instances_[cosy_voice_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_LOADED;
+        const auto model_key = cosy_voice_model_service_->get_model_key();
+        model_registry_.mark_loaded(model_key, port_);
         if (is_slave_ && !replicas_mode_) {
-            std::thread([&] {
-                model_instances_[cosy_voice_model_service_->get_model_key()].meta.port = port_;
+            std::thread([this, model_key] {
+                model_registry_.update_port(model_key, port_);
                 std::this_thread::sleep_for(std::chrono::seconds(3));
-                update_status(master_port_, cosy_voice_model_service_->get_model_key(), port_);
+                update_status(master_port_, model_key, port_);
             }).detach();
         }
     }
 
     ensure_asr_websocket();
+    start_residency_ttl_worker();
 }
 
 void HLIEWorkflow::stop() {
+    stop_residency_ttl_worker();
+
     if (asr_websocket_service_) {
         asr_websocket_service_->stop();
         asr_websocket_service_.reset();
@@ -701,6 +841,11 @@ std::string HLIEWorkflow::handle_asr_stream(
             return "HLIECpp-FAILED-888";
         }
         LOG_INFO("ASR websocket route: backend=whisper, model={}, samples={}", model, request.pcmf32.size());
+        ModelRequestLease lease(model_registry_, whisper_model_service_->get_model_key());
+        if (!lease.active()) {
+            LOG_WARN("ASR websocket routed to Whisper, but registry refused active request");
+            return "HLIECpp-FAILED-888";
+        }
         return whisper_model_service_->handle_stream(request, callback);
     }
 
@@ -886,6 +1031,8 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         return res;
     }
 
+    start_residency_ttl_worker();
+
     auto body = json::parse(req.body);
     std::string model_type = body.value("model_type", LLM);
     std::string devices = body.value("devices", "undefined");
@@ -959,6 +1106,41 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     }
 
     LOG_INFO("ready to acquire devices");
+    auto try_evict_candidate = [&](const std::optional<HLIEModelEvictionCandidate>& candidate,
+                                   const HLIEModelResidencyPolicy& policy,
+                                   const std::string& reason) {
+        if (!candidate || !policy.auto_unload) {
+            return false;
+        }
+
+        const auto inst = get_model_inst(candidate->key);
+        if (!inst) {
+            LOG_ERROR("Model residency: eviction candidate disappeared before unload: key={}", json(candidate->key).dump());
+            return false;
+        }
+
+        const auto model_copy = inst->get();
+        return evict_model(model_copy, reason);
+    };
+
+    auto try_auto_evict_for_resource = [&]() {
+        HLIEModelResidencyPolicy policy;
+        const auto candidate = select_eviction_candidate(model_registry_, model_name, mem_est, policy);
+        return try_evict_candidate(candidate, policy, "resource_pressure");
+    };
+
+    {
+        HLIEModelResidencyPolicy policy;
+        const auto candidate = select_loaded_limit_candidate(model_registry_, model_name, policy);
+        if (candidate && !try_evict_candidate(candidate, policy, "max_loaded_models")) {
+            if (policy.auto_unload) {
+                res->error(format_error_response_ex("max_loaded_models limit reached, but no model could be evicted.",
+                                                     ERROR_TYPE_UNAVAILABLE, 80004));
+                return res;
+            }
+        }
+    }
+
     {
         std::unique_lock lock(mutex_);
         if (devices == "undefined") {
@@ -966,16 +1148,26 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             if (required_device_num == 1) {
                 uint32_t device = 0;
                 if (device_service_->acquire_mem(mem_est, device, true, true, model_name) < 0) {
-                    res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
-                                                         ERROR_TYPE_UNAVAILABLE, 80004));
-                    return res;
+                    lock.unlock();
+                    const bool evicted = try_auto_evict_for_resource();
+                    lock.lock();
+                    if (!evicted || device_service_->acquire_mem(mem_est, device, true, true, model_name) < 0) {
+                        res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
+                                                             ERROR_TYPE_UNAVAILABLE, 80004));
+                        return res;
+                    }
                 }
                 devices_vec.push_back(static_cast<int>(device));
             } else {
                 if (device_service_->acquire_mem_on_device_count(required_device_num, mem_est, devices_vec, true, model_name) < 0) {
-                    res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
-                                                         ERROR_TYPE_UNAVAILABLE, 80004));
-                    return res;
+                    lock.unlock();
+                    const bool evicted = try_auto_evict_for_resource();
+                    lock.lock();
+                    if (!evicted || device_service_->acquire_mem_on_device_count(required_device_num, mem_est, devices_vec, true, model_name) < 0) {
+                        res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
+                                                             ERROR_TYPE_UNAVAILABLE, 80004));
+                        return res;
+                    }
                 }
             }
             devices = HlieUtil::join_devices(devices_vec);
@@ -995,9 +1187,14 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             }
             devices = HlieUtil::join_devices(devices_vec);
             if (device_service_->acquire_mem_on_devices(devices_vec, mem_est, false, true, model_name) < 0) {
-                res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
-                                                     ERROR_TYPE_UNAVAILABLE, 80004));
-                return res;
+                lock.unlock();
+                const bool evicted = try_auto_evict_for_resource();
+                lock.lock();
+                if (!evicted || device_service_->acquire_mem_on_devices(devices_vec, mem_est, false, true, model_name) < 0) {
+                    res->error(format_error_response_ex("The devices is not available, estimated model memory is " + std::to_string(mem_est) + "MB.",
+                                                         ERROR_TYPE_UNAVAILABLE, 80004));
+                    return res;
+                }
             }
         }
     }
@@ -1034,7 +1231,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             model_info_tmp.model_key_ = model_key;
             model_instance.model_info = model_info_tmp;
             model_instance.key = model_key;
-            model_instances_[model_key] = std::move(model_instance);
+            model_registry_.upsert(std::move(model_instance));
             LOG_INFO("Service Starting Add Model: {} {}", model_key, model_info_tmp.get_mm_proj_path());
         }
 
@@ -1044,7 +1241,13 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             return res;
         }
 
-        auto& model_info = model_inst->get().model_info;
+        const std::string model_key = model_inst->get().key;
+        auto model_info_opt = model_registry_.prepare_model_info_with_devices(model_key, devices);
+        if (!model_info_opt) {
+            res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
+            return res;
+        }
+        auto model_info = std::move(*model_info_opt);
         if (model_info.model_version_.empty()) {
             res->error(format_error_response_ex("failed to parse build_version from model name", ERROR_TYPE_INVALID_REQUEST, 80007));
             return res;
@@ -1055,14 +1258,18 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             return res;
         }
 
-        model_info.set_devices(devices);
-
-        model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADING;
+        model_registry_.mark_loading(model_key);
+        auto rollback_loading = [&](const std::string& reason) {
+            LOG_WARN("Model start rollback: key={}, reason={}", json(model_key).dump(), reason);
+            model_registry_.mark_unloaded(model_key);
+            slave_cv_.notify_all();
+        };
         if (!llm_model_service_) {
             llm_model_service_ = std::make_shared<LLModelService>();
             if (llm_model_service_->init(model_dir_, model_info, device_service_) < 0) {
                 LOG_ERROR("failed to init the LLM model service");
                 res->error(format_error_response_ex("failed to init the LLM model service", ERROR_TYPE_SERVER, 80001));
+                rollback_loading("llm_init_failed");
                 llm_model_service_->stop();
                 llm_model_service_.reset();
                 return res;
@@ -1070,8 +1277,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
             llm_model_service_->run();
             ensure_asr_websocket();
-            model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
-            model_inst->get().meta.port = port_;
+            model_registry_.mark_loaded(model_key, port_);
             if (port_ != master_port_ && !replicas_mode_) {
                 update_status(master_port_, llm_model_service_->get_model_key(), port_);
             }
@@ -1079,12 +1285,14 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             if (port_ != master_port_) {
                 LOG_ERROR("slave cannot start new slave");
                 res->error(format_error_response_ex("slave cannot start new slave", ERROR_TYPE_SERVER, 80001));
+                rollback_loading("slave_cannot_start_new_slave");
                 return res;
             }
 
             // 子进程实例参数
             json_info_file = generate_meta_info(model_info, model_dir_, res);
             if (json_info_file.empty()) {
+                rollback_loading("generate_meta_info_failed");
                 return res;
             }
 
@@ -1105,6 +1313,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             if (process_id == 0 || process_id == static_cast<ProcessID>(-1)) {
                 LOG_ERROR("Failed to start process for instance_id[{}]", instance_id);
                 res->error(format_error_response_ex("failed to start model subprocess", ERROR_TYPE_SERVER, 80001));
+                rollback_loading("create_process_failed");
                 return res;
             } else {
                 LOG_INFO("Started process PID[{}] instance_id[{}]", process_id, instance_id);
@@ -1124,10 +1333,10 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
         if (!sd_model_service_) {
             sd_model_service_ = std::make_shared<SDModelService>();
-            model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADING;
+            model_registry_.mark_loading(HLIEModelType::SD3);
             if (sd_model_service_->init(model_dir_, model_info, device_service_) < 0) {
                 LOG_ERROR("failed to init the SD model service");
-                model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_UNLOADED;
+                model_registry_.mark_unloaded(HLIEModelType::SD3);
                 res->error(format_error_response_ex("failed to init the SD model service", ERROR_TYPE_SERVER, 80001));
                 sd_model_service_->stop();
                 sd_model_service_.reset();
@@ -1135,8 +1344,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             }
 
             sd_model_service_->run();
-            model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_LOADED;
-            model_instances_[HLIEModelType::SD3].meta.port = port_;
+            model_registry_.mark_loaded(HLIEModelType::SD3, port_);
             if (port_ != master_port_ && !replicas_mode_) {
                 update_status(master_port_, HLIEModelType::SD3, port_);
             }
@@ -1207,7 +1415,7 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         model_info_tmp.model_key_ = model_key;
         model_instance.model_info = model_info_tmp;
         model_instance.key = model_key;
-        model_instances_[model_key] = std::move(model_instance);
+        model_registry_.upsert(std::move(model_instance));
         LOG_INFO("Service Starting Add WHISPER Model: {}", model_key);
     }
 
@@ -1217,7 +1425,13 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         return -1;
     }
 
-    auto& model_info = model_inst->get().model_info;
+    const std::string model_key = model_inst->get().key;
+    auto model_info_opt = model_registry_.prepare_model_info_with_devices(model_key, devices);
+    if (!model_info_opt) {
+        res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
+        return -1;
+    }
+    auto model_info = std::move(*model_info_opt);
     if (model_info.model_version_.empty()) {
         res->error(format_error_response_ex("failed to parse build_version from model name", ERROR_TYPE_INVALID_REQUEST, 80007));
         return -1;
@@ -1228,15 +1442,19 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         return -1;
     }
 
-    model_info.set_devices(devices);
-
-    model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADING;
+    model_registry_.mark_loading(model_key);
+    auto rollback_loading = [&](const std::string& reason) {
+        LOG_WARN("Model start rollback: key={}, reason={}", json(model_key).dump(), reason);
+        model_registry_.mark_unloaded(model_key);
+        slave_cv_.notify_all();
+    };
     const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
     if (!whisper_model_service_) {
         whisper_model_service_ = std::make_shared<WhisperModelService>();
         if (whisper_model_service_->init(model_dir_, model_info, device_service_) < 0) {
             LOG_ERROR("failed to init the Whisper model service");
             res->error(format_error_response_ex("failed to init the Whisper model service", ERROR_TYPE_SERVER, 80001));
+            rollback_loading("whisper_init_failed");
             whisper_model_service_->stop();
             whisper_model_service_.reset();
             return -1;
@@ -1244,8 +1462,7 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
 
         whisper_model_service_->run();
         ensure_asr_websocket();
-        model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
-        model_inst->get().meta.port = port_;
+        model_registry_.mark_loaded(model_key, port_);
         if (port_ != master_port && !replicas_mode_) {
             update_status(master_port_, whisper_model_service_->get_model_key(), port_);
         }
@@ -1253,12 +1470,14 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         if (port_ != master_port) {
             LOG_ERROR("slave cannot start new slave");
             res->error(format_error_response_ex("slave cannot start new slave", ERROR_TYPE_SERVER, 80001));
+            rollback_loading("slave_cannot_start_new_slave");
             return -1;
         }
 
         // 子进程实例参数
         std::string json_info_file = generate_meta_info(model_info, model_dir_, res);
         if (json_info_file.empty()) {
+            rollback_loading("generate_meta_info_failed");
             return -1;
         }
 
@@ -1278,6 +1497,9 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
                 Singleton<HLIEProcessManager>::instance()->create_process(program_path_, args_for_sub_process, {model_name}, instance_id);
             pid == 0 || pid == -1) {
             LOG_ERROR("Failed to start process for instance_id[{}]", instance_id);
+            res->error(format_error_response_ex("failed to start model subprocess", ERROR_TYPE_SERVER, 80001));
+            rollback_loading("create_process_failed");
+            return -1;
         } else {
             LOG_INFO("Started process PID[{}] instance_id[{}]", pid, instance_id);
         }
@@ -1303,7 +1525,7 @@ int HLIEWorkflow::start_cosyvoice(std::optional<server_model_meta>& meta, std::u
         model_info_tmp.model_key_ = model_key;
         model_instance.model_info = model_info_tmp;
         model_instance.key = model_key;
-        model_instances_[model_key] = std::move(model_instance);
+        model_registry_.upsert(std::move(model_instance));
         LOG_INFO("Service Starting Add COSYVOICE Model: {}", model_key);
     }
 
@@ -1313,7 +1535,13 @@ int HLIEWorkflow::start_cosyvoice(std::optional<server_model_meta>& meta, std::u
         return -1;
     }
 
-    auto& model_info = model_inst->get().model_info;
+    const std::string model_key = model_inst->get().key;
+    auto model_info_opt = model_registry_.prepare_model_info_with_devices(model_key, devices);
+    if (!model_info_opt) {
+        res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
+        return -1;
+    }
+    auto model_info = std::move(*model_info_opt);
     if (model_info.model_version_.empty()) {
         res->error(format_error_response_ex("failed to parse build_version from model name", ERROR_TYPE_INVALID_REQUEST, 80007));
         return -1;
@@ -1324,23 +1552,26 @@ int HLIEWorkflow::start_cosyvoice(std::optional<server_model_meta>& meta, std::u
         return -1;
     }
 
-    model_info.set_devices(devices);
-
-    model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADING;
+    model_registry_.mark_loading(model_key);
+    auto rollback_loading = [&](const std::string& reason) {
+        LOG_WARN("Model start rollback: key={}, reason={}", json(model_key).dump(), reason);
+        model_registry_.mark_unloaded(model_key);
+        slave_cv_.notify_all();
+    };
     const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
     if (!cosy_voice_model_service_) {
         cosy_voice_model_service_ = std::make_shared<CosyVoiceModelService>();
         if (cosy_voice_model_service_->init(model_dir_, model_info, device_service_) < 0) {
             LOG_ERROR("failed to init the COSYVOICE model service");
             res->error(format_error_response_ex("failed to init the COSYVOICE model service", ERROR_TYPE_SERVER, 80001));
+            rollback_loading("cosyvoice_init_failed");
             cosy_voice_model_service_->stop();
             cosy_voice_model_service_.reset();
             return -1;
         }
 
         cosy_voice_model_service_->run();
-        model_inst->get().meta.status = SERVER_MODEL_STATUS_LOADED;
-        model_inst->get().meta.port = port_;
+        model_registry_.mark_loaded(model_key, port_);
         if (port_ != master_port && !replicas_mode_) {
             update_status(master_port_, cosy_voice_model_service_->get_model_key(), port_);
         }
@@ -1348,12 +1579,14 @@ int HLIEWorkflow::start_cosyvoice(std::optional<server_model_meta>& meta, std::u
         if (port_ != master_port) {
             LOG_ERROR("slave cannot start new slave");
             res->error(format_error_response_ex("slave cannot start new slave", ERROR_TYPE_SERVER, 80001));
+            rollback_loading("slave_cannot_start_new_slave");
             return -1;
         }
 
         // 子进程实例参数
         std::string json_info_file = generate_meta_info(model_info, model_dir_, res);
         if (json_info_file.empty()) {
+            rollback_loading("generate_meta_info_failed");
             return -1;
         }
 
@@ -1373,6 +1606,9 @@ int HLIEWorkflow::start_cosyvoice(std::optional<server_model_meta>& meta, std::u
                 Singleton<HLIEProcessManager>::instance()->create_process(program_path_, args_for_sub_process, {model_name}, instance_id);
             pid == 0 || pid == -1) {
             LOG_ERROR("Failed to start process for instance_id[{}]", instance_id);
+            res->error(format_error_response_ex("failed to start model subprocess", ERROR_TYPE_SERVER, 80001));
+            rollback_loading("create_process_failed");
+            return -1;
         } else {
             LOG_INFO("Started process PID[{}] instance_id[{}]", pid, instance_id);
         }
@@ -1453,7 +1689,8 @@ server_http_res_ptr HLIEWorkflow::handle_transcriptions_pipeline(const server_ht
         asr_model = requested_model;
     }
     if (asr_model.empty()) {
-        for (const auto& [key, inst] : model_instances_) {
+        for (const auto& inst : model_registry_.get_all_instances()) {
+            const auto& key = inst.key;
             if (is_qwen3_asr_name(key) || is_qwen3_asr_name(inst.model_info.get_model_name())) {
                 asr_model = key;
                 break;
@@ -1469,7 +1706,8 @@ server_http_res_ptr HLIEWorkflow::handle_transcriptions_pipeline(const server_ht
         aligner_model = json_string_value(body, "timestamp_model");
     }
     if (aligner_model.empty()) {
-        for (const auto& [key, inst] : model_instances_) {
+        for (const auto& inst : model_registry_.get_all_instances()) {
+            const auto& key = inst.key;
             if (is_force_aligner_name(key) || is_force_aligner_name(inst.model_info.get_model_name())) {
                 aligner_model = key;
                 break;
@@ -1642,11 +1880,16 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
         res->error(format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
-
     const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
     LOG_INFO("LLM Request route info, model [{}] status [{}] port [{}]" , name, static_cast<int>(inst->get().meta.status), inst->get().meta.port);
     if (inst->get().meta.status == SERVER_MODEL_STATUS_LOADED && (inst->get().meta.port == master_port || master_port != port_)) {
-        return handler(req);
+        const auto model_key = inst->get().key;
+        ModelRequestLease lease(model_registry_, model_key);
+        if (!lease.active()) {
+            res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        return attach_model_request_lease(handler(req), model_registry_, model_key, lease);
     }
 
     const bool auto_load = Singleton<HLIEConfigService>::instance()->get_bool("model", "auto_load", true, true);
@@ -1659,7 +1902,7 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
                 return res;
             }
             std::lock_guard lk(slave_mutex_);
-            inst->get().meta.status = SERVER_MODEL_STATUS_LOADING;
+            model_registry_.mark_loading(inst->get().key);
             auto rest_res = start_service(req);
             if (rest_res.get()->status != 200) {
                 // 加载失败
@@ -1692,10 +1935,22 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
 
     // 如果已加载则直接调用
     if (inst1->get().meta.port == port_) {
-        return handler(req);
+        const auto model_key = inst1->get().key;
+        ModelRequestLease lease(model_registry_, model_key);
+        if (!lease.active()) {
+            res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        return attach_model_request_lease(handler(req), model_registry_, model_key, lease);
     }
 
-    return proxy_request(req, method, name, inst1->get().meta.port);
+    const auto model_key = inst1->get().key;
+    ModelRequestLease lease(model_registry_, model_key);
+    if (!lease.active()) {
+        res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    return attach_model_request_lease(proxy_request(req, method, name, inst1->get().meta.port), model_registry_, model_key, lease);
 }
 
 std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
@@ -1736,7 +1991,14 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr {
                     CHECK_MODEL_READY(sd_model_service_);
-                    return sd_model_service_->handle_image_generations(req);
+                    ModelRequestLease lease(model_registry_, HLIEModelType::SD3);
+                    if (!lease.active()) {
+                        auto res = std::make_unique<server_res_generator_light>();
+                        res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+                        return res;
+                    }
+                    return attach_model_request_lease(sd_model_service_->handle_image_generations(req),
+                                                      model_registry_, HLIEModelType::SD3, lease);
                 },
                 true,
                 SD // 生图模型类型
@@ -1767,7 +2029,14 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                             return res;
                         }
 
-                        return whisper_model_service_->handle_transcriptions(req);
+                        const auto model_key = whisper_model_service_->get_model_key();
+                        ModelRequestLease lease(model_registry_, model_key);
+                        if (!lease.active()) {
+                            res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+                            return res;
+                        }
+                        return attach_model_request_lease(whisper_model_service_->handle_transcriptions(req),
+                                                          model_registry_, model_key, lease);
                     }
 
                     return route_llm(req, &LLModelService::handle_transcriptions);
@@ -1785,6 +2054,16 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 [this](const httplib::Request& req, httplib::Response& res) {
                     if (!cosy_voice_model_service_ || cosy_voice_model_service_->get_state() != SERVER_STATE_READY) {
                         auto error_data = format_error_response_ex("Model is not available for now.", ERROR_TYPE_UNAVAILABLE, 80004);
+                        const json final_response{{"error", error_data}};
+                        res.set_content(safe_json_to_str(final_response), MIMETYPE_JSON);
+                        res.status = json_value(error_data, "code", 500);
+                        return;
+                    }
+
+                    const auto model_key = cosy_voice_model_service_->get_model_key();
+                    ModelRequestLease lease(model_registry_, model_key);
+                    if (!lease.active()) {
+                        auto error_data = format_error_response_ex("model is not loaded", ERROR_TYPE_INVALID_REQUEST, 80004);
                         const json final_response{{"error", error_data}};
                         res.set_content(safe_json_to_str(final_response), MIMETYPE_JSON);
                         res.status = json_value(error_data, "code", 500);
@@ -1931,8 +2210,7 @@ void HLIEWorkflow::set_server_port(const int port) {
     port_ = port;
     if (llm_model_service_) {
         const auto model_key = llm_model_service_->get_model_key();
-        if (const auto it = model_instances_.find(model_key); it != model_instances_.end()) {
-            it->second.meta.port = port;
+        if (model_registry_.update_port(model_key, port)) {
         } else {
             LOG_ERROR("Cannot set LLM model port because instance is missing: key={}, port={}",
                       json(model_key).dump(), port);
@@ -1940,11 +2218,11 @@ void HLIEWorkflow::set_server_port(const int port) {
     }
 
     if (sd_model_service_) {
-        model_instances_[HLIEModelType::SD3].meta.port = port;
+        model_registry_.update_port(HLIEModelType::SD3, port);
     }
 
     if (whisper_model_service_) {
-        model_instances_[whisper_model_service_->get_model_key()].meta.port = port;
+        model_registry_.update_port(whisper_model_service_->get_model_key(), port);
     }
 }
 
@@ -1964,23 +2242,95 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
     const auto process_id = body.at("process_id").get<int>();
 
     if (instance_id == 0) {
-        std::unique_lock lock(mutex_);
-        if (llm_model_service_) {
-            model_instances_[llm_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
-            llm_model_service_->stop();
-            llm_model_service_.reset();
+        std::shared_ptr<LLModelService> llm_to_stop;
+        std::shared_ptr<SDModelService> sd_to_stop;
+        std::shared_ptr<WhisperModelService> whisper_to_stop;
+        std::vector<std::string> busy_models;
+        std::vector<std::string> eviction_keys;
+        {
+            std::unique_lock lock(mutex_);
+            if (llm_model_service_) {
+                const auto model_key = llm_model_service_->get_model_key();
+                if (model_registry_.try_begin_eviction(model_key)) {
+                    eviction_keys.push_back(model_key);
+                } else {
+                    LOG_WARN("Model stop_service skipped busy LLM model: key={}", json(model_key).dump());
+                    busy_models.push_back(model_key);
+                }
+            }
+
+            if (sd_model_service_) {
+                if (model_registry_.try_begin_eviction(HLIEModelType::SD3)) {
+                    eviction_keys.push_back(HLIEModelType::SD3);
+                } else {
+                    LOG_WARN("Model stop_service skipped busy SD model: key={}", json(HLIEModelType::SD3).dump());
+                    busy_models.push_back(HLIEModelType::SD3);
+                }
+            }
+
+            if (whisper_model_service_) {
+                const auto model_key = whisper_model_service_->get_model_key();
+                if (model_registry_.try_begin_eviction(model_key)) {
+                    eviction_keys.push_back(model_key);
+                } else {
+                    LOG_WARN("Model stop_service skipped busy Whisper model: key={}", json(model_key).dump());
+                    busy_models.push_back(model_key);
+                }
+            }
+
+            if (!busy_models.empty()) {
+                for (const auto& key : eviction_keys) {
+                    model_registry_.abort_eviction(key);
+                }
+            } else {
+                if (llm_model_service_) {
+                    llm_to_stop = llm_model_service_;
+                    llm_model_service_.reset();
+                }
+                if (sd_model_service_) {
+                    sd_to_stop = sd_model_service_;
+                    sd_model_service_.reset();
+                }
+                if (whisper_model_service_) {
+                    whisper_to_stop = whisper_model_service_;
+                    whisper_model_service_.reset();
+                }
+            }
         }
 
-        if (sd_model_service_) {
-            model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_UNLOADED;
-            sd_model_service_->stop();
-            sd_model_service_.reset();
+        if (!busy_models.empty()) {
+            json busy = json::array();
+            for (const auto& model : busy_models) {
+                busy.push_back(model);
+            }
+            LOG_WARN("Model stop_service refused because some models are busy: models={}", busy.dump());
+            res->error(format_error_response_ex("model is busy or not loaded", ERROR_TYPE_UNAVAILABLE, 80004));
+            return res;
         }
 
-        if (whisper_model_service_) {
-            model_instances_[whisper_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
-            whisper_model_service_->stop();
-            whisper_model_service_.reset();
+        auto stop_outside_workflow_lock = [](const auto& service, const std::string& service_name) {
+            if (!service) {
+                return;
+            }
+            const auto begin = std::chrono::steady_clock::now();
+            LOG_WARN("Model stop_service stop begin: type={}", service_name);
+            service->stop();
+            const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - begin).count();
+            LOG_WARN("Model stop_service stop done: type={}, elapsed_ms={}", service_name, elapsed_ms);
+        };
+
+        stop_outside_workflow_lock(llm_to_stop, LLM);
+        stop_outside_workflow_lock(sd_to_stop, SD);
+        stop_outside_workflow_lock(whisper_to_stop, WHISPER);
+        if (llm_to_stop) {
+            model_registry_.mark_unloaded(llm_to_stop->get_model_key());
+        }
+        if (sd_to_stop) {
+            model_registry_.mark_unloaded(HLIEModelType::SD3);
+        }
+        if (whisper_to_stop) {
+            model_registry_.mark_unloaded(whisper_to_stop->get_model_key());
         }
 
         LOG_INFO("Succeed to stop service process for instance_id[{}][{}]", instance_id, process_id);
@@ -1991,7 +2341,7 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
         for (const auto& model : models) {
             auto model_inst = get_model_inst(model);
             if (model_inst) {
-                model_inst->get().meta.status = SERVER_MODEL_STATUS_UNLOADED;
+                model_registry_.mark_unloaded(model_inst->get().key);
             }
         }
 
@@ -2102,20 +2452,21 @@ server_http_res_ptr HLIEWorkflow::handle_post_status(const server_http_req& req)
 
     if (const auto inst = get_model_inst(model); inst.has_value()) {
         std::lock_guard lk(mutex_);
-        inst->get().meta.status = status;
-        inst->get().meta.port = port;
+        const auto resolved_key = inst->get().key;
+        const auto resolved_model_name = inst->get().model_info.get_model_name();
+        model_registry_.update_status(resolved_key, status, port);
         LOG_INFO("Model status updated: request_model={}, resolved_key={}, resolved_model_name={}, status={}, port={}",
-                 json(model).dump(), json(inst->get().key).dump(), json(inst->get().model_info.get_model_name()).dump(),
+                 json(model).dump(), json(resolved_key).dump(), json(resolved_model_name).dump(),
                  static_cast<int>(status), port);
 
         slave_cv_.notify_all();
 
         if (status == SERVER_MODEL_STATUS_UNLOADED) { // 更新进程管理中的信息状态
-            Singleton<HLIEProcessManager>::instance()->erase_model(inst->get().model_info.get_model_name());
+            Singleton<HLIEProcessManager>::instance()->erase_model(resolved_model_name);
         } else if (status == SERVER_MODEL_STATUS_LOADED) {
             const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
             const int instance_id = port - master_port;
-            Singleton<HLIEProcessManager>::instance()->add_model(inst->get().model_info.get_model_name(), instance_id);
+            Singleton<HLIEProcessManager>::instance()->add_model(resolved_model_name, instance_id);
         }
     } else {
         LOG_ERROR("Model status update ignored because lookup failed: model={}, value={}, port={}",
@@ -2144,43 +2495,79 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         return res;
     }
 
-    std::unique_lock lock(mutex_);
-    if (model_type == LLM && llm_model_service_) {
-        model_instances_[llm_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
-        llm_model_service_->stop();
-
-        if (is_slave_ && !replicas_mode_) {
-            update_status(master_port_, llm_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
+    std::shared_ptr<LLModelService> llm_to_stop;
+    std::shared_ptr<SDModelService> sd_to_stop;
+    std::shared_ptr<WhisperModelService> whisper_to_stop;
+    std::shared_ptr<CosyVoiceModelService> cosy_voice_to_stop;
+    std::string notify_model_key;
+    bool unload_refused = false;
+    {
+        std::unique_lock lock(mutex_);
+        if (model_type == LLM && llm_model_service_) {
+            notify_model_key = llm_model_service_->get_model_key();
+            if (model_registry_.try_begin_eviction(notify_model_key)) {
+                llm_to_stop = llm_model_service_;
+                llm_model_service_.reset();
+            } else {
+                unload_refused = true;
+            }
+        } else if (model_type == SD && sd_model_service_) {
+            notify_model_key = HLIEModelType::SD3;
+            if (model_registry_.try_begin_eviction(notify_model_key)) {
+                sd_to_stop = sd_model_service_;
+                sd_model_service_.reset();
+            } else {
+                unload_refused = true;
+            }
+        } else if (model_type == WHISPER && whisper_model_service_) {
+            notify_model_key = whisper_model_service_->get_model_key();
+            if (model_registry_.try_begin_eviction(notify_model_key)) {
+                whisper_to_stop = whisper_model_service_;
+                whisper_model_service_.reset();
+            } else {
+                unload_refused = true;
+            }
+        } else if (model_type == HLIEModelType::COSYVOICE && cosy_voice_model_service_) {
+            notify_model_key = cosy_voice_model_service_->get_model_key();
+            if (model_registry_.try_begin_eviction(notify_model_key)) {
+                cosy_voice_to_stop = cosy_voice_model_service_;
+                cosy_voice_model_service_.reset();
+            } else {
+                unload_refused = true;
+            }
         }
+    }
 
-        llm_model_service_.reset();
-    } else if (model_type == SD && sd_model_service_) {
-        model_instances_[HLIEModelType::SD3].meta.status = SERVER_MODEL_STATUS_UNLOADED;
-        sd_model_service_->stop();
+    if (unload_refused) {
+        LOG_WARN("Model unload refused because model is busy: type={}, model={}", model_type, json(notify_model_key).dump());
+        res->error(format_error_response_ex("model is busy or not loaded", ERROR_TYPE_UNAVAILABLE, 80004));
+        return res;
+    }
 
-        if (is_slave_ && !replicas_mode_) {
-            update_status(master_port_, HLIEModelType::SD3, port_, SERVER_MODEL_STATUS_UNLOADED);
+    auto stop_outside_workflow_lock = [&](const auto& service, const std::string& service_name) {
+        if (!service) {
+            return;
         }
+        const auto begin = std::chrono::steady_clock::now();
+        LOG_WARN("Model unload stop begin: type={}, model={}", service_name, json(notify_model_key).dump());
+        service->stop();
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - begin).count();
+        LOG_WARN("Model unload stop done: type={}, model={}, elapsed_ms={}",
+                 service_name, json(notify_model_key).dump(), elapsed_ms);
+    };
 
-        sd_model_service_.reset();
-    } else if (model_type == WHISPER && whisper_model_service_) {
-        model_instances_[whisper_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
-        whisper_model_service_->stop();
+    stop_outside_workflow_lock(llm_to_stop, LLM);
+    stop_outside_workflow_lock(sd_to_stop, SD);
+    stop_outside_workflow_lock(whisper_to_stop, WHISPER);
+    stop_outside_workflow_lock(cosy_voice_to_stop, HLIEModelType::COSYVOICE);
+    if (!notify_model_key.empty()) {
+        model_registry_.mark_unloaded(notify_model_key);
+        slave_cv_.notify_all();
+    }
 
-        if (is_slave_ && !replicas_mode_) {
-            update_status(master_port_, whisper_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
-        }
-
-        whisper_model_service_.reset();
-    } else if (model_type == HLIEModelType::COSYVOICE && cosy_voice_model_service_) {
-        model_instances_[cosy_voice_model_service_->get_model_key()].meta.status = SERVER_MODEL_STATUS_UNLOADED;
-        cosy_voice_model_service_->stop();
-
-        if (is_slave_ && !replicas_mode_) {
-            update_status(master_port_, cosy_voice_model_service_->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
-        }
-
-        cosy_voice_model_service_.reset();
+    if (!notify_model_key.empty() && is_slave_ && !replicas_mode_) {
+        update_status(master_port_, notify_model_key, port_, SERVER_MODEL_STATUS_UNLOADED);
     }
 
     LOG_INFO("Succeed to uninstall model");
@@ -2193,103 +2580,185 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
     return res;
 }
 
-std::vector<server_model_meta> HLIEWorkflow::get_all_model_metas() {
-    std::unique_lock lk(mutex_);
-    std::vector<server_model_meta> result;
-    result.reserve(model_instances_.size());
-    for (const auto& [name, inst] : model_instances_) {
-        result.push_back(inst.meta);
+bool HLIEWorkflow::evict_model(const ModelInstance& model_inst, const std::string& reason) {
+    const auto matches = [&](const std::string& name) {
+        const std::string requested = normalize_model_name(name);
+        return !requested.empty() &&
+            (normalize_model_name(model_inst.key) == requested ||
+             normalize_model_name(model_inst.model_info.get_model_name()) == requested ||
+             normalize_model_name(model_inst.meta.name) == requested);
+    };
+
+    LOG_WARN("Model residency: evicting model key={}, model_name={}, port={}, reason={}",
+             json(model_inst.key).dump(), json(model_inst.model_info.get_model_name()).dump(), model_inst.meta.port, reason);
+
+    if (!model_registry_.try_begin_eviction(model_inst.key)) {
+        return false;
     }
-    return result;
+
+    bool evicted = false;
+    std::string local_service_type;
+    std::shared_ptr<LLModelService> llm_to_stop;
+    std::shared_ptr<SDModelService> sd_to_stop;
+    std::shared_ptr<WhisperModelService> whisper_to_stop;
+    std::shared_ptr<CosyVoiceModelService> cosy_voice_to_stop;
+    {
+        std::unique_lock lock(mutex_);
+        if (llm_model_service_ && matches(llm_model_service_->get_model_key())) {
+            llm_to_stop = llm_model_service_;
+            llm_model_service_.reset();
+            local_service_type = LLM;
+            evicted = true;
+        } else if (sd_model_service_ && matches(HLIEModelType::SD3)) {
+            sd_to_stop = sd_model_service_;
+            sd_model_service_.reset();
+            local_service_type = SD;
+            evicted = true;
+        } else if (whisper_model_service_ && matches(whisper_model_service_->get_model_key())) {
+            whisper_to_stop = whisper_model_service_;
+            whisper_model_service_.reset();
+            local_service_type = WHISPER;
+            evicted = true;
+        } else if (cosy_voice_model_service_ && matches(cosy_voice_model_service_->get_model_key())) {
+            cosy_voice_to_stop = cosy_voice_model_service_;
+            cosy_voice_model_service_.reset();
+            local_service_type = HLIEModelType::COSYVOICE;
+            evicted = true;
+        }
+    }
+
+    auto stop_evicted_service = [&](const auto& service) {
+        if (!service) {
+            return;
+        }
+        const auto begin = std::chrono::steady_clock::now();
+        LOG_WARN("Model residency: local stop begin key={}, type={}, reason={}",
+                 json(model_inst.key).dump(), local_service_type, reason);
+        service->stop();
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - begin).count();
+        LOG_WARN("Model residency: local stop done key={}, type={}, reason={}, elapsed_ms={}",
+                 json(model_inst.key).dump(), local_service_type, reason, elapsed_ms);
+    };
+
+    stop_evicted_service(llm_to_stop);
+    stop_evicted_service(sd_to_stop);
+    stop_evicted_service(whisper_to_stop);
+    stop_evicted_service(cosy_voice_to_stop);
+
+    if (!evicted) {
+        const auto processes = Singleton<HLIEProcessManager>::instance()->get_running_processes();
+        for (const auto& process : processes) {
+            const auto it = std::find_if(process.model_names.begin(), process.model_names.end(), [&](const std::string& name) {
+                return matches(name);
+            });
+            if (it == process.model_names.end()) {
+                continue;
+            }
+
+            evicted = Singleton<HLIEProcessManager>::instance()->terminate_process(process.process_id);
+            if (!evicted) {
+                LOG_ERROR("Model residency: failed to terminate process {} for model key={}",
+                          process.process_id, json(model_inst.key).dump());
+                model_registry_.abort_eviction(model_inst.key);
+                return false;
+            }
+            break;
+        }
+    }
+
+    if (!evicted) {
+        LOG_WARN("Model residency: no running service or process matched eviction candidate key={}", json(model_inst.key).dump());
+        model_registry_.abort_eviction(model_inst.key);
+        return false;
+    }
+
+    model_registry_.mark_unloaded(model_inst.key);
+    Singleton<HLIEProcessManager>::instance()->erase_model(model_inst.model_info.get_model_name());
+    slave_cv_.notify_all();
+    LOG_WARN("Model residency: evicted model key={}, model_name={}",
+             json(model_inst.key).dump(), json(model_inst.model_info.get_model_name()).dump());
+    return true;
+}
+
+void HLIEWorkflow::start_residency_ttl_worker() {
+    if (residency_ttl_thread_) {
+        return;
+    }
+
+    const auto policy = build_residency_policy();
+    residency_ttl_stop_.store(false);
+    residency_ttl_thread_ = std::make_unique<std::thread>(&HLIEWorkflow::residency_ttl_loop, this);
+    LOG_INFO("Model residency TTL worker started: auto_unload={}, idle_ttl_sec={}",
+             policy.auto_unload, policy.idle_ttl_sec);
+}
+
+void HLIEWorkflow::stop_residency_ttl_worker() {
+    residency_ttl_stop_.store(true);
+    if (!residency_ttl_thread_) {
+        return;
+    }
+
+    if (residency_ttl_thread_->joinable()) {
+        residency_ttl_thread_->join();
+    }
+    residency_ttl_thread_.reset();
+    LOG_INFO("Model residency TTL worker stopped");
+}
+
+void HLIEWorkflow::residency_ttl_loop() {
+    HLIERkPerformance::apply_for_current_thread();
+
+    while (!residency_ttl_stop_.load()) {
+        const auto policy = build_residency_policy();
+        const int ttl_sec = policy.idle_ttl_sec;
+        const int sleep_sec = ttl_sec > 0 ? std::clamp(ttl_sec / 2, 5, 60) : 30;
+
+        for (int i = 0; i < sleep_sec && !residency_ttl_stop_.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        if (residency_ttl_stop_.load()) {
+            break;
+        }
+
+        if (!policy.auto_unload || ttl_sec <= 0) {
+            continue;
+        }
+
+        const HLIEModelResidencyManager residency(policy);
+        const auto candidate = residency.select_for_idle_ttl(model_registry_.get_all_instances(), std::time(nullptr));
+        if (!candidate) {
+            continue;
+        }
+
+        LOG_WARN("Model residency: idle TTL candidate key={}, model_name={}, ttl_sec={}, hits={}",
+                 json(candidate->key).dump(), json(candidate->model_name).dump(), ttl_sec, candidate->hit_count);
+
+        const auto inst = get_model_inst(candidate->key);
+        if (!inst) {
+            LOG_WARN("Model residency: idle TTL candidate disappeared before eviction: key={}", json(candidate->key).dump());
+            continue;
+        }
+
+        const auto model_copy = inst->get();
+        evict_model(model_copy, "idle_ttl");
+    }
+}
+
+std::vector<server_model_meta> HLIEWorkflow::get_all_model_metas() {
+    return model_registry_.get_all_metas();
 }
 
 void HLIEWorkflow::register_model_instance(HLIEModelInfo& model_info) {
-    ModelInstance model_instance;
-    const std::string model_key = HLIEModelInfo::build_model_key(model_info);
-
-    server_model_meta meta;
-    meta.name = model_key;
-    model_info.model_key_ = model_key;
-
-    model_instance.key = model_key;
-    model_instance.path = model_info.get_model_path();
-    model_instance.path_mmproj = model_info.get_mm_proj_path();
-    model_instance.meta = std::move(meta);
-    model_instance.model_info = model_info;
-
-    model_instances_[model_key] = std::move(model_instance);
-    const auto& registered = model_instances_.at(model_key);
-    LOG_INFO("Registered model instance: key={}, model_name={}, meta_name={}, model_path={}, mmproj={}",
-             json(model_key).dump(), json(registered.model_info.get_model_name()).dump(), json(registered.meta.name).dump(),
-             json(registered.path).dump(), json(registered.path_mmproj).dump());
+    model_registry_.register_model(model_info);
 }
 
 std::optional<server_model_meta> HLIEWorkflow::get_model_meta(const std::string& model_name) {
-    std::unique_lock lk(mutex_);
-
-    if (const auto it = model_instances_.find(model_name); it != model_instances_.end()) {
-        return it->second.meta;
-    }
-
-    const std::string normalized_name = normalize_model_name(model_name);
-    if (normalized_name.empty()) {
-        return std::nullopt;
-    }
-
-    for (const auto& [name, inst] : model_instances_) {
-        if (normalize_model_name(name) == normalized_name ||
-            normalize_model_name(inst.model_info.get_model_name()) == normalized_name ||
-            normalize_model_name(inst.meta.name) == normalized_name) {
-            return inst.meta;
-        }
-    }
-
-    return std::nullopt;
+    return model_registry_.get_meta(model_name);
 }
 
 std::optional<std::reference_wrapper<HLIEWorkflow::ModelInstance>> HLIEWorkflow::get_model_inst(const std::string& model_name) {
-    std::unique_lock lk(mutex_);
-
-    if (const auto it = model_instances_.find(model_name); it != model_instances_.end()) {
-        LOG_DEBUG("Model lookup exact key matched: request={}, key={}", json(model_name).dump(), json(it->first).dump());
-        return std::ref(it->second);
-    }
-
-    const std::string normalized_name = normalize_model_name(model_name);
-    if (normalized_name.empty()) {
-        LOG_WARN("Model lookup failed because normalized request name is empty: request={}", json(model_name).dump());
-        return std::nullopt;
-    }
-
-    ModelInstance* matched = nullptr;
-    for (auto& [name, inst] : model_instances_) {
-        const bool key_matched = normalize_model_name(name) == normalized_name;
-        const bool model_name_matched = normalize_model_name(inst.model_info.get_model_name()) == normalized_name;
-        const bool meta_name_matched = normalize_model_name(inst.meta.name) == normalized_name;
-        if (key_matched || model_name_matched || meta_name_matched) {
-            LOG_DEBUG(
-                "Model lookup normalized match: request={}, key={}, model_name={}, meta_name={}, key_match={}, model_name_match={}, meta_name_match={}",
-                json(model_name).dump(), json(name).dump(), json(inst.model_info.get_model_name()).dump(), json(inst.meta.name).dump(),
-                key_matched, model_name_matched, meta_name_matched);
-            if (!matched || inst.meta.status == SERVER_MODEL_STATUS_LOADED) {
-                matched = &inst;
-            }
-        }
-    }
-
-    if (matched) {
-        return std::ref(*matched);
-    }
-
-    LOG_WARN("Model lookup failed: request={}, normalized={}, instance_count={}",
-             json(model_name).dump(), json(normalized_name).dump(), model_instances_.size());
-    for (const auto& [name, inst] : model_instances_) {
-        LOG_WARN("Model lookup candidate: key={}, model_name={}, meta_name={}, mmproj={}, status={}, port={}",
-                 json(name).dump(), json(inst.model_info.get_model_name()).dump(), json(inst.meta.name).dump(),
-                 json(inst.path_mmproj).dump(), static_cast<int>(inst.meta.status), inst.meta.port);
-    }
-
-    return std::nullopt;
+    return model_registry_.get_instance(model_name);
 }
 
 HLIE_NAMESPACE_END

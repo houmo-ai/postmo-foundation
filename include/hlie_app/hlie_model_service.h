@@ -50,6 +50,7 @@ protected:
     std::string model_path_;
     std::atomic<int> state_;
     std::vector<int> devices_;
+    int acquired_mem_mb_ = 0;
     bool is_multi_instance_ {false};
     std::shared_ptr<HLIEDeviceService> device_service_;
 };

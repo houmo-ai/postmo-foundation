@@ -9,6 +9,7 @@
 #include "hlie_base/hlie_base.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_model_info.h"
+#include "hlie_model_registry.h"
 #include "hlie_model_service.h"
 #include "hlie_ws_service.h"
 #include "httplib.h"
@@ -54,14 +55,7 @@ public:
         OriRequestHandler ori_handler = nullptr;
     };
 
-    struct ModelInstance {
-        int port;
-        std::string key;
-        std::string path;
-        std::string path_mmproj;
-        server_model_meta meta;
-        HLIEModelInfo model_info;
-    };
+    using ModelInstance = HLIEModelRegistry::ModelInstance;
 
     /**
      * Get the main route configs
@@ -110,6 +104,10 @@ private:
     std::optional<server_model_meta> get_model_meta(const std::string& name);
     std::optional<std::reference_wrapper<ModelInstance>> get_model_inst(const std::string& model_name);
     void register_model_instance(HLIEModelInfo& model_info);
+    bool evict_model(const ModelInstance& model_inst, const std::string& reason);
+    void start_residency_ttl_worker();
+    void stop_residency_ttl_worker();
+    void residency_ttl_loop();
 
     static int generate_instance_id() {
         static std::atomic counter{0};
@@ -121,7 +119,7 @@ private:
     std::shared_ptr<WhisperModelService> whisper_model_service_;
     std::shared_ptr<CosyVoiceModelService> cosy_voice_model_service_;
     std::unique_ptr<HLIEWebSocketService> asr_websocket_service_;
-    std::map<std::string, ModelInstance> model_instances_;
+    HLIEModelRegistry model_registry_;
 
     std::shared_ptr<HLIEDeviceService> device_service_;
 
@@ -138,6 +136,9 @@ private:
 
     std::condition_variable slave_cv_;
     std::mutex slave_mutex_;
+
+    std::unique_ptr<std::thread> residency_ttl_thread_;
+    std::atomic<bool> residency_ttl_stop_{false};
 };
 
 HLIE_NAMESPACE_END

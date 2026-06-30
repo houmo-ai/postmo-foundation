@@ -356,18 +356,22 @@ int WhisperModelService::init(const std::string& model_dir, const HLIEModelInfo&
                 return -1;
             }
 
-            if (device_service_->acquire_mem_on_devices(devices_, 1200) < 0) {
+            constexpr int required_mem_mb = 1200;
+            if (device_service_->acquire_mem_on_devices(devices_, required_mem_mb) < 0) {
                 return -1;
             }
+            acquired_mem_mb_ = required_mem_mb;
 
             HlieUtil::set_env("HLIEWHISPER_DEVICE_ID", std::to_string(devices_.at(0)));
             LOG_INFO("Whisper using model specific device: {}", devices_.at(0));
         } else {
             uint32_t device;
-            if (device_service_->acquire_mem(11000, device) < 0) {
+            constexpr int required_mem_mb = 11000;
+            if (device_service_->acquire_mem(required_mem_mb, device) < 0) {
                 return -1;
             }
             devices_.push_back(device);
+            acquired_mem_mb_ = required_mem_mb;
             HlieUtil::set_env("HLIEWHISPER_DEVICE_ID", std::to_string(device));
             LOG_INFO("Whisper using model specific device: {}", device);
         }
@@ -380,6 +384,11 @@ int WhisperModelService::init(const std::string& model_dir, const HLIEModelInfo&
     LOG_INFO("whisper_init_from_file_with_params done");
     if (whisper_ctx_ == nullptr) {
         fprintf(stderr, "error: failed to initialize whisper context\n");
+        if (!is_multi_instance_ && device_service_ && acquired_mem_mb_ > 0) {
+            device_service_->release_mem_on_devices(devices_, acquired_mem_mb_);
+            acquired_mem_mb_ = 0;
+            devices_.clear();
+        }
         return 3;
     }
 
@@ -455,10 +464,13 @@ void WhisperModelService::stop() {
 
     if (is_multi_instance_) {
         Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
-    } else {
-        device_service_->release_mem_on_devices(devices_, 2000);
+    } else if (device_service_ && acquired_mem_mb_ > 0) {
+        LOG_INFO("Whisper release devices mem: devices={}, mem={}MB",
+                 HlieUtil::join_devices(devices_), acquired_mem_mb_);
+        device_service_->release_mem_on_devices(devices_, acquired_mem_mb_);
     }
     devices_.clear();
+    acquired_mem_mb_ = 0;
 }
 
 int WhisperModelService::get_state() {

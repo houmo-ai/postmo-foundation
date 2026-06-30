@@ -830,18 +830,22 @@ int CosyVoiceModelService::init(const std::string& model_dir, const HLIEModelInf
                 return -1;
             }
 
-            if (device_service_->acquire_mem_on_devices(devices_, 1200) < 0) {
+            constexpr int required_mem_mb = 1200;
+            if (device_service_->acquire_mem_on_devices(devices_, required_mem_mb) < 0) {
                 return -1;
             }
+            acquired_mem_mb_ = required_mem_mb;
 
             LOG_INFO("CosyVoiceModelService using model specific device: {}", devices_.at(0));
         } else {
             uint32_t device;
-            if (device_service_->acquire_mem(4000, device) < 0) {
+            constexpr int required_mem_mb = 4000;
+            if (device_service_->acquire_mem(required_mem_mb, device) < 0) {
                 return -1;
             }
 
             devices_.push_back(device);
+            acquired_mem_mb_ = required_mem_mb;
             LOG_INFO("CosyVoiceModelService using model specific device: {}", device);
         }
     }
@@ -933,10 +937,13 @@ void CosyVoiceModelService::stop() {
 
     if (is_multi_instance_) {
         Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
-    } else {
-        device_service_->release_mem_on_devices(devices_, 2000);
+    } else if (device_service_ && acquired_mem_mb_ > 0) {
+        LOG_INFO("CosyVoiceModelService release devices mem: devices={}, mem={}MB",
+                 HlieUtil::join_devices(devices_), acquired_mem_mb_);
+        device_service_->release_mem_on_devices(devices_, acquired_mem_mb_);
     }
     devices_.clear();
+    acquired_mem_mb_ = 0;
 }
 
 int CosyVoiceModelService::get_state() {
