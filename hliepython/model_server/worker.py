@@ -36,6 +36,7 @@ from hliepython.model_server.engines.protocol.embeddings import (
     EmbeddingRequest,
 )
 from hliepython.model_server.engines.utils import split_vllm_config
+from hliepython.model_server.slot_tracker import SlotTracker
 
 # 初始化子进程服务
 app = FastAPI()
@@ -98,6 +99,12 @@ INSTANCE_CONFIG: Dict[str, Any] = {}
 # 推理引擎实例
 engine: Optional[InferenceEngine] = None
 
+# 槽位跟踪器（hibalance 集成）
+SLOT_TRACKER: Optional[SlotTracker] = None
+
+# vLLM engine max-num-seqs（vLLM 的并发上限）
+VLLM_MAX_NUM_SEQS: int = 1
+
 # 路由注册表
 routes: Dict[str, str] = {
     "/v1/chat/completions": "create_chat_completions",
@@ -115,15 +122,27 @@ routes: Dict[str, str] = {
 @app.on_event("startup")
 async def startup_event():
     """启动时初始化推理引擎"""
-    global engine
+    global engine, SLOT_TRACKER, VLLM_MAX_NUM_SEQS
     INSTANCE_CONFIG["model_name"] = MODEL_NAME
     engine = InferenceEngineFactory.get_engine(INSTANCE_CONFIG)
-    sync_logger.info(f"Worker {MODEL_NAME}:{PORT} 推理引擎初始化完成")
+
+    # 读取 vllm_config.engine.max_num_seqs 作为 slot 上限
+    vllm_cfg = INSTANCE_CONFIG.get("vllm_config") or {}
+    engine_cfg = vllm_cfg.get("engine") or {}
+    max_seqs = engine_cfg.get("max_num_seqs")
+    if not isinstance(max_seqs, int) or max_seqs < 1:
+        max_seqs = 1
+    VLLM_MAX_NUM_SEQS = max_seqs
+    SLOT_TRACKER = SlotTracker(max_slots=max_seqs)
+    sync_logger.info(
+        f"Worker {MODEL_NAME}:{PORT} 推理引擎初始化完成 "
+        f"(max_slots={max_seqs})"
+    )
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """关闭时清理资源"""
-    global engine
+    global engine, SLOT_TRACKER
     if engine:
         try:
             engine = None
@@ -136,17 +155,50 @@ async def shutdown_event():
             sync_logger.info(f"Worker {MODEL_NAME}:{PORT} 推理引擎关闭")
         finally:
             engine = None
+    if SLOT_TRACKER:
+        SLOT_TRACKER.shutdown()
+        SLOT_TRACKER = None
 
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "ok",
+    """兼容 hibalance Agent 的健康检查端点。
+
+    关键字段：
+    - status: 文本"ok"/"busy"
+    - slots_idle: 空闲槽位数
+    - slots_processing: 正在执行的槽位数
+    - model: served model name
+    - max_concurrent_requests: 槽位上限
+    """
+    if SLOT_TRACKER is None:
+        return {
+            "status": "loading",
+            "model": MODEL_NAME,
+            "allowed_models": sorted(ALLOWED_MODEL_NAMES),
+            "port": PORT,
+            "engine_loaded": engine is not None,
+            "slots_idle": 0,
+            "slots_processing": 0,
+            "max_concurrent_requests": 0,
+        }
+    base = SLOT_TRACKER.aggregated_status()
+    base.update({
         "model": MODEL_NAME,
         "allowed_models": sorted(ALLOWED_MODEL_NAMES),
         "port": PORT,
-        "engine_loaded": engine is not None
-    }
+        "engine_loaded": engine is not None,
+        "max_concurrent_requests": SLOT_TRACKER.max_slots,
+    })
+    return base
+
+
+@app.get("/slots")
+async def slots_info():
+    """hi.cpp 兼容的 /slots 端点（hibalance Agent 用来累计 slot 数）。"""
+    if SLOT_TRACKER is None:
+        return []
+    return SLOT_TRACKER.to_slots_array()
 
 
 @app.websocket("/ws/audio/transcriptions")
@@ -487,6 +539,10 @@ def create_route_handler(method_name: str):
     async def handler(raw_request: Request):
         global MODEL_NAME, PORT, engine
 
+        # 槽位准入：等待空闲槽位
+        if SLOT_TRACKER is None:
+            return JSONResponse(status_code=503, content={"error": "Worker 尚未就绪"})
+        slot_id = await SLOT_TRACKER.acquire()
         try:
             req_data = await _parse_request_payload(raw_request, method_name)
             request_model = str(req_data.get("model", ""))
@@ -550,6 +606,9 @@ def create_route_handler(method_name: str):
             import traceback
             logger.error(f"Worker {MODEL_NAME}:{PORT} 请求处理失败: {e}\n{traceback.format_exc()}")
             return JSONResponse(status_code=500, content={"error": str(e)})
+        finally:
+            # 释放 slot
+            SLOT_TRACKER.release(slot_id)
 
     return handler
 

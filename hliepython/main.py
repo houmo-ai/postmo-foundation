@@ -1269,6 +1269,52 @@ async def list_models():
     )
 
 
+@main_app.get("/v1/instances")
+async def list_instances():
+    """聚合所有 worker 的状态（hibalance 集成）。
+
+    返回每个 worker 实例的：
+    - host / port: worker 监听地址（hibalance Agent 会通过它反查 /health / /slots）
+    - model: served model name
+    - status / slots_idle / slots_processing / max_concurrent_requests
+    """
+    timeout = httpx.Timeout(connect=0.5, read=1.0, write=1.0, pool=1.0)
+    instances: list[dict] = []
+
+    # 已启动的 worker
+    for port, model_name in PORT_MODEL_MAP.items():
+        proc = WORKER_PROCESS_MAP.get(port)
+        alive = bool(proc and proc.is_alive())
+        item = {
+            "host": "127.0.0.1",
+            "port": port,
+            "model": model_name,
+            "pid": proc.pid if proc else None,
+            "alive": alive,
+            "status": "loading",
+            "slots_idle": 0,
+            "slots_processing": 0,
+            "max_concurrent_requests": 0,
+        }
+        if alive:
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.get(f"http://127.0.0.1:{port}/health")
+                if resp.status_code == 200:
+                    body = resp.json()
+                    item.update({
+                        "status": body.get("status", "ok"),
+                        "slots_idle": int(body.get("slots_idle", 0) or 0),
+                        "slots_processing": int(body.get("slots_processing", 0) or 0),
+                        "max_concurrent_requests": int(body.get("max_concurrent_requests", 0) or 0),
+                    })
+            except Exception:
+                item["status"] = "unreachable"
+        instances.append(item)
+
+    return JSONResponse(content={"code": 0, "instances": instances})
+
+
 @main_app.get("/v1/status")
 async def service_status():
     return JSONResponse(

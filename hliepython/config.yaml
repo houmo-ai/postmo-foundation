@@ -4,21 +4,28 @@ server:
 
 # 模型配置
 models:
-  # # Qwen3.5-9B 模型
-  # - name: "Qwen3.5-9B"
-  #   instances:
-  #     - port: 7801
-  #       model_path: "Qwen3.5-9B"
-  #       model_type: "llm"    # llm、embedding、asr、tts
-  #       vllm_config:
-  #         engine:
-  #           max-model-len: 65536
-  #           max-num-seqs: 1
-  #           no-enable-prefix-caching: true
-  #           max-num-batched-tokens: 65536
-  #       additional_config:
-  #         device_ids: [0]
-  #         enable_cacheprompt: "False"
+  # Qwen3.5-9B 模型
+  - model_path: "HiModel_xh2_qwen3.5_9b_256_32k_b1_1chip_2cores_v1.2.0_20260401.gguf"
+    model_type: "llm"
+    instances:
+      - vllm_config:
+          # serving:
+          #   enable-auto-tool-choice: true
+          #   tool-call-parser: "qwen3_coder"
+          api-server:
+            port: 7801
+            server-model-name: "Qwen3.5-9B"
+        # additional_config:
+        #   "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
+      - vllm_config:
+          # serving:
+          #   enable-auto-tool-choice: true
+          #   tool-call-parser: "qwen3_coder"
+          api-server:
+            port: 7802
+            server-model-name: "Qwen3.5-9B"
+        # additional_config:
+        #   "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
 
   # # CoPaw-Flash-9B 模型
   # - model_path: "CoPaw-Flash-9B"
