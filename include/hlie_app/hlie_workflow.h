@@ -11,6 +11,7 @@
 #include "hlie_model_info.h"
 #include "hlie_model_registry.h"
 #include "hlie_model_service.h"
+#include "hlie_model_service_manager.h"
 #include "hlie_ws_service.h"
 #include "httplib.h"
 
@@ -104,6 +105,8 @@ private:
     std::optional<server_model_meta> get_model_meta(const std::string& name);
     std::optional<std::reference_wrapper<ModelInstance>> get_model_inst(const std::string& model_name);
     void register_model_instance(HLIEModelInfo& model_info);
+    void rollback_model_start(const std::string& model_key, const std::string& reason);
+    void mark_local_model_started(const std::string& model_key, const std::string& notify_model_key, bool enable_asr_websocket);
     bool evict_model(const ModelInstance& model_inst, const std::string& reason);
     void start_residency_ttl_worker();
     void stop_residency_ttl_worker();
@@ -114,10 +117,7 @@ private:
         return ++counter;
     }
 
-    std::shared_ptr<LLModelService> llm_model_service_;
-    std::shared_ptr<SDModelService> sd_model_service_;
-    std::shared_ptr<WhisperModelService> whisper_model_service_;
-    std::shared_ptr<CosyVoiceModelService> cosy_voice_model_service_;
+    HLIEModelServiceManager model_service_manager_;
     std::unique_ptr<HLIEWebSocketService> asr_websocket_service_;
     HLIEModelRegistry model_registry_;
 

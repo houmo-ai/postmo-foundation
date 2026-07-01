@@ -10,11 +10,6 @@ HLIE_NAMESPACE_BEGIN
 
 class HLIEDeviceService;
 
-
-const std::string LLM = "llm";
-const std::string SD = "sd";
-const std::string WHISPER = "whisper";
-
 struct HLIEModelType {
     static constexpr auto LLM = "llm";
     static constexpr auto SD = "sd";
@@ -28,6 +23,11 @@ struct HLIEModelType {
     static constexpr auto DeepSeek = "deepseek";
     static constexpr auto SD3 = "sd3";
 };
+
+// Backward-compatible aliases. Keep HLIEModelType as the single source of string literals.
+inline const std::string LLM = HLIEModelType::LLM;
+inline const std::string SD = HLIEModelType::SD;
+inline const std::string WHISPER = HLIEModelType::WHISPER;
 
 class HLIEModelInfo;
 
