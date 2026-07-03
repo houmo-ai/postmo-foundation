@@ -4,28 +4,28 @@ server:
 
 # 模型配置
 models:
-  # Qwen3.5-9B 模型
-  - model_path: "HiModel_xh2_qwen3.5_9b_256_32k_b1_1chip_2cores_v1.2.0_20260401.gguf"
-    model_type: "llm"
-    instances:
-      - vllm_config:
-          # serving:
-          #   enable-auto-tool-choice: true
-          #   tool-call-parser: "qwen3_coder"
-          api-server:
-            port: 7801
-            server-model-name: "Qwen3.5-9B"
-        # additional_config:
-        #   "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
-      - vllm_config:
-          # serving:
-          #   enable-auto-tool-choice: true
-          #   tool-call-parser: "qwen3_coder"
-          api-server:
-            port: 7802
-            server-model-name: "Qwen3.5-9B"
-        # additional_config:
-        #   "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
+  # # Qwen3.5-9B 模型
+  # - model_path: "HiModel_xh2_qwen3.5_9b_256_32k_b1_1chip_2cores_v1.2.0_20260401.gguf"
+  #   model_type: "llm"
+  #   instances:
+  #     - vllm_config:
+  #         # serving:
+  #         #   enable-auto-tool-choice: true
+  #         #   tool-call-parser: "qwen3_coder"
+  #         api-server:
+  #           port: 7801
+  #           server-model-name: "Qwen3.5-9B"
+  #       # additional_config:
+  #       #   "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
+  #     - vllm_config:
+  #         # serving:
+  #         #   enable-auto-tool-choice: true
+  #         #   tool-call-parser: "qwen3_coder"
+  #         api-server:
+  #           port: 7802
+  #           server-model-name: "Qwen3.5-9B"
+  #       # additional_config:
+  #       #   "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
 
   # # CoPaw-Flash-9B 模型
   # - model_path: "CoPaw-Flash-9B"
@@ -134,37 +134,40 @@ models:
   #         # enable_cacheprompt: "False"
   #         "vit_model_name": "mmproj_xh2_gemma4-26b-a4b_2cores_vit_448x448_v1.4.0_20260610.gguf"
 
-  # # Qwen3-ASR-0.6B 模型
-  # - name: "Qwen3-ASR-0.6B"
-  #   instances:
-  #     - port: 7803
-  #       model_path: "Qwen3-ASR-0.6B"
-  #       model_type: "asr"
-  #       vllm_config:
-  #         engine:
-  #           no-enable-prefix-caching: true
-  #           load-format: "dummy"
-  #       additional_config:
-  #         "vit_model_name": "mmproj_xh2_qwen3-asr_0.6b_2cores_v1.3.0_20260522.gguf"
+  # Qwen3-ASR-1.7B 模型
+  - model_path: "HiModel_xh2_qwen3_asr_1.7b_1chip_2cores_v1.3.0_20260604.gguf"
+    model_type: "asr"
+    instances:
+      - vllm_config:
+          engine:
+            load-format: "dummy"
+            no-enable-prefix-caching: true
+          # serving:
+          #   enable-auto-tool-choice: true
+          #   tool-call-parser: "qwen3_coder"
+          api-server:
+            port: 7801
+            server-model-name: "Qwen3-ASR-1.7B"
+        additional_config:
+          "vit_model_name": "mmproj_xh2_qwen3-asr_1.7b_2cores_v1.3.0_20260604.gguf"
 
-  # # Qwen3-ForcedAligner-0.6B 模型
-  # - name: "Qwen3-ForcedAligner-0.6B"
-  #   instances:
-  #     - port: 7803
-  #       model_path: "Qwen3-ForcedAligner-0.6B"
-  #       model_type: "asr"
-  #       vllm_config:
-  #         engine:
-  #           no-enable-prefix-caching: true
-  #           load-format: "dummy"
-  #           max-model-len: 411
-  #           load-format: "dummy"
-  #           hf-overrides:
-  #             architectures: ["Qwen3ASRForcedAlignerForTokenClassification"]
-  #         # serving:
-  #         #   trust-request-chat-template: true
-  #       additional_config:
-  #         "vit_model_name": "mmproj-Qwen3-ForcedAligner-Q4_0.gguf"
+  # Qwen3-ForcedAligner-0.6B 模型
+  - model_path: "HiModel-Qwen3-ForcedAligner-0.6B-Q4_0.gguf"
+    model_type: "forced_aligner"
+    instances:
+      - vllm_config:
+          engine:
+            no-enable-prefix-caching: true
+            load-format: "dummy"
+            max-model-len: 411
+            load-format: "dummy"
+            hf-overrides:
+              architectures: ["Qwen3ASRForcedAlignerForTokenClassification"]
+          api-server:
+            port: 7802
+            server-model-name: "Qwen3-ForcedAligner-0.6B"
+        additional_config:
+          "vit_model_name": "mmproj-Qwen3-ForcedAligner-Q4_0.gguf"
 
   # - name: "glm-ocr"
   #   instances:
@@ -179,20 +182,6 @@ models:
   #           max-num-batched-tokens: 2048
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_glm-ocr_0.8b_2cores_v1.3.0_20260519.gguf"
-
-  # # Qwen3-ForcedAligner-0.6B 模型
-  # - name: "Qwen3-Reranker-8B"
-  #   instances:
-  #     - port: 7803
-  #       model_path: "Qwen3-Reranker-8B"
-  #       model_type: "reranker"
-  #       vllm_config:
-  #         engine:
-  #           max-model-len: 8192
-  #           hf-overrides:
-  #             architectures: ["Qwen3ForSequenceClassification"]
-  #             classifier_from_token: ["no", "yes"]
-  #             is_original_qwen3_reranker: true
 
   # # CosyVoice3 模型
   # - name: "Fun-CosyVoice3-0.5B"

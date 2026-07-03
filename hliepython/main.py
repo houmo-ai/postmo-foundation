@@ -29,6 +29,7 @@ from hliepython.model_server.engines.protocol.audio_speech import (
 from hliepython.model_server.engines.protocol.embeddings import (
     EmbeddingRequest,
 )
+from hliepython.model_server.engines.utils import split_vllm_config
 from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
 from hliepython.model_server.worker import run_worker
 
@@ -246,11 +247,79 @@ def _parse_form_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _parse_timestamp_granularities(value: Any) -> list[str]:
+    if value is None or value == "":
+        return []
+
+    raw_items: list[Any]
+    if isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raw_items = [value]
+
+    granularities: list[str] = []
+    for item in raw_items:
+        if item is None:
+            continue
+        if isinstance(item, str):
+            stripped = item.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("["):
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, list):
+                    raw_items.extend(parsed)
+                    continue
+            parts = [part.strip() for part in stripped.split(",")]
+        else:
+            parts = [str(item).strip()]
+
+        for part in parts:
+            if part and part not in granularities:
+                granularities.append(part)
+    return granularities
+
+
+def _should_use_forced_aligner(req_body: Dict[str, Any]) -> bool:
+    granularities = _parse_timestamp_granularities(
+        req_body.get("timestamp_granularities")
+        or req_body.get("timestamp_granularities[]")
+    )
+    if not granularities:
+        return False
+
+    invalid = [item for item in granularities if item not in {"word", "segment"}]
+    if invalid:
+        raise ValueError(
+            "timestamp_granularities 仅支持 word 或 segment: "
+            f"{invalid}"
+        )
+    return True
+
+
+def _drop_timestamp_granularity_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in {"timestamp_granularities", "timestamp_granularities[]"}
+    }
+
+
 async def _parse_form_body(raw_request: Request) -> Dict[str, Any]:
     form = await raw_request.form()
     payload: Dict[str, Any] = {}
     for key, value in form.multi_items():
-        payload[key] = value
+        if key in payload:
+            existing = payload[key]
+            if isinstance(existing, list):
+                existing.append(value)
+            else:
+                payload[key] = [existing, value]
+        else:
+            payload[key] = value
 
     server_config = payload.get("server_config")
     if isinstance(server_config, str) and server_config.strip():
@@ -263,6 +332,39 @@ async def _parse_form_body(raw_request: Request) -> Dict[str, Any]:
         payload["stream"] = _parse_form_bool(payload["stream"])
 
     return payload
+
+
+def _get_served_model_name_from_instance(model_name: str, instance_cfg: Dict[str, Any]) -> str:
+    try:
+        _, _, api_server_args, _ = split_vllm_config(instance_cfg.get("vllm_config", {}))
+    except Exception:
+        api_server_args = {}
+
+    configured_model_name = api_server_args.get("server_model_name")
+    if configured_model_name is None:
+        configured_model_name = api_server_args.get("served_model_name")
+    if isinstance(configured_model_name, list):
+        return str(configured_model_name[0]) if configured_model_name else str(model_name)
+    if configured_model_name not in (None, ""):
+        return str(configured_model_name)
+    return str(model_name)
+
+
+def _find_model_by_type(model_type: str) -> tuple[Optional[str], Optional[int]]:
+    for model in APP_CONFIG.models:
+        if model.model_type != model_type:
+            continue
+        for inst in model.instances:
+            inst_type = inst.model_type or model.model_type
+            if inst_type != model_type:
+                continue
+            instance_cfg = _build_preload_instance_config(
+                model_name=model.name,
+                instance=inst,
+                fallback_model_type=model.model_type,
+            )
+            return _get_served_model_name_from_instance(model.name, instance_cfg), int(inst.port)
+    return None, None
 
 
 def get_runtime_settings(cfg: AppConfig) -> Dict[str, Any]:
@@ -964,6 +1066,16 @@ def start_workers(config: AppConfig):
 
         for inst in instances:
             p = inst.port
+            instance_cfg = _build_preload_instance_config(
+                model_name=name,
+                instance=inst,
+                fallback_model_type=model.model_type,
+            )
+            served_model_name = _get_served_model_name_from_instance(name, instance_cfg)
+            if served_model_name != name:
+                MODEL_PORT_MAP.setdefault(served_model_name, [])
+                if p not in MODEL_PORT_MAP[served_model_name]:
+                    MODEL_PORT_MAP[served_model_name].append(p)
             PORT_MODEL_MAP[p] = name
             model_path = inst.model_path
             additional_config = inst.additional_config
@@ -990,11 +1102,7 @@ def start_workers(config: AppConfig):
             _register_worker_runtime(
                 model_name=name,
                 process=proc,
-                instance_cfg=_build_preload_instance_config(
-                    model_name=name,
-                    instance=inst,
-                    fallback_model_type=model.model_type,
-                ),
+                instance_cfg=instance_cfg,
                 source="static",
             )
             sync_logger.info(
@@ -1112,7 +1220,7 @@ def _resolve_worker_url(req_body: Dict[str, Any], raw_request: Request) -> str:
             )
 
         bound_model = PORT_MODEL_MAP[requested_port]
-        if bound_model != model_name:
+        if bound_model != model_name and requested_port not in MODEL_PORT_MAP.get(model_name, []):
             raise ValueError(f"端口 {requested_port} 已绑定模型 {bound_model}，不能用于模型 {model_name}")
 
     worker_port = resolve_worker_port(model_name=model_name, port=requested_port)
@@ -1193,6 +1301,115 @@ async def _forward_multipart(url: str, raw_request: Request):
         status_code=resp.status_code,
         media_type=content_type or "application/octet-stream",
     )
+
+
+async def _forward_multipart_to_json(
+    url: str,
+    *,
+    data: Dict[str, str],
+    files: list[tuple[str, tuple[str, bytes, str]]],
+) -> tuple[Dict[str, Any], int]:
+    async with httpx.AsyncClient(timeout=None) as client:
+        resp = await client.post(url, data=data, files=files, timeout=None)
+
+    try:
+        content = resp.json()
+    except ValueError as exc:
+        raise ValueError(
+            f"上游音频接口返回非 JSON 响应: status={resp.status_code} body={resp.text[:200]}"
+        ) from exc
+
+    return content, resp.status_code
+
+
+async def _extract_multipart_parts(
+    raw_request: Request,
+) -> tuple[Dict[str, str], list[tuple[str, tuple[str, bytes, str]]]]:
+    form = await raw_request.form()
+    data: Dict[str, str] = {}
+    files: list[tuple[str, tuple[str, bytes, str]]] = []
+
+    for key, value in form.multi_items():
+        if isinstance(value, UploadFile):
+            file_bytes = await value.read()
+            files.append(
+                (
+                    key,
+                    (
+                        value.filename or "upload.bin",
+                        file_bytes,
+                        value.content_type or "application/octet-stream",
+                    ),
+                )
+            )
+        else:
+            data[key] = str(value)
+
+    return data, files
+
+
+def _multipart_files_clone(
+    files: list[tuple[str, tuple[str, bytes, str]]]
+) -> list[tuple[str, tuple[str, bytes, str]]]:
+    return [(key, (filename, file_bytes, content_type)) for key, (filename, file_bytes, content_type) in files]
+
+
+async def _forward_multipart_with_forced_alignment(
+    raw_request: Request,
+    req_body: Dict[str, Any],
+):
+    asr_req_body = _drop_timestamp_granularity_fields(req_body)
+    asr_req_body["response_format"] = "json"
+    asr_req_body["stream"] = False
+    asr_url = _resolve_worker_url(req_body=asr_req_body, raw_request=raw_request)
+
+    data, files = await _extract_multipart_parts(raw_request)
+    asr_data = _drop_timestamp_granularity_fields(data)
+    asr_data["response_format"] = "json"
+    asr_data["stream"] = "false"
+    asr_result, asr_status = await _forward_multipart_to_json(
+        asr_url,
+        data=asr_data,
+        files=_multipart_files_clone(files),
+    )
+    if asr_status >= 400:
+        return JSONResponse(asr_result, status_code=asr_status)
+
+    transcript_text = str(asr_result.get("text") or "").strip()
+    if not transcript_text:
+        raise ValueError("ASR 转录结果为空，无法进行 forced alignment")
+
+    aligner_model, aligner_port = _find_model_by_type("forced_aligner")
+    if not aligner_model:
+        raise ValueError("未找到 model_type=forced_aligner 的已配置模型")
+
+    aligner_req_body = _drop_timestamp_granularity_fields(req_body)
+    aligner_req_body["model"] = aligner_model
+    aligner_req_body["prompt"] = transcript_text
+    aligner_req_body["response_format"] = "verbose_json"
+    aligner_req_body["stream"] = False
+    if aligner_port is not None:
+        aligner_req_body["port"] = aligner_port
+    aligner_url = _resolve_worker_url(req_body=aligner_req_body, raw_request=raw_request)
+
+    aligner_data = _drop_timestamp_granularity_fields(data)
+    aligner_data["model"] = aligner_model
+    aligner_data["prompt"] = transcript_text
+    aligner_data["response_format"] = "verbose_json"
+    aligner_data["stream"] = "false"
+    if aligner_port is not None:
+        aligner_data["port"] = str(aligner_port)
+    aligner_result, aligner_status = await _forward_multipart_to_json(
+        aligner_url,
+        data=aligner_data,
+        files=_multipart_files_clone(files),
+    )
+    if aligner_status >= 400:
+        return JSONResponse(aligner_result, status_code=aligner_status)
+
+    aligner_result.setdefault("usage", asr_result.get("usage"))
+    aligner_result["text"] = aligner_result.get("text") or transcript_text
+    return JSONResponse(aligner_result, status_code=aligner_status)
 
 
 async def _forward_multipart_stream(url: str, raw_request: Request):
@@ -1453,6 +1670,8 @@ async def create_audio_transcriptions(raw_request: Request):
 
     if media_type == "application/json":
         req_body = await _build_req_body(request=None, raw_request=raw_request)
+        if _should_use_forced_aligner(req_body):
+            raise ValueError("timestamp_granularities 对齐模式当前仅支持 multipart/form-data 请求")
         worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
 
         stream = bool(req_body.get("stream", False))
@@ -1461,6 +1680,15 @@ async def create_audio_transcriptions(raw_request: Request):
         return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
 
     req_body = await _build_audio_transcriptions_meta(raw_request=raw_request)
+    if _should_use_forced_aligner(req_body):
+        stream = bool(req_body.get("stream", False))
+        if stream:
+            raise ValueError("timestamp_granularities 对齐模式不支持 stream=true")
+        return await _forward_multipart_with_forced_alignment(
+            raw_request=raw_request,
+            req_body=req_body,
+        )
+
     worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
 
     stream = bool(req_body.get("stream", False))
