@@ -251,6 +251,11 @@ namespace {
             headers = std::move(inner_->headers);
             if (inner_->is_stream()) {
                 next = [this](std::string& out) {
+                    if (!data.empty()) {
+                        out = std::move(data);
+                        data.clear();
+                        return true;
+                    }
                     return inner_->next(out);
                 };
             }

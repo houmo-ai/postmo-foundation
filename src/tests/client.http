@@ -3,7 +3,7 @@ POST http://127.0.0.1:7901/v1/chat/completions
 Content-Type: application/json
 
 {
-  "model": "HiModel-Qwen3-8b-p256-32K-b1-2core-1d-xh2-v1.1.0-20260309184052",
+  "model": "HiModel_xh2_qwen3.5_9b_256_32k_b1_1chip_2cores_v1.2.0_20260401",
   "messages": [
     {
       "role": "system",

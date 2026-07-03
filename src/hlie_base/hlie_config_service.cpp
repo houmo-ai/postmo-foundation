@@ -383,7 +383,7 @@ int HLIEConfigService::get_int(const std::string& section, const std::string& ke
     std::lock_guard lock(mutex_);
     if (env_first || !config_reader_) {
         const std::string env_var = env_var_name(section, key);
-        HLIELogger::get_logger()->info("Try to get {} from env", env_var);
+        HLIELogger::get_logger()->debug("Try to get {} from env", env_var);
         if (const char* env_value = std::getenv(env_var.c_str()); env_value != nullptr) {
             HLIELogger::get_logger()->info("Got config {} : {} from env", env_var, env_value);
             try {
