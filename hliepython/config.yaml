@@ -134,40 +134,40 @@ models:
   #         # enable_cacheprompt: "False"
   #         "vit_model_name": "mmproj_xh2_gemma4-26b-a4b_2cores_vit_448x448_v1.4.0_20260610.gguf"
 
-  # Qwen3-ASR-1.7B 模型
-  - model_path: "HiModel_xh2_qwen3_asr_1.7b_1chip_2cores_v1.3.0_20260604.gguf"
-    model_type: "asr"
-    instances:
-      - vllm_config:
-          engine:
-            load-format: "dummy"
-            no-enable-prefix-caching: true
-          # serving:
-          #   enable-auto-tool-choice: true
-          #   tool-call-parser: "qwen3_coder"
-          api-server:
-            port: 7801
-            server-model-name: "Qwen3-ASR-1.7B"
-        additional_config:
-          "vit_model_name": "mmproj_xh2_qwen3-asr_1.7b_2cores_v1.3.0_20260604.gguf"
+  # # Qwen3-ASR-1.7B 模型
+  # - model_path: "HiModel_xh2_qwen3_asr_1.7b_1chip_2cores_v1.3.0_20260604.gguf"
+  #   model_type: "asr"
+  #   instances:
+  #     - vllm_config:
+  #         engine:
+  #           load-format: "dummy"
+  #           no-enable-prefix-caching: true
+  #         # serving:
+  #         #   enable-auto-tool-choice: true
+  #         #   tool-call-parser: "qwen3_coder"
+  #         api-server:
+  #           port: 7801
+  #           server-model-name: "Qwen3-ASR-1.7B"
+  #       additional_config:
+  #         "vit_model_name": "mmproj_xh2_qwen3-asr_1.7b_2cores_v1.3.0_20260604.gguf"
 
-  # Qwen3-ForcedAligner-0.6B 模型
-  - model_path: "HiModel-Qwen3-ForcedAligner-0.6B-Q4_0.gguf"
-    model_type: "forced_aligner"
-    instances:
-      - vllm_config:
-          engine:
-            no-enable-prefix-caching: true
-            load-format: "dummy"
-            max-model-len: 411
-            load-format: "dummy"
-            hf-overrides:
-              architectures: ["Qwen3ASRForcedAlignerForTokenClassification"]
-          api-server:
-            port: 7802
-            server-model-name: "Qwen3-ForcedAligner-0.6B"
-        additional_config:
-          "vit_model_name": "mmproj-Qwen3-ForcedAligner-Q4_0.gguf"
+  # # Qwen3-ForcedAligner-0.6B 模型
+  # - model_path: "HiModel-Qwen3-ForcedAligner-0.6B-Q4_0.gguf"
+  #   model_type: "forced_aligner"
+  #   instances:
+  #     - vllm_config:
+  #         engine:
+  #           no-enable-prefix-caching: true
+  #           load-format: "dummy"
+  #           max-model-len: 411
+  #           load-format: "dummy"
+  #           hf-overrides:
+  #             architectures: ["Qwen3ASRForcedAlignerForTokenClassification"]
+  #         api-server:
+  #           port: 7802
+  #           server-model-name: "Qwen3-ForcedAligner-0.6B"
+  #       additional_config:
+  #         "vit_model_name": "mmproj-Qwen3-ForcedAligner-Q4_0.gguf"
 
   # - name: "glm-ocr"
   #   instances:
@@ -183,15 +183,16 @@ models:
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_glm-ocr_0.8b_2cores_v1.3.0_20260519.gguf"
 
-  # # CosyVoice3 模型
-  # - name: "Fun-CosyVoice3-0.5B"
-  #   instances:
-  #     - port: 7804
-  #       model_path: "cosyvoice3"
-  #       model_type: "tts"
-  #       additional_config:
-  #         device_ids: [0]
-  #         enable_cacheprompt: ""
+  # CosyVoice3 模型
+  - model_path: HiModel_xh2_cosyvoice3_0.5b_256_2k_1chip_2cores_v1.3.0-20260615.gguf
+    model_type: "tts"
+    instances:
+      - vllm_config:
+          api-server:
+            port: 7804
+            server-model-name: "CosyVoice3-0.5B"
+        additional_config:
+          device_ids: [0]
 
   # # text embedding 模型
   # - name: "qwen3-embedding-8b"

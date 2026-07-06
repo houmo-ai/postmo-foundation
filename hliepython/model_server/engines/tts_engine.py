@@ -27,7 +27,7 @@ from tqdm import tqdm
 from io import BytesIO
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, Iterator, List, Tuple
 
 import struct
 
@@ -39,7 +39,7 @@ import inflect
 from functools import partial
 
 from librosa.filters import mel as librosa_mel_fn
-from typing import List, Generator, Optional, Dict, Any
+from typing import List, Generator, Optional, Dict, Any, Tuple
 
 import tcim_lite as tcim
 
@@ -58,80 +58,6 @@ TOKENS_FILE_PATH = os.path.join(os.path.dirname(__file__), "files/special_tokens
 mel_basis = {}
 hann_window = {}
 TTS_MAX_INPUT_CHARS = 45
-
-
-
-class EmbeddingDtype(Enum):
-    INT16 = 0    # 对应C++的INT16
-    FLOAT16 = 1  # 对应C++的FLOAT16
-
-def load_embedding_from_binary(file_path, offset=0):
-    """
-    从二进制数据加载Embedding权重（完全对齐C++逻辑，INT16保持原始类型，修复只读警告）
-    :param binary_data: 二进制权重数据（bytes类型）
-    :param offset: 偏移量（对应C++的offset参数）
-    :return: torch.Tensor - 构建好的embedding权重张量
-    """
-    with open(file_path, "rb") as f:
-        buffer = io.BytesIO(f.read())
-
-    # 跳过偏移量（对应C++的f.seekg(offset, std::ios::beg)）
-    buffer.seek(offset)
-
-    # 1. 读取维度数（uint32_t）
-    dim_count_bytes = buffer.read(4)
-    if len(dim_count_bytes) != 4:
-        raise RuntimeError("读取维度数失败：二进制数据长度不足")
-    dim_count = struct.unpack('<I', dim_count_bytes)[0]  # 小端序解析（C++默认）
-
-    # 2. 读取各维度值
-    shape = []
-    for i in range(dim_count):
-        dim_bytes = buffer.read(4)
-        if len(dim_bytes) != 4:
-            raise RuntimeError(f"读取第{i}个维度值失败：二进制数据长度不足")
-        shape.append(struct.unpack('<I', dim_bytes)[0])
-
-    # 3. 读取数据类型标识
-    dtype_bytes = buffer.read(4)
-    if len(dtype_bytes) != 4:
-        raise RuntimeError("读取数据类型标识失败：二进制数据长度不足")
-    dtype_val = struct.unpack('<I', dtype_bytes)[0]
-
-    # 校验支持的类型
-    try:
-        embedding_dtype = EmbeddingDtype(dtype_val)
-    except ValueError:
-        raise RuntimeError(f"不支持的数据类型：{dtype_val}（仅支持INT16/FLOAT16）")
-
-    if embedding_dtype not in [EmbeddingDtype.INT16, EmbeddingDtype.FLOAT16]:
-        raise RuntimeError(f"不支持的数据类型：{dtype_val}（仅支持INT16/FLOAT16）")
-
-    # 4. 计算总元素数并读取权重数据
-    elem_count = 1
-    for d in shape:
-        elem_count *= d
-    data_size = elem_count * 2  # INT16/FLOAT16均为2字节
-
-    weight_bytes = buffer.read(data_size)
-    if len(weight_bytes) != data_size:
-        raise RuntimeError(
-            f"读取权重数据失败：期望{data_size}字节，实际{len(weight_bytes)}字节，剩余数据{buffer.read()}")
-
-    # 5. 转换为torch张量（修复只读警告，INT16保持原始类型）
-    if embedding_dtype == EmbeddingDtype.INT16:
-        # 方案：使用torch.frombuffer + clone() 避免只读警告，性能更优
-        weight_tensor = torch.frombuffer(weight_bytes, dtype=torch.int16).reshape(shape).clone()
-    else:  # FLOAT16
-        weight_tensor = torch.frombuffer(weight_bytes, dtype=torch.float16).reshape(shape).clone()
-
-    print(f"权重数据类型: {weight_tensor.dtype}, 形状: {weight_tensor.shape}")
-    return weight_tensor
-
-
-
-
-
 
 def load_wav(wav, target_sr, min_sr=16000):
     """加载音频文件，将其转换为单声道，并在需要时重新采样。"""
@@ -516,6 +442,85 @@ def mel_spectrogram(
 
 
 class CosyVoice3LM:
+    @staticmethod
+    def _load_tensor_from_pt(tts_config: Dict[str, Any], weight_name: str) -> torch.Tensor:
+        pt_key = f"{weight_name}_pt"
+        if pt_key not in tts_config:
+            raise RuntimeError(f"未找到 {weight_name}.pt，无法初始化 {weight_name} 权重数据")
+        with open(tts_config['gguf_path'], "rb") as f:
+            f.seek(tts_config[pt_key]["offset"])
+            data = f.read(tts_config[pt_key]["size"])
+        buffer = io.BytesIO(data)
+        weight = torch.load(buffer, map_location="cpu", weights_only=True)
+        if isinstance(weight, dict):
+            weight = weight["weight"]
+        logger.info("{} loaded from {}.pt with shape: {}, dtype: {}", weight_name, weight_name, weight.shape, weight.dtype)
+        return weight
+
+    @staticmethod
+    def _load_tensor_prefer_bin(
+        tts_config: Dict[str, Any],
+        weight_name: str,
+        shape: Tuple[int, ...],
+        bin_dtype: Any = np.float16,
+    ) -> torch.Tensor:
+        bin_key = f"{weight_name}_bin"
+        pt_key = f"{weight_name}_pt"
+        if bin_key in tts_config:
+            actual_bin_size = tts_config[bin_key]["size"]
+            expected_bin_size = int(np.prod(shape)) * np.dtype(bin_dtype).itemsize
+            if actual_bin_size != expected_bin_size:
+                raise RuntimeError(
+                    f"{weight_name}.bin 大小不匹配：期望 {expected_bin_size} 字节，实际 {actual_bin_size} 字节，shape={shape}，dtype={bin_dtype}"
+                )
+            weight_np = np.memmap(
+                tts_config['gguf_path'],
+                mode="c",
+                dtype=bin_dtype,
+                offset=tts_config[bin_key]["offset"],
+                shape=shape,
+            )
+            weight = torch.from_numpy(weight_np).clone()
+            logger.info("{} loaded from {}.bin with shape: {}, dtype: {}", weight_name, weight_name, weight.shape, weight.dtype)
+            return weight
+        if pt_key in tts_config:
+            return CosyVoice3LM._load_tensor_from_pt(tts_config, weight_name)
+        raise RuntimeError(f"未找到 {weight_name}.bin 或 {weight_name}.pt，无法初始化 {weight_name} 权重数据")
+
+    @staticmethod
+    def _load_embedding_prefer_bin(
+        tts_config: Dict[str, Any],
+        weight_name: str,
+        embedding_dim: int,
+        bin_dtype: Any = np.float16,
+        output_dtype: torch.dtype = torch.float16,
+    ) -> nn.Embedding:
+        bin_key = f"{weight_name}_bin"
+        if bin_key in tts_config:
+            actual_bin_size = tts_config[bin_key]["size"]
+            element_size = np.dtype(bin_dtype).itemsize
+            row_size = embedding_dim * element_size
+            if actual_bin_size % row_size != 0:
+                raise RuntimeError(
+                    f"{weight_name}.bin 大小不匹配：size={actual_bin_size}，embedding_dim={embedding_dim}，dtype={bin_dtype}"
+                )
+            num_embeddings = actual_bin_size // row_size
+            weight = CosyVoice3LM._load_tensor_prefer_bin(
+                tts_config,
+                weight_name,
+                (num_embeddings, embedding_dim),
+                bin_dtype,
+            )
+        else:
+            weight = CosyVoice3LM._load_tensor_from_pt(tts_config, weight_name)
+            num_embeddings, embedding_dim = weight.shape
+
+        embedding = nn.Embedding(int(num_embeddings), int(embedding_dim))
+        embedding.load_state_dict({"weight": weight})
+        embedding = embedding.to(output_dtype)
+        logger.info("{} embedding initialized with shape: {}, dtype: {}", weight_name, embedding.weight.shape, embedding.weight.dtype)
+        return embedding
+
     def __init__(
         self,
         tts_config: Dict[str, Any],
@@ -525,41 +530,21 @@ class CosyVoice3LM:
         self.llm_output_size = tts_config["llm_output_size"]
         self.speech_token_size = tts_config["speech_token_size"]
 
-        # token_embedding_state_dict = torch.load(
-        #     os.path.join(f"{tts_config['model_path']}", "hmquant/quant_embedding.pt"),
-        #     map_location="cpu",
-        #     weights_only=True
-        # )       # torch.Size([151936, 896]), dtype: torch.float16
-        with open(tts_config['gguf_path'], "rb") as f:
-            f.seek(tts_config["quant_embedding_pt"]["offset"])
-            data = f.read(tts_config["quant_embedding_pt"]["size"])
-        buffer = io.BytesIO(data)
-        token_embedding_state_dict = torch.load(buffer, map_location="cpu", weights_only=True)
-        logger.info(f"Loaded token embedding with shape: {token_embedding_state_dict['weight'].shape}, dtype: {token_embedding_state_dict['weight'].dtype}")
-        self.token_embedding = nn.Embedding(
-            token_embedding_state_dict["weight"].shape[0],
-            token_embedding_state_dict["weight"].shape[1],
+        self.token_embedding = self._load_embedding_prefer_bin(
+            tts_config,
+            "quant_embedding",
+            int(tts_config["llm_input_size"]),
+            bin_dtype=np.float16,
+            output_dtype=torch.float16,
         )
-        self.token_embedding.load_state_dict(token_embedding_state_dict)
-        self.token_embedding = self.token_embedding.to(torch.float16)       # torch.Size([151936, 896]), dtype: torch.float16
-        logger.info(f"Token embedding loaded with shape: {self.token_embedding.weight.shape}, dtype: {self.token_embedding.weight.dtype}")
 
-
-        # speech_embedding_param = torch.load(
-        #     os.path.join(f"{tts_config['model_path']}", "hmquant/llm_speech_embedding.pt"),
-        #     map_location="cpu"
-        # )
-        with open(tts_config['gguf_path'], "rb") as f:
-            f.seek(tts_config["llm_speech_embedding_pt"]["offset"])
-            data = f.read(tts_config["llm_speech_embedding_pt"]["size"])
-        buffer = io.BytesIO(data)
-        speech_embedding_param = torch.load(buffer, map_location="cpu", weights_only=True)
-        logger.info(f"Loaded token embedding with shape: {token_embedding_state_dict['weight'].shape}, dtype: {token_embedding_state_dict['weight'].dtype}")
-        speech_embedding_state_dict = {"weight": speech_embedding_param}
-        self.speech_embedding = nn.Embedding(6761, 896)
-        self.speech_embedding.load_state_dict(speech_embedding_state_dict)
-        self.speech_embedding = self.speech_embedding.to(torch.float16)     # torch.Size([6761, 896]), dtype: torch.float16
-        logger.info(f"Speech embedding loaded with shape: {self.speech_embedding.weight.shape}, dtype: {self.speech_embedding.weight.dtype}")
+        self.speech_embedding = self._load_embedding_prefer_bin(
+            tts_config,
+            "llm_speech_embedding",
+            int(tts_config["llm_input_size"]),
+            bin_dtype=np.float16,
+            output_dtype=torch.float16,
+        )
 
         dev_manager_0 = tcim.runtime.DevManager(tts_config["device_ids"], "Xh2HalBackend")
         weight_manager_0 = tcim.runtime.WeightManager(dev_manager_0)
@@ -640,24 +625,20 @@ class CosyVoice3LM:
         self.input_sequence_length = 256
         self.context_length = 0
 
-        # Load the start-of-sequence embedding.hmquant/
-        # self.sos_emb = torch.load(
-        #     os.path.join(f"{tts_config['model_path']}", "hmquant/llm_sos_embedding.pt"),
-        #     map_location="cpu"
-        # )       # torch.Size([1, 1, 896]), dtype: torch.float32
-        with open(tts_config['gguf_path'], "rb") as f:
-            f.seek(tts_config["llm_sos_embedding_pt"]["offset"])
-            data = f.read(tts_config["llm_sos_embedding_pt"]["size"])
-        buffer = io.BytesIO(data)
-        self.sos_emb = torch.load(buffer, map_location="cpu", weights_only=True)
+        self.sos_emb = self._load_tensor_prefer_bin(
+            tts_config,
+            "llm_sos_embedding",
+            (1, 1, int(tts_config["llm_input_size"])),
+            bin_dtype=np.float16,
+        ).to(torch.float32)
         logger.info(f"sos_emb shape: {self.sos_emb.shape}, dtype: {self.sos_emb.dtype}")
 
-        # Load the task-id embedding.hmquant/
-        with open(tts_config['gguf_path'], "rb") as f:
-            f.seek(tts_config["llm_task_id_embedding_pt"]["offset"])
-            data = f.read(tts_config["llm_task_id_embedding_pt"]["size"])
-        buffer = io.BytesIO(data)
-        self.task_id_emb = torch.load(buffer, map_location="cpu", weights_only=True)       # torch.Size([1, 1, 896]), dtype: torch.float32
+        self.task_id_emb = self._load_tensor_prefer_bin(
+            tts_config,
+            "llm_task_id_embedding",
+            (1, 1, int(tts_config["llm_input_size"])),
+            bin_dtype=np.float16,
+        ).to(torch.float32)
         logger.info(f"task_id_emb shape: {self.task_id_emb.shape}, dtype: {self.task_id_emb.dtype}")
 
         # sampling method
@@ -912,22 +893,13 @@ class CausalMaskedDiffWithDiT:
         self.output_type = output_type
         self.input_frame_rate = input_frame_rate
 
-        # input_embedding_state_dict = torch.load(
-        #     os.path.join(f"{tts_config['model_path']}", "hmquant/flow_input_embedding.pt"), map_location="cpu", weights_only=True
-        # )       # torch.Size([6561, 80]), dtype: torch.float32
-        with open(tts_config['gguf_path'], "rb") as f:
-            f.seek(tts_config["flow_input_embedding_pt"]["offset"])
-            data = f.read(tts_config["flow_input_embedding_pt"]["size"])
-        buffer = io.BytesIO(data)
-        input_embedding_state_dict = torch.load(buffer, map_location="cpu", weights_only=True)       # torch.Size([1, 1, 896]), dtype: torch.float32
-        logger.info(f"input_embedding_state_dict shape: {input_embedding_state_dict.shape}, dtype: {input_embedding_state_dict.dtype}")
-        input_embedding = nn.Embedding(
-            input_embedding_state_dict.shape[0],
-            input_embedding_state_dict.shape[1],
-        )
-        input_embedding_state_dict_ = {"weight": input_embedding_state_dict}
-        input_embedding.load_state_dict(input_embedding_state_dict_)
-        self.input_embedding = input_embedding.to("cpu")        # torch.Size([6561, 80]), dtype: torch.float32
+        self.input_embedding = CosyVoice3LM._load_embedding_prefer_bin(
+            tts_config,
+            "flow_input_embedding",
+            self.output_size,
+            bin_dtype=np.float16,
+            output_dtype=torch.float32,
+        ).to("cpu")
         logger.info(f"Input embedding loaded with shape: {self.input_embedding.weight.shape}, dtype: {self.input_embedding.weight.dtype}")
 
         dev_manager = tcim.runtime.DevManager(tts_config["device_ids"], "Xh2HalBackend")
@@ -1643,7 +1615,6 @@ class CosyVoiceFrontEnd:
             prompt_text_token, prompt_text_token_len = self._extract_text_token(
                 prompt_text
             )
-
             speech_feat, speech_feat_len = self._extract_speech_feat(prompt_wav)
             speech_token, speech_token_len = self._extract_speech_token(prompt_wav)
 
@@ -1678,6 +1649,7 @@ class CosyVoiceFrontEnd:
         model_input["text"] = tts_text_token
         model_input["text_len"] = tts_text_token_len
         return model_input
+
 class CosyVoice3:
     def __init__(self, tts_config: dict[str, Any]):
         self.tts_config = tts_config
@@ -1719,7 +1691,6 @@ class CosyVoice3:
             yield tts_speech
 
 
-
 class TTSEngine(InferenceEngine):
     """文本到语音推理引擎（集成 CosyVoice3 demo）。"""
 
@@ -1753,6 +1724,13 @@ class TTSEngine(InferenceEngine):
         self.tts_config["model_dir"] = self.model_config.get("model_dir", "")
         self.tts_config["model_path"] = self.model_path
         self.tts_config["device_ids"] = self.device_ids
+
+        logger.info(
+            f"gguf_path: {self.tts_config['gguf_path']}, "
+            f"model_dir: {self.tts_config['model_dir']}, "
+            f"model_path: {self.tts_config['model_path']}, "
+            f"device_ids: {self.tts_config['device_ids']}"
+        )
 
         self.tts_config["spk2info"] = ""
         self.tts_config["sampling_rate"] = 24000
