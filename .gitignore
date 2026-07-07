@@ -12,6 +12,7 @@ third_party/uwebsockets
 third_party/samplerate
 third_party/eigen3
 third_party/kaldi-native-fbank
+third_party/pdfium
 src/houmo-tcim-runtime
 release
 src/libtorch

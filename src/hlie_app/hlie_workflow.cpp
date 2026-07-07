@@ -9,6 +9,8 @@
 #include <unordered_set>
 
 #include "INIReader.h"
+#include "hlie_app/hlie_document_input_adapter.h"
+#include "hlie_app/hlie_document_pipeline_service.h"
 #include "hlie_app/hlie_infer_service.h"
 #include "hlie_app/hlie_llm_model_service.h"
 #include "hlie_app/hlie_model_residency_manager.h"
@@ -579,6 +581,12 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                     LOG_ERROR("failed to init the LLM model service");
                     return -1;
                 }
+                if (DocumentPipelineService::supports_document_layout(model_dir, model_info) &&
+                    !model_service_manager_.load_document_pipeline(model_dir, model_info, device_service_)) {
+                    LOG_ERROR("failed to init the document pipeline service");
+                    model_service_manager_.stop_and_reset_llm();
+                    return -1;
+                }
                 break;
             }
             }
@@ -735,6 +743,12 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                 LOG_ERROR("failed to init the LLM model service");
                 return -1;
             }
+            if (DocumentPipelineService::supports_document_layout(model_dir, default_model_info) &&
+                !model_service_manager_.load_document_pipeline(model_dir, default_model_info, device_service_)) {
+                LOG_ERROR("failed to init the document pipeline service");
+                model_service_manager_.stop_and_reset_llm();
+                return -1;
+            }
             break;
         }
         }
@@ -756,6 +770,9 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
 void HLIEWorkflow::run() {
     if (model_service_manager_.llm()) {
         model_service_manager_.llm()->run();
+        if (model_service_manager_.document_pipeline()) {
+            model_service_manager_.document_pipeline()->run();
+        }
 
         const auto model_key = model_service_manager_.llm()->get_model_key();
         const auto inst = get_model_inst(model_key);
@@ -854,6 +871,7 @@ void HLIEWorkflow::stop() {
         if (is_slave_ && !replicas_mode_) {
             update_status(master_port_, model_service_manager_.llm()->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
         }
+        model_service_manager_.stop_and_reset_document_pipeline();
         model_service_manager_.stop_and_reset_llm();
     }
 }
@@ -1293,6 +1311,14 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
                 LOG_ERROR("failed to init the LLM model service");
                 res->error(format_error_response_ex("failed to init the LLM model service", ERROR_TYPE_SERVER, 80001));
                 rollback_model_start(model_key, "llm_init_failed");
+                return res;
+            }
+            if (DocumentPipelineService::supports_document_layout(model_dir_, model_info) &&
+                !model_service_manager_.start_document_pipeline(model_dir_, model_info, device_service_)) {
+                LOG_ERROR("failed to init the document pipeline service");
+                res->error(format_error_response_ex("failed to init the document pipeline service", ERROR_TYPE_SERVER, 80001));
+                model_service_manager_.stop_and_reset_llm();
+                rollback_model_start(model_key, "document_pipeline_init_failed");
                 return res;
             }
 
@@ -1855,6 +1881,32 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
         return res;
     }
 
+    auto handle_local_llm_or_document = [this, &req, &handler, &body](const std::string& model_key,
+                                                                ModelRequestLease& lease) -> server_http_res_ptr {
+        const auto document_input = DocumentInputAdapter::inspect(req);
+        if (document_input.has_pdf) {
+            if (!model_service_manager_.document_pipeline() ||
+                model_service_manager_.document_pipeline()->get_state() != SERVER_STATE_READY) {
+                auto doc_res = std::make_unique<server_res_generator_light>();
+                doc_res->error(format_error_response_ex(
+                    "PDF input requires a loaded document pipeline for this model", ERROR_TYPE_NOT_SUPPORTED, 80005));
+                return doc_res;
+            }
+            LOG_INFO("Routing PDF request to document pipeline: model={}, source={}, filename={}, content_type={}",
+                     json(model_key).dump(), json(document_input.source).dump(), json(document_input.filename).dump(),
+                     json(document_input.content_type).dump());
+            if (json_boolish(body, "document_preprocess_only")) {
+                return attach_model_request_lease(model_service_manager_.document_pipeline()->handle_document_request(req),
+                                                  model_registry_, model_key, lease);
+            }
+            return attach_model_request_lease(model_service_manager_.document_pipeline()->handle_document_ocr_request(
+                                                  req, *model_service_manager_.llm()),
+                                              model_registry_, model_key, lease);
+        }
+
+        return attach_model_request_lease(handler(req), model_registry_, model_key, lease);
+    };
+
     const auto inst = get_model_inst(name);
     if (!inst.has_value()) {
         LOG_ERROR("LLM request model lookup failed: path={}, model={}, normalized_model={}",
@@ -1871,7 +1923,7 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
             res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        return attach_model_request_lease(handler(req), model_registry_, model_key, lease);
+        return handle_local_llm_or_document(model_key, lease);
     }
 
     const bool auto_load = Singleton<HLIEConfigService>::instance()->get_bool("model", "auto_load", true, true);
@@ -1923,7 +1975,7 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
             res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        return attach_model_request_lease(handler(req), model_registry_, model_key, lease);
+        return handle_local_llm_or_document(model_key, lease);
     }
 
     const auto model_key = inst1->get().key;
@@ -2225,6 +2277,7 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
 
     if (instance_id == 0) {
         std::shared_ptr<LLModelService> llm_to_stop;
+        std::shared_ptr<DocumentPipelineService> document_pipeline_to_stop;
         std::shared_ptr<SDModelService> sd_to_stop;
         std::shared_ptr<WhisperModelService> whisper_to_stop;
         std::shared_ptr<CosyVoiceModelService> cosy_voice_to_stop;
@@ -2277,6 +2330,7 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
                 }
             } else {
                 if (model_service_manager_.llm()) {
+                    document_pipeline_to_stop = model_service_manager_.detach_document_pipeline();
                     llm_to_stop = model_service_manager_.detach_llm();
                 }
                 if (model_service_manager_.sd()) {
@@ -2313,6 +2367,7 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
             LOG_WARN("Model stop_service stop done: type={}, elapsed_ms={}", service_name, elapsed_ms);
         };
 
+        stop_outside_workflow_lock(document_pipeline_to_stop, HLIEModelType::DOCUMENT);
         stop_outside_workflow_lock(llm_to_stop, LLM);
         stop_outside_workflow_lock(sd_to_stop, SD);
         stop_outside_workflow_lock(whisper_to_stop, WHISPER);
@@ -2493,6 +2548,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
     }
 
     std::shared_ptr<LLModelService> llm_to_stop;
+    std::shared_ptr<DocumentPipelineService> document_pipeline_to_stop;
     std::shared_ptr<SDModelService> sd_to_stop;
     std::shared_ptr<WhisperModelService> whisper_to_stop;
     std::shared_ptr<CosyVoiceModelService> cosy_voice_to_stop;
@@ -2503,6 +2559,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
         if (model_type == LLM && model_service_manager_.llm()) {
             notify_model_key = model_service_manager_.llm()->get_model_key();
             if (model_registry_.try_begin_eviction(notify_model_key)) {
+                document_pipeline_to_stop = model_service_manager_.detach_document_pipeline();
                 llm_to_stop = model_service_manager_.detach_llm();
             } else {
                 unload_refused = true;
@@ -2550,6 +2607,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
                  service_name, json(notify_model_key).dump(), elapsed_ms);
     };
 
+    stop_outside_workflow_lock(document_pipeline_to_stop, HLIEModelType::DOCUMENT);
     stop_outside_workflow_lock(llm_to_stop, LLM);
     stop_outside_workflow_lock(sd_to_stop, SD);
     stop_outside_workflow_lock(whisper_to_stop, WHISPER);
@@ -2592,12 +2650,14 @@ bool HLIEWorkflow::evict_model(const ModelInstance& model_inst, const std::strin
     bool evicted = false;
     std::string local_service_type;
     std::shared_ptr<LLModelService> llm_to_stop;
+    std::shared_ptr<DocumentPipelineService> document_pipeline_to_stop;
     std::shared_ptr<SDModelService> sd_to_stop;
     std::shared_ptr<WhisperModelService> whisper_to_stop;
     std::shared_ptr<CosyVoiceModelService> cosy_voice_to_stop;
     {
         std::unique_lock lock(mutex_);
         if (model_service_manager_.llm() && matches(model_service_manager_.llm()->get_model_key())) {
+            document_pipeline_to_stop = model_service_manager_.detach_document_pipeline();
             llm_to_stop = model_service_manager_.detach_llm();
             local_service_type = LLM;
             evicted = true;
@@ -2630,6 +2690,7 @@ bool HLIEWorkflow::evict_model(const ModelInstance& model_inst, const std::strin
                  json(model_inst.key).dump(), local_service_type, reason, elapsed_ms);
     };
 
+    stop_evicted_service(document_pipeline_to_stop);
     stop_evicted_service(llm_to_stop);
     stop_evicted_service(sd_to_stop);
     stop_evicted_service(whisper_to_stop);

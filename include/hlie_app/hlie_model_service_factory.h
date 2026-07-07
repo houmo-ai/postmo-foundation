@@ -14,6 +14,7 @@ class LLModelService;
 class SDModelService;
 class WhisperModelService;
 class CosyVoiceModelService;
+class DocumentPipelineService;
 
 // Service category used by the factory before creating a concrete service.
 enum class ModelServiceKind {
@@ -21,6 +22,7 @@ enum class ModelServiceKind {
     SD,
     Whisper,
     CosyVoice,
+    Document,
 };
 
 // Factory for concrete model services. Keeps Workflow from knowing constructor details.
@@ -46,6 +48,7 @@ public:
     static std::shared_ptr<SDModelService> create_sd();
     static std::shared_ptr<WhisperModelService> create_whisper();
     static std::shared_ptr<CosyVoiceModelService> create_cosyvoice();
+    static std::shared_ptr<DocumentPipelineService> create_document_pipeline();
 };
 
 HLIE_NAMESPACE_END

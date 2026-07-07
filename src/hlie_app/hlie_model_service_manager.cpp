@@ -1,6 +1,7 @@
 #include "hlie_app/hlie_model_service_manager.h"
 
 #include "hlie_app/hlie_cosyvoice_model_service.h"
+#include "hlie_app/hlie_document_pipeline_service.h"
 #include "hlie_app/hlie_llm_model_service.h"
 #include "hlie_app/hlie_model_service_factory.h"
 #include "hlie_app/hlie_model_service.h"
@@ -64,6 +65,9 @@ std::shared_ptr<IHLIEModelService> HLIEModelServiceManager::get_by_type(const st
     if (type == HLIEModelType::COSYVOICE) {
         return cosy_voice_model_service_;
     }
+    if (type == HLIEModelType::DOCUMENT) {
+        return document_pipeline_service_;
+    }
     return nullptr;
 }
 
@@ -85,6 +89,11 @@ bool HLIEModelServiceManager::load_whisper(const std::string& model_dir, const H
 bool HLIEModelServiceManager::load_cosyvoice(const std::string& model_dir, const HLIEModelInfo& model_info,
                                              const std::shared_ptr<HLIEDeviceService>& device_service) {
     return load_service(cosy_voice_model_service_, HLIEModelServiceFactory::create_cosyvoice, model_dir, model_info, device_service);
+}
+
+bool HLIEModelServiceManager::load_document_pipeline(const std::string& model_dir, const HLIEModelInfo& model_info,
+                                                     const std::shared_ptr<HLIEDeviceService>& device_service) {
+    return load_service(document_pipeline_service_, HLIEModelServiceFactory::create_document_pipeline, model_dir, model_info, device_service);
 }
 
 bool HLIEModelServiceManager::start_llm(const std::string& model_dir, const HLIEModelInfo& model_info,
@@ -127,6 +136,16 @@ bool HLIEModelServiceManager::start_cosyvoice(const std::string& model_dir, cons
                          model_dir, model_info, device_service);
 }
 
+bool HLIEModelServiceManager::start_document_pipeline(const std::string& model_dir, const HLIEModelInfo& model_info,
+                                                      const std::shared_ptr<HLIEDeviceService>& device_service) {
+    return start_service(document_pipeline_service_,
+                         [this](const std::string& dir, const HLIEModelInfo& info,
+                                const std::shared_ptr<HLIEDeviceService>& service) {
+                             return load_document_pipeline(dir, info, service);
+                         },
+                         model_dir, model_info, device_service);
+}
+
 std::shared_ptr<LLModelService> HLIEModelServiceManager::detach_llm() {
     auto service = llm_model_service_;
     llm_model_service_.reset();
@@ -151,6 +170,12 @@ std::shared_ptr<CosyVoiceModelService> HLIEModelServiceManager::detach_cosyvoice
     return service;
 }
 
+std::shared_ptr<DocumentPipelineService> HLIEModelServiceManager::detach_document_pipeline() {
+    auto service = document_pipeline_service_;
+    document_pipeline_service_.reset();
+    return service;
+}
+
 void HLIEModelServiceManager::reset_llm() {
     llm_model_service_.reset();
 }
@@ -167,6 +192,10 @@ void HLIEModelServiceManager::reset_cosyvoice() {
     cosy_voice_model_service_.reset();
 }
 
+void HLIEModelServiceManager::reset_document_pipeline() {
+    document_pipeline_service_.reset();
+}
+
 void HLIEModelServiceManager::stop_and_reset_llm() {
     stop_and_reset(llm_model_service_);
 }
@@ -181,6 +210,10 @@ void HLIEModelServiceManager::stop_and_reset_whisper() {
 
 void HLIEModelServiceManager::stop_and_reset_cosyvoice() {
     stop_and_reset(cosy_voice_model_service_);
+}
+
+void HLIEModelServiceManager::stop_and_reset_document_pipeline() {
+    stop_and_reset(document_pipeline_service_);
 }
 
 HLIE_NAMESPACE_END

@@ -1,6 +1,7 @@
 #include "hlie_app/hlie_model_service_factory.h"
 
 #include "hlie_app/hlie_cosyvoice_model_service.h"
+#include "hlie_app/hlie_document_pipeline_service.h"
 #include "hlie_app/hlie_llm_model_service.h"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_app/hlie_model_service.h"
@@ -40,7 +41,8 @@ std::shared_ptr<IHLIEModelService> HLIEModelServiceFactory::create_by_model_info
 
 bool HLIEModelServiceFactory::is_supported_model_type(const std::string& model_type) {
     return model_type == HLIEModelType::LLM || model_type == HLIEModelType::SD ||
-           model_type == HLIEModelType::WHISPER || model_type == HLIEModelType::COSYVOICE;
+           model_type == HLIEModelType::WHISPER || model_type == HLIEModelType::COSYVOICE ||
+           model_type == HLIEModelType::DOCUMENT;
 }
 
 std::shared_ptr<IHLIEModelService> HLIEModelServiceFactory::create_by_model_type(const std::string& model_type) {
@@ -55,6 +57,9 @@ std::shared_ptr<IHLIEModelService> HLIEModelServiceFactory::create_by_model_type
     }
     if (model_type == HLIEModelType::COSYVOICE) {
         return create_cosyvoice();
+    }
+    if (model_type == HLIEModelType::DOCUMENT) {
+        return create_document_pipeline();
     }
     return nullptr;
 }
@@ -73,6 +78,10 @@ std::shared_ptr<WhisperModelService> HLIEModelServiceFactory::create_whisper() {
 
 std::shared_ptr<CosyVoiceModelService> HLIEModelServiceFactory::create_cosyvoice() {
     return std::make_shared<CosyVoiceModelService>();
+}
+
+std::shared_ptr<DocumentPipelineService> HLIEModelServiceFactory::create_document_pipeline() {
+    return std::make_shared<DocumentPipelineService>();
 }
 
 HLIE_NAMESPACE_END

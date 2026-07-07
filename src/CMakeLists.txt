@@ -8,6 +8,9 @@ set(UWEBSOCKET_PATH "${PROJECT_SOURCE_DIR}/third_party/uwebsockets")
 set(INIH_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/inih")
 set(SAMPLERATE_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/samplerate")
 set(KALDI_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/kaldi-native-fbank")
+set(PDFIUM_LIBRARY_PATH "${PROJECT_SOURCE_DIR}/third_party/pdfium")
+
+option(HLIE_ENABLE_PDFIUM "Enable PDFium-backed PDF rendering" ON)
 
 find_library(TCIM_LIBRARY NAMES tcim_runtime_lite ai_core hdplrt riscv PATHS ${TCIM_RUNTIME_PATH}/lib NO_DEFAULT_PATH REQUIRED)
 find_library(LLAMA_CPP_LIBRARY_LLAMA NAMES llama PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
@@ -40,6 +43,12 @@ find_library(KALDI_LIBRARY NAMES kaldi-native-fbank-core PATHS ${KALDI_LIBRARY_P
 message("KALDI_LIBRARY=${KALDI_LIBRARY}")
 include_directories(${KALDI_LIBRARY_PATH})
 
+if (HLIE_ENABLE_PDFIUM)
+    find_library(PDFIUM_LIBRARY NAMES pdfium PATHS ${PDFIUM_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
+    message("PDFIUM_LIBRARY=${PDFIUM_LIBRARY}")
+    include_directories(${PDFIUM_LIBRARY_PATH}/include)
+    add_compile_definitions(HLIE_ENABLE_PDFIUM)
+endif ()
 
 find_library(LLAMA_CPP_LIBRARY_MTMD NAMES mtmd PATHS ${LLAMA_CPP_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)
 find_library(INIH_LIBRARY NAMES inih PATHS ${INIH_LIBRARY_PATH}/lib NO_DEFAULT_PATH REQUIRED)

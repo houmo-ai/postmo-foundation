@@ -29,7 +29,7 @@ esac
 # SDK URLs
 xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.3.0/2026/05/19/0015/ubuntu2004/houmo_tcim_runtime_xh2_linux_${ARCH}-1.3.0.tar.gz"
 
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/07/02/2330/linux/houmo-HLIELLama-xh2_2.1.1_linux_${ARCH}.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/07/06/2330/linux/houmo-HLIELLama-xh2_2.1.1_linux_${ARCH}.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.3.0_linux_${ARCH}.tar.gz"
 xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.1.0_linux_${ARCH}.tar.gz"
@@ -38,6 +38,7 @@ uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release
 libsamplerate_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/libsamplerate-linux_${ARCH}.tar.gz"
 eigen3_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/eigen3.tar.gz"
 kaldi_native_fbank_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/kaldi-native-fbank-linux_${ARCH}.tar.gz"
+pdfium_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/pdfium-linux_${ARCH}.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {
@@ -109,6 +110,16 @@ deploy_kaldi_native_fbank() {
     download_file "$kaldi_native_fbank_url" "kaldi_native_fbank.tar.gz"
     tar -xzf kaldi_native_fbank.tar.gz -C third_party/kaldi-native-fbank --strip-components=1
     rm kaldi_native_fbank.tar.gz
+}
+
+deploy_pdfium() {
+    local pdfium_url=$1
+    mkdir -p third_party/pdfium
+    rm -rf third_party/pdfium/*
+
+    download_file "$pdfium_url" "pdfium.tar.gz"
+    tar -xzf pdfium.tar.gz -C third_party/pdfium --strip-components=1
+    rm pdfium.tar.gz
 }
 
 deploy_eigen3() {
@@ -204,6 +215,9 @@ package_service() {
     cp third_party/samplerate/lib/libsamplerate.so.* "$release_dir/lib/" || true
     cp third_party/kaldi-native-fbank/lib/libkaldi-native-fbank-core.so "$release_dir/lib/" || true
     cp third_party/houmo/lib/libhal_xh2a.so.1.0 "$release_dir/lib/" || true
+    cp third_party/pdfium/lib/*.so "$release_dir/lib/" || true
+    cp third_party/pdfium/bin/icudtl.dat "$release_dir/bin/" || true
+    cp third_party/pdfium/bin/icudtl.dat "$release_dir/lib/" || true
 
     if [[ -f /lib/x86_64-linux-gnu/libstdc++.so.6 && "$ARCH" == "x86_64" ]]; then
         cp /lib/x86_64-linux-gnu/libstdc++.so.6 "$release_dir/lib/"
@@ -237,6 +251,7 @@ main() {
     deploy_libsamplerate "$libsamplerate_url"
     deploy_eigen3 "$eigen3_url"
     deploy_kaldi_native_fbank "$kaldi_native_fbank_url"
+    deploy_pdfium "$pdfium_url"
 
     echo "Deployed Dadao SDK and System SDK for $ARCH."
 
