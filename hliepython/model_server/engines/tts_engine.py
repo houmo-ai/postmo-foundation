@@ -5,6 +5,8 @@ import importlib.util
 import io
 import os
 import re
+import shutil
+import subprocess
 import sys
 import json
 import time
@@ -12,6 +14,7 @@ import math
 import regex
 import uuid
 import threading
+from http import HTTPStatus
 from scipy.signal import get_window
 import wave
 import whisper
@@ -58,6 +61,18 @@ TOKENS_FILE_PATH = os.path.join(os.path.dirname(__file__), "files/special_tokens
 mel_basis = {}
 hann_window = {}
 TTS_MAX_INPUT_CHARS = 45
+TTS_BUILTIN_VOICE_AUDIO_SUFFIXES = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac"}
+TTS_BUILTIN_VOICE_DIR = Path(__file__).resolve().parent / "files" / "audio"
+TTS_DEFAULT_PROMPT_TEXT = "You are a helpful assistant. <|endofprompt|>"
+TTS_RESPONSE_FORMATS = {"mp3", "opus", "aac", "flac", "wav", "pcm", "b64_json"}
+TTS_AUDIO_MEDIA_TYPES = {
+    "mp3": "audio/mpeg",
+    "opus": "audio/opus",
+    "aac": "audio/aac",
+    "flac": "audio/flac",
+    "wav": "audio/wav",
+    "pcm": "audio/pcm",
+}
 
 def load_wav(wav, target_sr, min_sr=16000):
     """加载音频文件，将其转换为单声道，并在需要时重新采样。"""
@@ -1400,12 +1415,10 @@ class CosyVoiceFrontEnd:
 
         self.campplus = tcim.runtime.load(
             tts_config["gguf_path"],
-            # f"{tts_config['model_path']}/cosyvoice3_campplus.hmm",
             option=campplus_option
         )
         self.speech_tokenizer = tcim.runtime.load(
             tts_config["gguf_path"],
-            # f"{tts_config['model_path']}/cosyvoice3_speech_tokenizer.hmm",
             option=speech_tokenizer_option
         )
 
@@ -1414,14 +1427,11 @@ class CosyVoiceFrontEnd:
         self.speech_tokenizer_input_names = get_module_input_names(self.speech_tokenizer)
         self.speech_tokenizer_output_names = get_module_output_names(self.speech_tokenizer)
 
-        if tts_config["spk2info"] and os.path.exists(tts_config["spk2info"]):
-            logger.info(f"load spk2info from {tts_config['spk2info']}")
-            self.spk2info = torch.load(tts_config["spk2info"], map_location="cpu", weights_only=True)
-        else:
-            self.spk2info = {}
-
         self.allowed_special = "all"
         self.inflect_parser = inflect.engine()
+
+        self.spk2info = {}
+        self._load_builtin_voice_prompts(tts_config)
 
         try:
             from wetext import Normalizer as ZhNormalizer
@@ -1434,6 +1444,93 @@ class CosyVoiceFrontEnd:
             self.text_frontend = ""
             logger.warning(f"No frontend is avaliable, err: {e}")
 
+    @staticmethod
+    def _normalize_voice_id(voice: Any) -> str:
+        """Normalize voice ids used by OpenAI `voice` into stable spk2info keys."""
+        voice = str(voice or "").strip()
+        return voice or "default"
+
+    @staticmethod
+    def _read_prompt_text(text_path: Path, default_text: str) -> str:
+        if text_path.exists() and text_path.is_file():
+            text = text_path.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+        return default_text
+
+    def _build_spk_info(
+        self,
+        prompt_text: str,
+        prompt_wav: str,
+        resample_rate: int,
+    ) -> Dict[str, torch.Tensor]:
+        """Precompute the same prompt features as the online zero-shot path."""
+        prompt_text_token, prompt_text_token_len = self._extract_text_token(prompt_text)
+        speech_feat, speech_feat_len = self._extract_speech_feat(prompt_wav)
+        speech_token, speech_token_len = self._extract_speech_token(prompt_wav)
+
+        if resample_rate == 24000:
+            token_len = min(int(speech_feat.shape[1] / 2), speech_token.shape[1])
+            speech_feat, speech_feat_len[:] = (
+                speech_feat[:, : 2 * token_len],
+                2 * token_len,
+            )
+            speech_token, speech_token_len[:] = (
+                speech_token[:, :token_len],
+                token_len,
+            )
+        embedding = self._extract_spk_embedding(prompt_wav)
+        return {
+            "prompt_text": prompt_text_token,
+            "prompt_text_len": prompt_text_token_len,
+            "llm_prompt_speech_token": speech_token,
+            "llm_prompt_speech_token_len": speech_token_len,
+            "flow_prompt_speech_token": speech_token,
+            "flow_prompt_speech_token_len": speech_token_len,
+            "prompt_speech_feat": speech_feat,
+            "prompt_speech_feat_len": speech_feat_len,
+            "llm_embedding": embedding,
+            "flow_embedding": embedding,
+        }
+
+    def _load_builtin_voice_prompts(self, tts_config: dict[str, Any]) -> None:
+        """Scan builtin audio files and precompute them into spk2info for voice selection."""
+        voice_dir = TTS_BUILTIN_VOICE_DIR
+        if not voice_dir.exists() or not voice_dir.is_dir():
+            logger.warning(f"builtin voice dir not found: {voice_dir}")
+            return
+
+        audio_files = [
+            path for path in sorted(voice_dir.iterdir())
+            if path.is_file() and path.suffix.lower() in TTS_BUILTIN_VOICE_AUDIO_SUFFIXES
+        ]
+        for audio_path in audio_files:
+            voice_id = self._normalize_voice_id(audio_path.stem)
+            prompt_text = self._read_prompt_text(audio_path.with_suffix(".txt"), TTS_DEFAULT_PROMPT_TEXT)
+
+            if voice_id in self.spk2info:
+                logger.info(f"builtin voice {voice_id} already exists in spk2info, skip precompute")
+            else:
+                try:
+                    logger.info(f"precompute builtin voice {voice_id} from {audio_path}")
+                    self.spk2info[voice_id] = self._build_spk_info(
+                        prompt_text,
+                        str(audio_path),
+                        int(tts_config.get("sampling_rate", 24000)),
+                    )
+                except Exception as exc:
+                    logger.warning(f"Failed to precompute builtin voice {voice_id} from {audio_path}: {exc}")
+                    continue
+
+        logger.info(f"available builtin voices: {sorted(self.spk2info.keys())}")
+
+    def resolve_voice(self, voice: str) -> Optional[str]:
+        """Return the spk2info key for an OpenAI voice id, or None if it is not preset."""
+        voice_id = self._normalize_voice_id(voice)
+        if voice_id in self.spk2info:
+            return voice_id
+        return None
+
 
     def _extract_text_token(self, text):
         """Tokenize text and return both token ids and sequence length."""
@@ -1442,7 +1539,6 @@ class CosyVoiceFrontEnd:
         text_token_len = torch.tensor([text_token.shape[1]], dtype=torch.int32)
         return text_token, text_token_len
 
-    # 语音 → token ID
     def _extract_speech_token(self, prompt_wav):
         """Extract prompt speech tokens with the speech tokenizer runtime."""
         # 加载音频prompt audio，并重采样到16 kHz
@@ -1596,58 +1692,28 @@ class CosyVoiceFrontEnd:
         return texts if split is True else text
 
     def frontend_instruct2(
-        self, tts_text, instruct_text, prompt_wav, resample_rate, zero_shot_spk_id 
+        self, tts_text, instruct_text, prompt_features
     ):
         """Build zero-shot instruction-following frontend inputs."""
         model_input = self.frontend_zero_shot(
-            tts_text, instruct_text, prompt_wav, resample_rate, zero_shot_spk_id
+            tts_text, instruct_text, prompt_features
         )
         del model_input["llm_prompt_speech_token"]
         del model_input["llm_prompt_speech_token_len"]
         return model_input
 
-    def frontend_zero_shot(
-        self, tts_text, prompt_text, prompt_wav, resample_rate, zero_shot_spk_id
-    ):
+    def frontend_zero_shot(self, tts_text, prompt_text, prompt_features):
         tts_text_token, tts_text_token_len = self._extract_text_token(tts_text)
+        prompt_text_token, prompt_text_token_len = self._extract_text_token(prompt_text)
 
-        if zero_shot_spk_id == "":
-            prompt_text_token, prompt_text_token_len = self._extract_text_token(
-                prompt_text
-            )
-            speech_feat, speech_feat_len = self._extract_speech_feat(prompt_wav)
-            speech_token, speech_token_len = self._extract_speech_token(prompt_wav)
-
-            if resample_rate == 24000:
-                # cosyvoice2, force speech_feat % speech_token = 2
-                token_len = min(int(speech_feat.shape[1] / 2), speech_token.shape[1])
-                speech_feat, speech_feat_len[:] = (
-                    speech_feat[:, : 2 * token_len],
-                    2 * token_len,
-                )
-                speech_token, speech_token_len[:] = (
-                    speech_token[:, :token_len],
-                    token_len,
-                )
-            embedding = self._extract_spk_embedding(prompt_wav)
-            model_input = {
-                "prompt_text": prompt_text_token,
-                "prompt_text_len": prompt_text_token_len,
-                "llm_prompt_speech_token": speech_token,
-                "llm_prompt_speech_token_len": speech_token_len,
-                "flow_prompt_speech_token": speech_token,
-                "flow_prompt_speech_token_len": speech_token_len,
-                "prompt_speech_feat": speech_feat,
-                "prompt_speech_feat_len": speech_feat_len,
-                "llm_embedding": embedding,
-                "flow_embedding": embedding,
-            }
-        else:
-            logger.info(f"Reuse the features of {zero_shot_spk_id}.")
-            model_input = {**self.spk2info[zero_shot_spk_id]}
+        logger.info("Reuse resolved voice prompt features.")
+        model_input = {**prompt_features}
 
         model_input["text"] = tts_text_token
         model_input["text_len"] = tts_text_token_len
+        model_input["prompt_text"] = prompt_text_token
+        model_input["prompt_text_len"] = prompt_text_token_len
+
         return model_input
 
 class CosyVoice3:
@@ -1664,17 +1730,20 @@ class CosyVoice3:
         self,
         tts_text: str,
         instruct_text: str,
-        prompt_wav: str,
-        zero_shot_spk_id: str = "",
+        prompt_features: Dict[str, torch.Tensor],
         speed: float = 1.0,
         text_frontend: bool = True,
     ) -> Iterator[Any]:
-        instruct_text = "You are a helpful assistant. <|endofprompt|>"
+        instruct_text = str(instruct_text or "").strip() or TTS_DEFAULT_PROMPT_TEXT
+        if "<|endofprompt|>" not in instruct_text:
+            instruct_text = f"{instruct_text}<|endofprompt|>"
+        if "You are a helpful assistant. " not in instruct_text:
+            instruct_text = f"You are a helpful assistant. {instruct_text}"
 
         logger.info(
             f"Running CosyVoice3 inference with instruct2 mode. "
             f"tts_text={tts_text}, instruct_text={instruct_text}, "
-            f"prompt_wav={prompt_wav}, zero_shot_spk_id={zero_shot_spk_id}, "
+            f"use_resolved_prompt_features=True, "
             f"speed={speed}, text_frontend={text_frontend}"
         )
 
@@ -1683,7 +1752,7 @@ class CosyVoice3:
                 tts_text, split=True, text_frontend=text_frontend
         )):
             model_input = self.frontend.frontend_instruct2(
-                i, instruct_text, prompt_wav, self.sample_rate, zero_shot_spk_id
+                i, instruct_text, prompt_features
             )
             logger.info("synthesis text {}".format(i))
             tts_speech = self.model.tts(**model_input, speed=speed)
@@ -1692,7 +1761,6 @@ class CosyVoice3:
 
 
 class TTSEngine(InferenceEngine):
-    """文本到语音推理引擎（集成 CosyVoice3 demo）。"""
 
     def __init__(self, instance_config: Dict[str, Any]):
         self.additional_config = instance_config.get(
@@ -1731,8 +1799,7 @@ class TTSEngine(InferenceEngine):
             f"model_path: {self.tts_config['model_path']}, "
             f"device_ids: {self.tts_config['device_ids']}"
         )
-
-        self.tts_config["spk2info"] = ""
+        
         self.tts_config["sampling_rate"] = 24000
         self.tts_config["llm_input_size"] = 896
         self.tts_config["llm_output_size"] = 896
@@ -1853,6 +1920,14 @@ class TTSEngine(InferenceEngine):
     def _load_model(self):
         self.tts_model = CosyVoice3(self.tts_config)
 
+    def _ensure_model_loaded(self):
+        if self.tts_model is not None:
+            return
+
+        with self._model_lock:
+            if self.tts_model is None:
+                self._load_model()
+
     @staticmethod
     def _to_wav_bytes(waveform, sample_rate: int) -> bytes:
         if waveform.ndim != 2:
@@ -1869,34 +1944,106 @@ class TTSEngine(InferenceEngine):
             wf.writeframes(pcm.tobytes())
         return bio.getvalue()
 
-    def _ensure_model_loaded(self):
-        if self.tts_model is not None:
-            return
+    @staticmethod
+    def _to_pcm_bytes(waveform) -> bytes:
+        if waveform.ndim != 2:
+            raise ValueError("Expected waveform shape [channel, samples]")
 
-        with self._model_lock:
-            if self.tts_model is None:
-                self._load_model()
+        pcm = waveform.clamp(-1.0, 1.0).mul(32767.0).short().cpu().numpy()
+        pcm = np.ascontiguousarray(pcm.T)
+        return pcm.tobytes()
 
-    def _synthesize(self, request_dict: Dict[str, Any]) -> bytes:
+    @staticmethod
+    def _to_soundfile_bytes(waveform, sample_rate: int, audio_format: str) -> bytes:
+        if waveform.ndim != 2:
+            raise ValueError("Expected waveform shape [channel, samples]")
+
+        audio = waveform.clamp(-1.0, 1.0).cpu().numpy().T
+        bio = BytesIO()
+        sf.write(bio, audio, sample_rate, format=audio_format)
+        return bio.getvalue()
+
+    def _to_ffmpeg_bytes(self, waveform, sample_rate: int, response_format: str) -> bytes:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError(f"response_format `{response_format}` requires ffmpeg")
+
+        wav_bytes = self._to_wav_bytes(waveform, sample_rate)
+        codec_args = {
+            "mp3": ["-f", "mp3", "-codec:a", "libmp3lame"],
+            "aac": ["-f", "adts", "-codec:a", "aac"],
+            "opus": ["-f", "opus", "-codec:a", "libopus"],
+        }[response_format]
+        proc = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                *codec_args,
+                "pipe:1",
+            ],
+            input=wav_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if proc.returncode != 0:
+            err = proc.stderr.decode("utf-8", errors="ignore").strip()
+            raise RuntimeError(f"Failed to encode `{response_format}` audio: {err}")
+        return proc.stdout
+
+    def _encode_audio_bytes(self, waveform, sample_rate: int, response_format: str) -> bytes:
+        if response_format == "b64_json":
+            response_format = "wav"
+        if response_format == "wav":
+            return self._to_wav_bytes(waveform, sample_rate)
+        if response_format == "pcm":
+            return self._to_pcm_bytes(waveform)
+        if response_format == "flac":
+            return self._to_soundfile_bytes(waveform, sample_rate, "FLAC")
+        if response_format in {"mp3", "aac", "opus"}:
+            return self._to_ffmpeg_bytes(waveform, sample_rate, response_format)
+        raise ValueError(f"Unsupported response_format `{response_format}`")
+
+    def _synthesize(self, request_dict: Dict[str, Any], response_format: str) -> bytes:
         self._ensure_model_loaded()
 
         text = str(request_dict.get("input") or "").strip()
         if not text:
             raise ValueError("`input` is required for /v1/audio/speech")
 
-        prompt_wav_path = str(
-            request_dict.get("prompt_wav_path") or DEFAULT_PROMPT_WAV_PATH
-        ).strip()
+        voice = str(request_dict.get("voice") or "default").strip() or "default"
+        prompt_wav_path = str(request_dict.get("prompt_wav_path") or "").strip()
+        has_custom_prompt_wav = bool(prompt_wav_path) and prompt_wav_path != DEFAULT_PROMPT_WAV_PATH
+
+        if not prompt_wav_path:
+            prompt_wav_path = DEFAULT_PROMPT_WAV_PATH
+
+        if has_custom_prompt_wav:
+            logger.info(f"Use prompt_wav_path `{prompt_wav_path}` for online voice cloning, ignore voice `{voice}`")
+            prompt_features = self.tts_model.frontend._build_spk_info(
+                TTS_DEFAULT_PROMPT_TEXT,
+                prompt_wav_path,
+                int(self.tts_model.sample_rate),
+            )
+        else:
+            resolved_spk_id = self.tts_model.frontend.resolve_voice(voice)
+            if resolved_spk_id:
+                prompt_features = self.tts_model.frontend.spk2info[resolved_spk_id]
+                logger.info(f"Use builtin voice `{voice}` as preset speaker `{resolved_spk_id}`")
+            else:
+                raise ValueError(f"Unknown voice `{voice}`. Available voices: {sorted(self.tts_model.frontend.spk2info.keys())}")
 
         chunks = self.tts_model.inference_instruct(
             tts_text=text,
             instruct_text=str(
                 request_dict.get("instructions")
-                or request_dict.get("instruct_text")
                 or ""
             ),
-            prompt_wav=prompt_wav_path,
-            zero_shot_spk_id=str(request_dict.get("zero_shot_spk_id", "")),
+            prompt_features=prompt_features,
             speed=float(request_dict.get("speed", 1.0)),
             text_frontend=bool(request_dict.get("text_frontend", True)),
         )
@@ -1906,7 +2053,7 @@ class TTSEngine(InferenceEngine):
             raise RuntimeError("TTS generation returned no audio chunks")
 
         waveform = torch.cat(chunk_list, dim=1).to(torch.float32).cpu()
-        return self._to_wav_bytes(waveform, int(self.tts_model.sample_rate))
+        return self._encode_audio_bytes(waveform, int(self.tts_model.sample_rate), response_format)
 
     def create_audio_speech(
         self,
@@ -1917,25 +2064,49 @@ class TTSEngine(InferenceEngine):
         response_format = str(request_dict.get("response_format", "wav")).lower()
         voice = str(request_dict.get("voice", "default"))
 
-        if response_format not in {"wav", "b64_json"}:
-            raise ValueError("Only response_format `wav` and `b64_json` are supported")
+        try:
+            if response_format not in TTS_RESPONSE_FORMATS:
+                return self.create_error_response(
+                    message=(
+                        f"Unsupported response_format `{response_format}`. "
+                        f"Supported formats: {sorted(TTS_RESPONSE_FORMATS)}"
+                    ),
+                    err_type="validation_error",
+                    status_code=HTTPStatus.BAD_REQUEST,
+                    param="response_format",
+                )
 
-        wav_bytes = self._synthesize(request_dict)
+            audio_bytes = self._synthesize(request_dict, response_format)
 
-        if response_format == "b64_json":
-            return AudioSpeechBase64Response(
-                audio=base64.b64encode(wav_bytes).decode("utf-8"),
-                format="wav",
-                sample_rate=self.tts_model.sample_rate,
-                voice=voice,
-                model=request.model,
+            if response_format == "b64_json":
+                return AudioSpeechBase64Response(
+                    audio=base64.b64encode(audio_bytes).decode("utf-8"),
+                    format="wav",
+                    sample_rate=self.tts_model.sample_rate,
+                    voice=voice,
+                    model=request.model,
+                )
+
+            return Response(
+                content=audio_bytes,
+                media_type=TTS_AUDIO_MEDIA_TYPES[response_format],
+                headers={
+                    "X-Audio-Sample-Rate": str(self.tts_model.sample_rate),
+                    "X-Voice": voice,
+                    "X-Audio-Format": response_format,
+                },
             )
-
-        return Response(
-            content=wav_bytes,
-            media_type="audio/wav",
-            headers={
-                "X-Audio-Sample-Rate": str(self.tts_model.sample_rate),
-                "X-Voice": voice,
-            },
-        )
+        except ValueError as exc:
+            logger.warning(f"TTS request validation failed: {exc}")
+            return self.create_error_response(
+                message=str(exc),
+                err_type="validation_error",
+                status_code=HTTPStatus.BAD_REQUEST,
+            )
+        except Exception as exc:
+            logger.exception(f"TTS synthesis failed: {exc}")
+            return self.create_error_response(
+                message=str(exc),
+                err_type="internal_error",
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )

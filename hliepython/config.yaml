@@ -183,16 +183,16 @@ models:
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_glm-ocr_0.8b_2cores_v1.3.0_20260519.gguf"
 
-  # CosyVoice3 模型
-  - model_path: HiModel_xh2_cosyvoice3_0.5b_256_2k_1chip_2cores_v1.3.0-20260615.gguf
-    model_type: "tts"
-    instances:
-      - vllm_config:
-          api-server:
-            port: 7804
-            server-model-name: "CosyVoice3-0.5B"
-        additional_config:
-          device_ids: [0]
+  # # Fun-CosyVoice3 模型
+  # - model_path: HiModel_xh2_cosyvoice3_0.5b_256_2k_1chip_2cores_v1.3.0-20260615.gguf
+  #   model_type: "tts"
+  #   instances:
+  #     - vllm_config:
+  #         api-server:
+  #           port: 7804
+  #           server-model-name: "Fun-CosyVoice3-0.5B"
+  #       additional_config:
+  #         device_ids: [0]
 
   # # text embedding 模型
   # - name: "qwen3-embedding-8b"
