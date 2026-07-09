@@ -3,6 +3,8 @@ import json
 import asyncio
 import base64
 import importlib
+import io
+import wave
 from http import HTTPStatus
 from collections.abc import AsyncGenerator
 from inspect import isawaitable
@@ -207,281 +209,299 @@ async def slots_info():
     return SLOT_TRACKER.to_slots_array()
 
 
-@app.websocket("/ws/audio/transcriptions")
-async def websocket_audio_transcriptions(websocket: WebSocket):
-    """模拟客户端与服务端的实时语音通信（ASR）。
+def _pcm16le_to_wav_bytes(pcm_bytes: bytes, sample_rate: int) -> bytes:
+    """Wrap raw mono PCM16 little-endian audio as a WAV container."""
+    with io.BytesIO() as buffer:
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(int(sample_rate))
+            wav_file.writeframes(pcm_bytes)
+        return buffer.getvalue()
 
-    支持两种输入：
-    1) 二进制帧：直接发送一段完整音频 bytes（如 wav/mp3）。
-    2) 文本 JSON：{"type":"audio_base64","data":"..."}
 
-    可选控制消息：
-    - {"type":"config","language":"zh","prompt":"..."}
-    - {"type":"ping"}
-    - {"type":"stop"}
+def _pcm16le_rms(pcm_bytes: bytes) -> float:
+    """Return RMS amplitude for PCM16LE bytes without adding heavy dependencies."""
+    if len(pcm_bytes) < 2:
+        return 0.0
+
+    sample_count = len(pcm_bytes) // 2
+    total = 0
+    view = memoryview(pcm_bytes[: sample_count * 2])
+    for idx in range(0, len(view), 2):
+        sample = int.from_bytes(view[idx: idx + 2], byteorder="little", signed=True)
+        total += sample * sample
+    return (total / sample_count) ** 0.5
+
+
+@app.websocket("/")
+@app.websocket("/v1/realtime")
+@app.websocket("/ws/v1/realtime")
+async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
+    """OpenAI Realtime transcription compatible WebSocket endpoint.
+
+    Supported client events:
+    - session.update
+    - input_audio_buffer.append (base64 PCM16LE mono)
+    - input_audio_buffer.commit
+    - ping
     """
     global engine
 
     await websocket.accept()
 
     if engine is None:
-        await websocket.send_json({"type": "error", "message": "推理引擎未初始化"})
+        await websocket.send_json({
+            "type": "error",
+            "error": {"type": "server_error", "message": "推理引擎未初始化"},
+        })
         await websocket.close(code=1011)
         return
 
     if not hasattr(engine, "websocket_transcribe_bytes"):
-        await websocket.send_json({"type": "error", "message": "当前模型不支持 WebSocket ASR"})
+        await websocket.send_json({
+            "type": "error",
+            "error": {"type": "unsupported_model", "message": "当前模型不支持实时 ASR"},
+        })
         await websocket.close(code=1003)
         return
 
-    language = "zh"
+    session_id = f"sess_{PORT}_{id(websocket)}"
+    item_index = 0
+    sample_rate = 24000
+    language = ""
     prompt = ""
-    return_mode = "delta"  # full | delta | chunk_only
-    chunk_index = 0
+    response_format = "json"
+    turn_detection: dict[str, Any] | None = {
+        "type": "server_vad",
+        "threshold": 0.5,
+        "prefix_padding_ms": 300,
+        "silence_duration_ms": 500,
+        "max_turn_duration_ms": 3000,
+    }
     audio_buffer = bytearray()
-    last_full_text = ""
-    delta_display_text = ""
-    chunk_only_full_text = ""
-    chunk_only_audio_buffer = bytearray()
-    chunk_only_force_cumulative = False
+    speech_started = False
+    speech_stopped = False
+    silence_ms = 0.0
+    turn_ms = 0.0
+    committed = False
 
-    def _longest_common_prefix_len(a: str, b: str) -> int:
-        max_len = min(len(a), len(b))
-        idx = 0
-        while idx < max_len and a[idx] == b[idx]:
-            idx += 1
-        return idx
+    async def _send_error(message: str, err_type: str = "invalid_request_error") -> None:
+        await websocket.send_json({
+            "type": "error",
+            "error": {"type": err_type, "message": message},
+        })
 
-    def _suffix_prefix_overlap_len(previous_text: str, current_text: str) -> int:
-        max_len = min(len(previous_text), len(current_text), 512)
-        for size in range(max_len, 0, -1):
-            if previous_text[-size:] == current_text[:size]:
-                return size
-        return 0
+    def _session_payload() -> dict[str, Any]:
+        return {
+            "id": session_id,
+            "object": "realtime.transcription_session",
+            "type": "transcription",
+            "model": MODEL_NAME,
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": sample_rate},
+                    "transcription": {
+                        "model": MODEL_NAME,
+                        "language": language,
+                        "prompt": prompt,
+                        "response_format": response_format,
+                    },
+                    "turn_detection": turn_detection,
+                }
+            },
+        }
 
-    def _delta_append_only(display_text: str, current_full_text: str) -> tuple[str, str]:
-        if not display_text:
-            return current_full_text, current_full_text
-
-        if current_full_text.startswith(display_text):
-            delta = current_full_text[len(display_text):]
-            return delta, current_full_text
-
-        # Prefer a suffix/prefix overlap to keep streamed chunks readable.
-        overlap = _suffix_prefix_overlap_len(display_text, current_full_text)
-        if overlap > 0:
-            delta = current_full_text[overlap:]
-            return delta, display_text + delta
-
-        # Fallback: if there is still a meaningful shared prefix, append from
-        # that point; otherwise skip this frame to avoid confusing rewinds.
-        lcp = _longest_common_prefix_len(display_text, current_full_text)
-        min_anchor = min(16, len(display_text), len(current_full_text))
-        if lcp >= min_anchor:
-            delta = current_full_text[lcp:]
-            return delta, display_text + delta
-
-        return "", display_text
-
-    async def _transcribe(audio_bytes: bytes) -> str:
+    async def _transcribe_buffer(final_audio: bytes) -> str:
         transcribe_fn = getattr(engine, "websocket_transcribe_bytes")
-        result = transcribe_fn(audio_bytes, language=language, prompt=prompt)
+        wav_audio = _pcm16le_to_wav_bytes(final_audio, sample_rate)
+        result = transcribe_fn(wav_audio, language=language or None, prompt=prompt)
         if isawaitable(result):
             result = await result
         return str(result)
 
-    async def _handle_chunk(audio_piece: bytes) -> tuple[str, str]:
-        nonlocal chunk_only_full_text, last_full_text, delta_display_text, chunk_only_force_cumulative
+    async def _commit_turn() -> None:
+        nonlocal audio_buffer, item_index, speech_started, speech_stopped, silence_ms, turn_ms, committed
 
-        if return_mode == "chunk_only":
-            chunk_only_audio_buffer.extend(audio_piece)
-            if chunk_only_force_cumulative:
-                full_text = await _transcribe(bytes(chunk_only_audio_buffer))
-                chunk_text, chunk_only_full_text = _delta_append_only(
-                    chunk_only_full_text,
-                    full_text,
-                )
-                return chunk_text, chunk_only_full_text
+        if committed:
+            return
+        committed = True
 
-            try:
-                chunk_text = await _transcribe(audio_piece)
-                chunk_only_full_text += chunk_text
-            except ValueError:
-                # Compressed formats (e.g. mp3) often cannot be decoded from
-                # arbitrary byte slices. Fall back to cumulative decode and
-                # emit only newly added text.
-                chunk_only_force_cumulative = True
-                full_text = await _transcribe(bytes(chunk_only_audio_buffer))
-                chunk_text, chunk_only_full_text = _delta_append_only(
-                    chunk_only_full_text,
-                    full_text,
-                )
-            return chunk_text, chunk_only_full_text
+        if not audio_buffer:
+            await _send_error("音频缓冲为空")
+            return
 
-        audio_buffer.extend(audio_piece)
-        full_text = await _transcribe(bytes(audio_buffer))
-        if return_mode == "delta":
-            out_text, delta_display_text = _delta_append_only(delta_display_text, full_text)
+        item_index += 1
+        item_id = f"item_{item_index}"
+        content_index = 0
+
+        if speech_started and not speech_stopped:
+            speech_stopped = True
+            await websocket.send_json({
+                "type": "input_audio_buffer.speech_stopped",
+                "item_id": item_id,
+                "audio_end_ms": int(turn_ms),
+            })
+
+        await websocket.send_json({
+            "type": "input_audio_buffer.committed",
+            "item_id": item_id,
+        })
+
+        try:
+            transcript = (await _transcribe_buffer(bytes(audio_buffer))).strip()
+        except Exception as exc:
+            logger.exception(f"Worker {MODEL_NAME}:{PORT} OpenAI Realtime ASR 转写失败: {exc}")
+            await websocket.send_json({
+                "type": "conversation.item.input_audio_transcription.failed",
+                "item_id": item_id,
+                "content_index": content_index,
+                "error": {"type": "server_error", "message": str(exc)},
+            })
         else:
-            out_text = full_text
-        last_full_text = full_text
-        return out_text, full_text
+            if transcript:
+                await websocket.send_json({
+                    "type": "conversation.item.input_audio_transcription.delta",
+                    "item_id": item_id,
+                    "content_index": content_index,
+                    "delta": transcript,
+                })
+            await websocket.send_json({
+                "type": "conversation.item.input_audio_transcription.completed",
+                "item_id": item_id,
+                "content_index": content_index,
+                "transcript": transcript,
+            })
+        finally:
+            audio_buffer = bytearray()
+            speech_started = False
+            speech_stopped = False
+            silence_ms = 0.0
+            turn_ms = 0.0
 
-    await websocket.send_json(
-        {
-            "type": "ready",
-            "model": MODEL_NAME,
-            "port": PORT,
-            "message": "WebSocket ASR 已连接",
-        }
-    )
+    await websocket.send_json({
+        "type": "session.created",
+        "event_id": f"evt_{int(asyncio.get_running_loop().time() * 1000)}",
+        "session": _session_payload(),
+    })
 
     try:
         while True:
             frame = await websocket.receive()
-
             if frame.get("type") == "websocket.disconnect":
                 break
 
             text_payload = frame.get("text")
-            bytes_payload = frame.get("bytes")
+            if text_payload is None:
+                await _send_error("仅支持 JSON 文本事件")
+                continue
 
-            if text_payload is not None:
+            try:
+                msg = json.loads(text_payload)
+            except json.JSONDecodeError:
+                await _send_error("无效 JSON 消息")
+                continue
+
+            msg_type = msg.get("type")
+            if msg_type == "session.update":
+                session = msg.get("session") or {}
+                audio_input = ((session.get("audio") or {}).get("input") or {})
+                fmt = audio_input.get("format") or {}
+                transcription = audio_input.get("transcription") or {}
+
+                if isinstance(fmt, dict) and fmt.get("rate"):
+                    sample_rate = int(fmt["rate"])
+                language = str(transcription.get("language") or language or "")
+                prompt = str(transcription.get("prompt") or prompt or "")
+                response_format = str(transcription.get("response_format") or response_format)
+                new_turn_detection = audio_input.get("turn_detection")
+                turn_detection = new_turn_detection if isinstance(new_turn_detection, dict) else None
+
+                await websocket.send_json({
+                    "type": "session.updated",
+                    "event_id": f"evt_{int(asyncio.get_running_loop().time() * 1000)}",
+                    "session": _session_payload(),
+                })
+                continue
+
+            if msg_type == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
+
+            if msg_type == "input_audio_buffer.append":
+                audio_b64 = msg.get("audio")
+                if not isinstance(audio_b64, str) or not audio_b64:
+                    await _send_error("input_audio_buffer.append 缺少 audio")
+                    continue
+
                 try:
-                    msg = json.loads(text_payload)
-                except json.JSONDecodeError:
-                    await websocket.send_json({"type": "error", "message": "无效 JSON 消息"})
+                    chunk = base64.b64decode(audio_b64)
+                except Exception:
+                    await _send_error("audio base64 解码失败")
                     continue
 
-                msg_type = msg.get("type")
-                if msg_type == "config":
-                    nonlocal_reset = False
-                    language = msg.get("language", language)
-                    prompt = msg.get("prompt", prompt)
-                    mode = str(msg.get("return_mode", return_mode)).lower()
-                    if mode in {"delta", "full", "chunk_only"}:
-                        return_mode = mode
-                    if msg.get("reset", False):
-                        nonlocal_reset = True
-                        audio_buffer.clear()
-                        chunk_index = 0
-                        last_full_text = ""
-                        delta_display_text = ""
-                        chunk_only_full_text = ""
-                        chunk_only_audio_buffer.clear()
-                        chunk_only_force_cumulative = False
-                    await websocket.send_json(
-                        {
-                            "type": "ack",
-                            "message": "配置已更新",
-                            "language": language,
-                            "return_mode": return_mode,
-                            "reset": nonlocal_reset,
-                        }
-                    )
+                if len(chunk) % 2 != 0:
+                    chunk = chunk[:-1]
+                if not chunk:
                     continue
 
-                if msg_type == "ping":
-                    await websocket.send_json({"type": "pong"})
-                    continue
+                if committed:
+                    committed = False
+                audio_buffer.extend(chunk)
 
-                if msg_type == "stop":
-                    # 在 stop 时返回一次最终结果，便于客户端收敛文本。
-                    if return_mode == "chunk_only":
-                        final_text = chunk_only_full_text
-                        if not final_text and chunk_only_audio_buffer:
-                            final_text = await _transcribe(bytes(chunk_only_audio_buffer))
-                    else:
-                        final_text = last_full_text
-                        if not final_text and audio_buffer:
-                            final_text = await _transcribe(bytes(audio_buffer))
+                chunk_ms = len(chunk) / 2 / max(sample_rate, 1) * 1000.0
+                turn_ms += chunk_ms
 
-                    if return_mode == "delta":
-                        final_payload, delta_display_text = _delta_append_only(
-                            delta_display_text,
-                            final_text,
-                        )
-                    else:
-                        final_payload = final_text
+                vad_enabled = isinstance(turn_detection, dict) and turn_detection.get("type") == "server_vad"
+                if vad_enabled:
+                    threshold = float(turn_detection.get("threshold", 0.5))
+                    silence_duration_ms = int(turn_detection.get("silence_duration_ms", 500))
+                    max_turn_duration_ms = int(turn_detection.get("max_turn_duration_ms", 3000))
+                    # OpenAI threshold is normalized; use a conservative PCM16 RMS mapping.
+                    rms_threshold = max(100.0, min(3000.0, threshold * 2000.0))
+                    is_silence = _pcm16le_rms(chunk) < rms_threshold
 
-                    await websocket.send_json(
-                        {
-                            "type": "done",
-                            "text": final_payload,
-                            "full_text": final_text,
-                            "return_mode": return_mode,
-                            "final": True,
-                        }
-                    )
-                    await websocket.close(code=1000)
-                    break
+                    if not speech_started and not is_silence:
+                        speech_started = True
+                        await websocket.send_json({
+                            "type": "input_audio_buffer.speech_started",
+                            "item_id": f"item_{item_index + 1}",
+                            "audio_start_ms": max(0, int(turn_ms - chunk_ms)),
+                        })
 
-                if msg_type == "reset":
-                    audio_buffer.clear()
-                    chunk_index = 0
-                    last_full_text = ""
-                    delta_display_text = ""
-                    chunk_only_full_text = ""
-                    chunk_only_audio_buffer.clear()
-                    chunk_only_force_cumulative = False
-                    await websocket.send_json({"type": "ack", "message": "音频缓冲已清空"})
-                    continue
-
-                if msg_type == "audio_base64":
-                    try:
-                        audio_bytes = base64.b64decode(msg.get("data", ""))
-                    except Exception:
-                        await websocket.send_json({"type": "error", "message": "audio_base64 解码失败"})
-                        continue
-
-                    if not audio_bytes:
-                        await websocket.send_json({"type": "error", "message": "空音频分片"})
-                        continue
-
-                    chunk_index += 1
-                    out_text, full_text = await _handle_chunk(audio_bytes)
-
-                    await websocket.send_json(
-                        {
-                            "type": "transcript",
-                            "text": out_text,
-                            "full_text": full_text,
-                            "return_mode": return_mode,
-                            "chunk_index": chunk_index,
-                            "final": False,
-                        }
-                    )
-                    continue
-
-                await websocket.send_json({"type": "error", "message": f"不支持的消息类型: {msg_type}"})
+                    if speech_started:
+                        silence_ms = silence_ms + chunk_ms if is_silence else 0.0
+                        if silence_ms >= silence_duration_ms or turn_ms >= max_turn_duration_ms:
+                            await _commit_turn()
                 continue
 
-            if bytes_payload is not None:
-                if not bytes_payload:
-                    await websocket.send_json({"type": "error", "message": "空音频分片"})
-                    continue
-
-                chunk_index += 1
-                out_text, full_text = await _handle_chunk(bytes_payload)
-
-                await websocket.send_json(
-                    {
-                        "type": "transcript",
-                        "text": out_text,
-                        "full_text": full_text,
-                        "return_mode": return_mode,
-                        "chunk_index": chunk_index,
-                        "final": False,
-                    }
-                )
+            if msg_type == "input_audio_buffer.commit":
+                if not speech_started:
+                    speech_started = True
+                await _commit_turn()
                 continue
+
+            if msg_type == "input_audio_buffer.clear":
+                audio_buffer.clear()
+                speech_started = False
+                speech_stopped = False
+                silence_ms = 0.0
+                turn_ms = 0.0
+                committed = False
+                await websocket.send_json({"type": "input_audio_buffer.cleared"})
+                continue
+
+            await _send_error(f"不支持的事件类型: {msg_type}")
 
     except WebSocketDisconnect:
-        logger.info(f"Worker {MODEL_NAME}:{PORT} WebSocket 客户端断开")
+        logger.info(f"Worker {MODEL_NAME}:{PORT} OpenAI Realtime WebSocket 客户端断开")
     except Exception as e:
-        logger.exception(f"Worker {MODEL_NAME}:{PORT} WebSocket ASR 处理失败: {e}")
+        logger.exception(f"Worker {MODEL_NAME}:{PORT} OpenAI Realtime WebSocket 处理失败: {e}")
         try:
-            await websocket.send_json({"type": "error", "message": str(e)})
+            await websocket.send_json({
+                "type": "error",
+                "error": {"type": "server_error", "message": str(e)},
+            })
         finally:
             await websocket.close(code=1011)
 

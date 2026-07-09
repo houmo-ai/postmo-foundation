@@ -142,11 +142,8 @@ models:
   #         engine:
   #           load-format: "dummy"
   #           no-enable-prefix-caching: true
-  #         # serving:
-  #         #   enable-auto-tool-choice: true
-  #         #   tool-call-parser: "qwen3_coder"
   #         api-server:
-  #           port: 7801
+  #           port: 7999
   #           server-model-name: "Qwen3-ASR-1.7B"
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_qwen3-asr_1.7b_2cores_v1.3.0_20260604.gguf"
