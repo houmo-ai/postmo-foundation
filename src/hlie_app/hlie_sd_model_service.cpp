@@ -7,7 +7,6 @@
 #include "hlie_base/hlie_logger.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "hlie_app/hlie_device_service.h"
-#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_exception.h"
 #include "hlie_base/hlie_util.h"
 #include "stb_image_write.h"
@@ -71,17 +70,7 @@ int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     device_service_ = device_service;
     auto devices = model_info.get_devices();
 
-    if (const int replicas = Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1); replicas > 1) {
-        is_multi_instance_ = true;
-        if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(SD); !val) {
-            LOG_ERROR("SD cannot acquire available device");
-            return -1;
-        } else {
-            params_->hm_sd_device = val.value();
-            devices_.push_back(*val);
-            LOG_INFO("SD using device: {}", val.value());
-        }
-    } else { // 单实例模式可以定制Model Devices
+    {
         if (!devices.empty()) {
             if (!HlieUtil::is_valid_devices(devices)) {
                 LOG_ERROR("SD cannot acquire model specific device \"{}\"", devices);
@@ -197,7 +186,9 @@ int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
     if (!sd_ctx) {
         LOG_ERROR("Failed to init sd_ctx");
-        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
+        if (device_service_) {
+            device_service_->release_mem_on_devices(devices_, 11000);
+        }
         devices_.clear();
         return -1;
     }
@@ -268,9 +259,7 @@ void SDModelService::stop() {
     worker_thread_.reset();
     sd_ctx_t_.reset();
 
-    if (is_multi_instance_) {
-        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
-    } else {
+    if (device_service_) {
         device_service_->release_mem_on_devices(devices_, 11000);
     }
     devices_.clear();

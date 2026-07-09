@@ -17,7 +17,6 @@
 #include "hlie_base/hlie_audio.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
-#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_tcim_util.h"
 #include "hlie_base/hlie_util.h"
@@ -809,16 +808,7 @@ int CosyVoiceModelService::init(const std::string& model_dir, const HLIEModelInf
 
     auto devices = model_info.get_devices();
 
-    if (const int replicas = Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1); replicas > 1) {
-        is_multi_instance_ = true;
-        if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(HLIEModelType::COSYVOICE); !val) {
-            LOG_ERROR("CosyVoiceModelService cannot acquire available device");
-            return -1;
-        } else {
-            devices_.push_back(*val);
-            LOG_INFO("CosyVoiceModelService using device: {}", val.value());
-        }
-    } else { // 单实例模式可以定制Model Devices
+    {
         if (!devices.empty()) {
             if (!HlieUtil::is_valid_devices(devices)) {
                 LOG_ERROR("CosyVoiceModelService cannot acquire model specific device \"{}\"", devices);
@@ -935,9 +925,7 @@ void CosyVoiceModelService::stop() {
         websocket_service_->stop();
     }
 
-    if (is_multi_instance_) {
-        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
-    } else if (device_service_ && acquired_mem_mb_ > 0) {
+    if (device_service_ && acquired_mem_mb_ > 0) {
         LOG_INFO("CosyVoiceModelService release devices mem: devices={}, mem={}MB",
                  HlieUtil::join_devices(devices_), acquired_mem_mb_);
         device_service_->release_mem_on_devices(devices_, acquired_mem_mb_);

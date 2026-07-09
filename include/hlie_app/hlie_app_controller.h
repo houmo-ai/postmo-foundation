@@ -6,6 +6,7 @@
 #include <mutex>
 #include <condition_variable>
 
+#include "hlie_app/hlie_balancer_client.h"
 #include "hlie_base/hlie_base.h"
 
 HLIE_NAMESPACE_BEGIN
@@ -28,6 +29,7 @@ public:
 protected:
     std::shared_ptr<HLIEWorkflow> workflow_;
     std::shared_ptr<HLIEWebService> web_service_;
+    HLIEBalancerClient balancer_client_;
     std::atomic<bool> is_running_{false};
     std::mutex mutex_;
     std::condition_variable cv_;

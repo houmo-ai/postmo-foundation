@@ -253,14 +253,17 @@ namespace {
                 "model.auto_load",
                 "model.enable_sd3",
                 "model.llm_lazy_mode",
-                "server.memory_saving",
+                "balancer.enabled",
+                "replica.memory_saving",
             };
             static const std::unordered_set<std::string> int_keys = {
                 "log.max_files",
                 "log.tcim_level",
+                "balancer.heartbeat_interval_ms",
+                "replica.count",
+                "replica.max_instances_per_device",
+                "replica.startup_delay_sec",
                 "server.port",
-                "server.replica_delay_sec",
-                "server.replicas",
             };
 
             const std::string full_key = section + "." + key;
@@ -583,6 +586,7 @@ int HLIEWebService::run(const std::string& host_name, int port) {
 
     HLIE_CHECK_NULL_RETURN(workflow_, -1);
     workflow_->set_server_port(port);
+    port_ = port;
 
     worker_thread_ = std::make_unique<std::thread>([this] {
         int ret = this->web_server_->listen_after_bind();

@@ -23,6 +23,7 @@ public:
     void init(int n_threads_http);
 
     int run(const std::string& host_name = "0.0.0.0", int port = 7901);
+    [[nodiscard]] int get_port() const { return port_; }
     void get(const std::string& path, const server_http_context::handler_t& handler) const;
     void post(const std::string& path, const server_http_context::handler_t& handler) const;
 
@@ -35,6 +36,7 @@ public:
 private:
     std::shared_ptr<HLIEWorkflow> workflow_;
     std::shared_ptr<httplib::Server> web_server_;
+    int port_ = 0;
 
     std::unique_ptr<std::thread> worker_thread_;  // 工作线程
     std::atomic<bool> is_ready = false;

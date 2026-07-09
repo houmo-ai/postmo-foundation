@@ -3,14 +3,19 @@
 #include <filesystem>
 #include <unordered_map>
 
+#include "hlie_app/hlie_model_info.h"
 #include "hlie_app/hlie_process_manager.h"
+#include "hlie_app/hlie_replica_config.h"
 #include "hlie_app/hlie_web_service.h"
 #include "hlie_app/hlie_workflow.h"
 #include "hlie_base/hlie_config_service.h"
-#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_rk_performance.h"
 #include "hlie_base/hlie_util.h"
+
+#include <algorithm>
+#include <map>
+#include <vector>
 
 HLIE_NAMESPACE_BEGIN
 
@@ -25,6 +30,102 @@ _/    _/  _/_/_/_/  _/_/_/  _/_/_/_/    _/_/_/  _/_/_/    _/_/_/
 )";
 
 namespace {
+    struct ReplicaPlacement {
+        int instance_id = 0;
+        std::vector<int> devices;
+    };
+
+    int estimate_replica_device_count(const std::vector<std::string>& model_names) {
+        int count = 1;
+        for (const auto& model_name : model_names) {
+            if (model_name.empty() || model_name == HLIEModelType::SD3) {
+                continue;
+            }
+            count = std::max(count, HLIEModelInfo::estimate_device_num(model_name));
+        }
+        return count;
+    }
+
+    bool build_replica_placements(const std::vector<int>& configured_devices,
+                                  const HLIEReplicaConfig& replica_config,
+                                  int per_instance_device_count,
+                                  std::vector<ReplicaPlacement>& placements) {
+        placements.clear();
+        if (configured_devices.empty()) {
+            LOG_ERROR("replica placement failed: no configured devices");
+            return false;
+        }
+
+        int max_instances_per_device =
+            replica_config.device_policy == "exclusive_card" ? 1 : replica_config.max_instances_per_device;
+        if (replica_config.enabled() && replica_config.device_policy != "exclusive_card" &&
+            configured_devices.size() == 1 && max_instances_per_device < 2) {
+            LOG_WARN("replica.max_instances_per_device={} is too small for single-card shared replica mode; use 2 instead. "
+                     "Set replica.device_policy=exclusive_card to force one instance per device.",
+                     max_instances_per_device);
+            max_instances_per_device = 2;
+        }
+        std::map<int, int> usage;
+        for (const auto device : configured_devices) {
+            usage[device] = 0;
+        }
+
+        auto sorted_candidates = [&]() {
+            std::vector<int> candidates = configured_devices;
+            std::sort(candidates.begin(), candidates.end(), [&](int a, int b) {
+                if (usage[a] == usage[b]) {
+                    return a < b;
+                }
+                if (replica_config.device_policy == "prefer_used_card") {
+                    return usage[a] > usage[b];
+                }
+                return usage[a] < usage[b];
+            });
+            return candidates;
+        };
+
+        for (int instance_id = 0; instance_id < replica_config.count; ++instance_id) {
+            ReplicaPlacement placement;
+            placement.instance_id = instance_id;
+            for (const auto device : sorted_candidates()) {
+                if (usage[device] >= max_instances_per_device) {
+                    continue;
+                }
+                placement.devices.push_back(device);
+                if (static_cast<int>(placement.devices.size()) == per_instance_device_count) {
+                    break;
+                }
+            }
+
+            if (static_cast<int>(placement.devices.size()) != per_instance_device_count) {
+                LOG_ERROR("replica placement failed: count={}, instance_id={}, required_devices={}, max_instances_per_device={}, policy={}",
+                          replica_config.count, instance_id, per_instance_device_count,
+                          max_instances_per_device, replica_config.device_policy);
+                placements.clear();
+                return false;
+            }
+
+            for (const auto device : placement.devices) {
+                ++usage[device];
+            }
+            LOG_INFO("replica placement: instance_id={}, devices={}", instance_id, HlieUtil::join_devices(placement.devices));
+            placements.push_back(std::move(placement));
+        }
+
+        return true;
+    }
+
+    std::string instance_id_from_args(const std::unordered_map<std::string, std::string>& args) {
+        if (const auto it = args.find("--instance_id"); it != args.end()) {
+            return it->second;
+        }
+        return "0";
+    }
+
+    void set_process_devices_override(const std::string& devices) {
+        HlieUtil::set_env("HLIE__SERVER__DEVICES", devices);
+    }
+
     /**
      * Init the multi-instances cases and some common logics
      *
@@ -35,27 +136,19 @@ namespace {
         const auto& config_services = Singleton<HLIEConfigService>::instance();
         auto devices = config_services->get_string("server", "devices", "0", true);
         const auto& args = config_services->get_args();
+        const auto replica_config = HLIEReplicaConfig::load();
         if (args.find("--device_id") != args.end()) {
             devices = args.at("--device_id");
+            set_process_devices_override(devices);
             if (args.find("--instance_id") == args.end()) {
                 LOG_ERROR("Instance Replica must specify all the --instance_id and --device_id params");
                 return -1;
             }
         }
 
-        // 多实例负载均衡场景判断与初始化
-        const auto replicas = config_services->get_int("server", "replicas", 1);
+        // Master process plans and starts replica workers.
         if (args.find("--instance_id") == args.end()) {
-            if (replicas > 1) {
-                const auto& device_helper = Singleton<HLIEDeviceHelper>::instance();
-                // 主要用于多实例工作场景，单模型独占单IPU
-                device_helper->init(devices);
-                const int device_count = device_helper->get_device_count();
-                if (replicas > device_count) {
-                    LOG_ERROR("Copies[{}] is bigger than devices count[]", replicas, device_count);
-                    return -1;
-                }
-
+            if (replica_config.enabled()) {
                 const auto default_model = config_services->get_string("model", "default","", true);
                 const auto enable_sd3 = config_services->get_bool("model", "enable_sd3", false);
                 std::vector<std::string> model_names;
@@ -71,30 +164,33 @@ namespace {
                     model_names.emplace_back(HLIEModelType::SD3);
                 }
 
-                LOG_INFO("Main process start to pull new replicas[{}]", replicas - 1);
+                std::vector<int> configured_devices;
+                if (HlieUtil::parse_device(devices, configured_devices) < 0 || configured_devices.empty()) {
+                    LOG_ERROR("cannot parse replica devices from {}", devices);
+                    return -1;
+                }
+                std::sort(configured_devices.begin(), configured_devices.end());
+                configured_devices.erase(std::unique(configured_devices.begin(), configured_devices.end()), configured_devices.end());
 
-                int acquires_count = device_count / replicas; // 每个实例获取的NPU数量, 因为每个实例可以同时运行生文和生图
-                LOG_INFO("Each process may have {} available devices", acquires_count);
-                for (int i = 1; i < replicas; ++i) {
-                    std::string devices_for_sub;
-                    for (int j = 0; j < acquires_count; ++j) {
-                        const std::optional<int> val =
-                            device_helper->acquire_device("instance-" + std::to_string(i) + "-" + std::to_string(j));
-                        if (!val) {
-                            LOG_ERROR("instance_id-[{}] cannot acquire available device", i);
-                            return -1;
-                        }
+                const int per_instance_device_count = estimate_replica_device_count(model_names);
+                std::vector<ReplicaPlacement> placements;
+                if (!build_replica_placements(configured_devices, replica_config, per_instance_device_count, placements)) {
+                    return -1;
+                }
 
-                        if (!devices_for_sub.empty()) {
-                            devices_for_sub += ",";
-                        }
+                const auto master_devices = HlieUtil::join_devices(placements.front().devices);
+                set_process_devices_override(master_devices);
+                devices = master_devices;
 
-                        devices_for_sub += std::to_string(*val);
-                    }
+                LOG_INFO("Main process start to pull new replicas[{}], master devices={}, policy={}, configured_max_instances_per_device={}",
+                         replica_config.count - 1, master_devices, replica_config.device_policy,
+                         replica_config.max_instances_per_device);
 
+                for (int i = 1; i < replica_config.count; ++i) {
+                    const std::string devices_for_sub = HlieUtil::join_devices(placements.at(i).devices);
                     LOG_INFO("acquired device {} for instance-{}", devices_for_sub, i);
 
-                    // 子进程实例参数
+                    // Worker instance arguments.
                     std::vector args_for_sub_process = {std::string("--instance_id"), std::to_string(i), std::string("--device_id"), devices_for_sub};
                     // Copy llama-params
                     for (const auto& [key, val] : args) {
@@ -111,7 +207,6 @@ namespace {
                 }
             }
         } else {
-            Singleton<HLIEDeviceHelper>::instance()->init(devices);
             if (args.find("--device_id") == args.end()) {
                 LOG_ERROR("Instance Replica must specify all the --instance_id and --device_id params");
                 return -1;
@@ -124,10 +219,10 @@ namespace {
                 return -1;
             }
 
-            if (replicas > 1 && config_services->get_bool("server", "memory_saving", false)) {
-                const auto delay_sec = config_services->get_int("server", "replica_delay_sec", 45);
-                LOG_INFO("multi instance mode and memory_saving is true, start to wait the others for {}s.", instance_id * delay_sec);
-                std::this_thread::sleep_for(std::chrono::seconds(instance_id * delay_sec));
+            if (replica_config.enabled() && replica_config.memory_saving) {
+                LOG_INFO("multi instance mode and memory_saving is true, start to wait the others for {}s.",
+                         instance_id * replica_config.startup_delay_sec);
+                std::this_thread::sleep_for(std::chrono::seconds(instance_id * replica_config.startup_delay_sec));
             }
         }
 
@@ -155,6 +250,8 @@ int HLIEAppController::run() {
         LOG_ERROR("web service failed to run");
         return -1;
     }
+    balancer_client_.start(HLIEBalancerConfig::load(), web_service_->get_port(),
+                           instance_id_from_args(Singleton<HLIEConfigService>::instance()->get_args()));
 
     is_running_.store(true);
 
@@ -164,6 +261,8 @@ int HLIEAppController::run() {
 }
 
 void HLIEAppController::stop() {
+    balancer_client_.stop();
+
     if (workflow_) {
         workflow_->stop();
     }

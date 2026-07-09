@@ -17,10 +17,10 @@
 #include "hlie_app/hlie_model_service.h"
 #include "hlie_app/hlie_model_service_factory.h"
 #include "hlie_app/hlie_process_manager.h"
+#include "hlie_app/hlie_replica_config.h"
 #include "hlie_app/hlie_server_http_proxy.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
-#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_rk_performance.h"
 #include "hlie_base/hlie_util.h"
@@ -537,7 +537,7 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
     }
 
     const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
-    replicas_mode_ =  Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1) > 1;
+    replicas_mode_ = HLIEReplicaConfig::load().enabled();
     master_port_ = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
     std::vector<HLIEModelInfo> model_infos;
     if (args.find("--json_info") != args.end()) { // Slave process startup from generated model info.
@@ -591,7 +591,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
             }
             }
 
-            Singleton<HLIEDeviceHelper>::instance()->print_status();
             start_time_ = time(nullptr);
             return 0;
         }
@@ -611,7 +610,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         LOG_WARN("No valid model info files found in directory: {}", model_dir);
         if (args.find("--instance_id") == args.end()) {
             // Master Process Start in Zero-Load Mode
-            Singleton<HLIEDeviceHelper>::instance()->print_status();
             start_time_ = time(nullptr);
             return 8;
         }
@@ -625,7 +623,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         LOG_WARN("No default model: {}", default_model);
         if (args.find("--instance_id") == args.end()) {
             // Master Process Start in Zero-Load Mode
-            Singleton<HLIEDeviceHelper>::instance()->print_status();
             start_time_ = time(nullptr);
             return 8;
         }
@@ -669,7 +666,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
     if (!found_default_model && !found_sd3) {
         if (args.find("--instance_id") == args.end()) {
             // Master Process Start in Zero-Load Mode
-            Singleton<HLIEDeviceHelper>::instance()->print_status();
             start_time_ = time(nullptr);
             return 8;
         }
@@ -762,7 +758,6 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
         }
     }
 
-    Singleton<HLIEDeviceHelper>::instance()->print_status();
     start_time_ = time(nullptr);
     return 0;
 }
@@ -2263,7 +2258,7 @@ void HLIEWorkflow::set_server_port(const int port) {
 server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
     auto res = std::make_unique<server_res_generator_light>();
-    if (config_services->get_int("server", "replicas", 1) > 1) {
+    if (HLIEReplicaConfig::load().enabled()) {
         // 集群|多实例模式下，不允许外部调用启动模型实例
         res->error(
             format_error_response_ex("In the cluster or multi-instance mode, external calls to start model instances are not allowed.",
@@ -2532,7 +2527,7 @@ server_http_res_ptr HLIEWorkflow::handle_post_status(const server_http_req& req)
 server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req) {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
     auto res = std::make_unique<server_res_generator_light>();
-    if (config_services->get_int("server", "replicas", 1) > 1) {
+    if (HLIEReplicaConfig::load().enabled()) {
         // 集群|多实例模式下，不允许外部调用启动模型实例
         res->error(
             format_error_response_ex("In the cluster or multi-instance mode, external calls to start model instances are not allowed.",

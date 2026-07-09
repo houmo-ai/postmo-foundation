@@ -3,8 +3,6 @@
 #include "hlie_app/hlie_device_service.h"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_base/hlie_common_define.h"
-#include "hlie_base/hlie_config_service.h"
-#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
 #define MINIAUDIO_IMPLEMENTATION
@@ -334,17 +332,7 @@ int WhisperModelService::init(const std::string& model_dir, const HLIEModelInfo&
 
     auto devices = model_info.get_devices();
 
-    if (const int replicas = Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1); replicas > 1) {
-        is_multi_instance_ = true;
-        if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(SD); !val) {
-            LOG_ERROR("Whisper cannot acquire available device");
-            return -1;
-        } else {
-            HlieUtil::set_env("HLIEWHISPER_DEVICE_ID", std::to_string(val.value()));
-            devices_.push_back(*val);
-            LOG_INFO("Whisper using device: {}", val.value());
-        }
-    } else { // 单实例模式可以定制Model Devices
+    {
         if (!devices.empty()) {
             if (!HlieUtil::is_valid_devices(devices)) {
                 LOG_ERROR("Whisper cannot acquire model specific device \"{}\"", devices);
@@ -384,7 +372,7 @@ int WhisperModelService::init(const std::string& model_dir, const HLIEModelInfo&
     LOG_INFO("whisper_init_from_file_with_params done");
     if (whisper_ctx_ == nullptr) {
         fprintf(stderr, "error: failed to initialize whisper context\n");
-        if (!is_multi_instance_ && device_service_ && acquired_mem_mb_ > 0) {
+        if (device_service_ && acquired_mem_mb_ > 0) {
             device_service_->release_mem_on_devices(devices_, acquired_mem_mb_);
             acquired_mem_mb_ = 0;
             devices_.clear();
@@ -462,9 +450,7 @@ void WhisperModelService::stop() {
     whisper_free(whisper_ctx_);
     whisper_ctx_ = nullptr;
 
-    if (is_multi_instance_) {
-        Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
-    } else if (device_service_ && acquired_mem_mb_ > 0) {
+    if (device_service_ && acquired_mem_mb_ > 0) {
         LOG_INFO("Whisper release devices mem: devices={}, mem={}MB",
                  HlieUtil::join_devices(devices_), acquired_mem_mb_);
         device_service_->release_mem_on_devices(devices_, acquired_mem_mb_);

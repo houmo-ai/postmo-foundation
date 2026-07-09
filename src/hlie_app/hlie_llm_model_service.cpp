@@ -10,7 +10,6 @@
 #include "hlie_app/hlie_device_service.h"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_base/hlie_config_service.h"
-#include "hlie_base/hlie_device_helper.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_rk_performance.h"
 #include "hlie_base/hlie_singleton.h"
@@ -163,28 +162,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
 
     LOG_INFO("LLM init with devices: {}", devices);
 
-    if (const int replicas = Singleton<HLIEConfigService>::instance()->get_int("server", "replicas", 1); replicas > 1) {
-        is_multi_instance_ = true;
-        if (model_info.get_device_num() > 1) {
-            if (!Singleton<HLIEDeviceHelper>::instance()->acquire_devices(LLM, model_info.get_device_num(), devices_)) {
-                LOG_ERROR("LLM cannot acquire available {} devices", model_info.get_device_num());
-                return -1;
-            }
-
-            devices = HlieUtil::join_devices(devices_);
-            HlieUtil::set_env("HOUMO_DEVICE_ID", devices);
-            LOG_INFO("LLM using multi devices: {}", devices);
-        } else {
-            if (const std::optional<int> val = Singleton<HLIEDeviceHelper>::instance()->acquire_device(LLM); !val) {
-                LOG_ERROR("LLM cannot acquire available device");
-                return -1;
-            } else {
-                HlieUtil::set_env("HOUMO_DEVICE_ID", std::to_string(val.value()));
-                devices_.push_back(*val);
-                LOG_INFO("LLM using device: {}", val.value());
-            }
-        }
-    } else { // 单实例模式可以定制Model Devices
+    {
         const auto mem_est = model_info.get_estimated_mem();
         estimated_mem_mb_ = mem_est;
         LOG_INFO("LLM memory estimate for {} is {}MB", model_info.get_model_name(), mem_est);
@@ -250,9 +228,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     llama_server_routes_ = std::make_shared<server_routes>(params_, *llama_server_);
     LOG_INFO("LLM start to load model");
     if (!llama_server_->load_model(params_)) {
-        if (is_multi_instance_) {
-            Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
-        } else {
+        if (device_service_) {
             const auto mem_est = estimated_mem_mb_ > 0 ? estimated_mem_mb_ : HLIEModelInfo::estimate_mem(model_key_);
             device_service_->release_mem_on_devices(devices_, mem_est);
         }
@@ -298,9 +274,7 @@ void LLModelService::stop() {
     }
 
     if (!devices_.empty()) {
-        if (is_multi_instance_) {
-            Singleton<HLIEDeviceHelper>::instance()->release_devices(devices_);
-        } else if (device_service_) {
+        if (device_service_) {
             const auto mem_est = estimated_mem_mb_ > 0 ? estimated_mem_mb_ : HLIEModelInfo::estimate_mem(model_key_);
             device_service_->release_mem_on_devices(devices_, mem_est);
         }
