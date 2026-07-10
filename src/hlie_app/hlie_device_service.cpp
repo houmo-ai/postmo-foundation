@@ -539,7 +539,7 @@ int HLIEDeviceService::get_device_infos(std::vector<HLIEDeviceInfo>& device_info
 
     for (int i = 0; i < dev_count; i++) {
         int dev = static_cast<int>(info.device_ids[i]);
-        LOG_INFO("try to get mem info of device {}", dev);
+        LOG_DEBUG("try to get mem info of device {}", dev);
         hm_mem_info mem_info{};
         if (const auto ret = sdk.get_mem_info(dev, &mem_info); ret < 0) {
             LOG_ERROR("failed to get mem info of device {}, ret: {}", dev, ret);

@@ -409,7 +409,7 @@ std::string HLIEConfigService::get_string(const std::string& section, const std:
     if (env_first || !config_reader_) {
         const std::string env_var = env_var_name(section, key);
         if (HLIELogger::get_logger()) {
-            HLIELogger::get_logger()->info("Try to get {} from env", env_var);
+            HLIELogger::get_logger()->debug("Try to get {} from env", env_var);
         }
         if (const char* env_value = std::getenv(env_var.c_str()); env_value != nullptr) {
             if (HLIELogger::get_logger()) {
@@ -436,7 +436,7 @@ bool HLIEConfigService::get_bool(const std::string& section, const std::string& 
     std::lock_guard lock(mutex_);
     if (env_first || !config_reader_) {
         const std::string env_var = env_var_name(section, key);
-        HLIELogger::get_logger()->info("Try to get {} from env", env_var);
+        HLIELogger::get_logger()->debug("Try to get {} from env", env_var);
         if (const char* env_value = std::getenv(env_var.c_str()); env_value != nullptr) {
             try {
                 std::string val(env_value);
