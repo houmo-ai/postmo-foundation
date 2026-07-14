@@ -1398,7 +1398,7 @@ class CosyVoiceFrontEnd:
         self.feat_extractor = mel_spectrogram
         self.device = "cpu"
 
-        logger.info(f"device_ids: {tts_config['device_ids']}]")
+        logger.info(f"device_ids: {tts_config['device_ids']}")
         dev_manager = tcim.runtime.DevManager(tts_config["device_ids"], "Xh2HalBackend")
         weight_manager = tcim.runtime.WeightManager(dev_manager)
         campplus_option = tcim.runtime.Option(weight_manager)
@@ -1791,7 +1791,7 @@ class TTSEngine(InferenceEngine):
         self.tts_config["gguf_path"] = self.model_config["model_path"]
         self.tts_config["model_dir"] = self.model_config.get("model_dir", "")
         self.tts_config["model_path"] = self.model_path
-        self.tts_config["device_ids"] = self.device_ids
+        self.tts_config["device_ids"] = self.device_ids if self.device_ids else [0]
 
         logger.info(
             f"gguf_path: {self.tts_config['gguf_path']}, "

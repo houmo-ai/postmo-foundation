@@ -8,7 +8,7 @@ from fastapi import Request
 from hliepython.utils.logging import async_logger as logger
 
 from hliepython.model_server.engines.base_engine import InferenceEngine
-from hliepython.model_server.engines.protocol.chat_completions import ErrorResponse, UsageInfo
+from hliepython.model_server.engines.protocol.chat_completions import UsageInfo
 from hliepython.model_server.engines.protocol.embeddings import (
     EmbeddingRequest,
     EmbeddingResponse,
@@ -16,15 +16,18 @@ from hliepython.model_server.engines.protocol.embeddings import (
     encode_embedding_base64,
 )
 from hliepython.model_server.engines.utils import (
+    make_vllm_frontend_namespace,
     merge_additional_config,
     move_vllm_engine_args_from_additional_config,
-    normalize_vllm_engine_args,
+    split_vllm_config,
 )
 from hliepython.model_server.utils.gguf_metadata import apply_gguf_metadata_defaults_to_vllm_engine_args
 
 try:
     from vllm import AsyncLLMEngine, PoolingParams
     from vllm.engine.arg_utils import AsyncEngineArgs
+    from vllm.entrypoints.utils import create_error_response
+    from vllm.entrypoints.openai.engine.protocol import ErrorResponse
     from vllm.v1.engine.exceptions import EngineDeadError
 except ImportError:
     # logger.error("vLLM 库未安装，EmbeddingEngine 无法使用本地推理功能！请安装 vLLM 或检查环境配置。")
@@ -45,6 +48,9 @@ class EmbeddingEngine(InferenceEngine):
             instance_config.get("vllm_extra_config", {}),
         )
         self.additional_config = instance_config.get("additional_config", {}) or {}
+        self.vllm_frontend_args = None
+        self.vllm_api_server_args: dict[str, Any] = {}
+        self.vllm_unknown_args: dict[str, Any] = {}
         super().__init__(instance_config)
 
     @staticmethod
@@ -60,14 +66,49 @@ class EmbeddingEngine(InferenceEngine):
         except (TypeError, ValueError):
             pass
 
+    @staticmethod
+    def _perf_counter() -> float:
+        return time.perf_counter()
+
+    def _log_perf_table(
+        self,
+        title: str,
+        request_id: str | None,
+        stage_timings: list[dict[str, Any]],
+        extra_metrics: dict[str, Any] | None = None,
+        total_s: float | None = None,
+    ) -> None:
+        logger.info(
+            f"{title} request_id={request_id} total_s={total_s} "
+            f"stages={stage_timings} metrics={extra_metrics or {}}"
+        )
+
     def _load_model(self):
         """加载 embedding 模型（使用 vLLM encode/pooling）。"""
         try:
-            vllm_engine_args = normalize_vllm_engine_args(self.vllm_config)
-            user_additional_config = vllm_engine_args.pop("additional_config", None)
+            (
+                vllm_engine_args,
+                vllm_frontend_args,
+                vllm_api_server_args,
+                vllm_unknown_args,
+            ) = split_vllm_config(self.vllm_config)
+            self.vllm_api_server_args = vllm_api_server_args
+            self.vllm_unknown_args = vllm_unknown_args
+            if vllm_api_server_args:
+                logger.info(
+                    "vLLM API server 层参数已接收；当前 worker 已是 HTTP server，"
+                    f"不会再启动第二个 vLLM API server: {vllm_api_server_args}"
+                )
+            if vllm_unknown_args:
+                logger.warning(f"vLLM 未识别参数不会传入 AsyncEngineArgs: {vllm_unknown_args}")
+
+            self.vllm_frontend_args = make_vllm_frontend_namespace(
+                vllm_frontend_args,
+                vllm_engine_args,
+            )
             additional_config = merge_additional_config(
                 dict(self.additional_config),
-                user_additional_config,
+                vllm_engine_args.pop("additional_config", None),
             )
             additional_config.setdefault("device_ids", self.device_ids)
             vllm_engine_args, additional_config = move_vllm_engine_args_from_additional_config(
@@ -92,13 +133,14 @@ class EmbeddingEngine(InferenceEngine):
                 "additional_config": additional_config,
             }
 
-            # logger.info(f"EmbeddingEngine vllm 启动参数: {engine_arg_kwargs}")
+            logger.info(f"EmbeddingEngine vllm 启动参数: {engine_arg_kwargs}")
+            logger.info(f"EmbeddingEngine vllm frontend/pooling serving 参数: {vllm_frontend_args}")
             engine_args = AsyncEngineArgs(**engine_arg_kwargs)
             self.engine = AsyncLLMEngine.from_engine_args(engine_args)
-            # logger.info(f"EmbeddingEngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
+            logger.info(f"EmbeddingEngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
 
         except Exception as e:
-            # logger.error(f"EmbeddingEngine: vLLM 引擎加载失败 {e}")
+            logger.error(f"EmbeddingEngine: vLLM 引擎加载失败 {e}")
             raise RuntimeError(f"Failed to load vLLM embedding engine: {e}")
 
     def create_error_response(
@@ -107,11 +149,7 @@ class EmbeddingEngine(InferenceEngine):
         err_type: str = "BadRequestError",
         status_code: HTTPStatus = HTTPStatus.BAD_REQUEST,
     ) -> ErrorResponse:
-        return ErrorResponse(
-            message=message,
-            type=err_type,
-            code=status_code.value,
-        )
+        return create_error_response(message, err_type, status_code)
 
     def _normalize_inputs(self, request_input: Any) -> list[dict[str, Any]]:
         if isinstance(request_input, str):

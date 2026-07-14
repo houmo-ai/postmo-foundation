@@ -28,7 +28,7 @@ from typing import Any
 import numpy as np
 
 
-DEFAULT_URI = "ws://127.0.0.1:7999/v1/realtime"
+DEFAULT_URI = "ws://127.0.0.1:7803/v1/realtime"
 DEFAULT_AUDIO_FILE = "E:/test_data/audio/long_2.wav"
 TARGET_SAMPLE_RATE = 24_000
 CHUNK_DURATION_MS = 250

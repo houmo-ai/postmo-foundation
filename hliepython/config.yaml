@@ -1,6 +1,4 @@
 # 服务运行配置
-server:
-  # 用于增加一些额外的其他配置项
 
 # 模型配置
 models:
@@ -115,24 +113,17 @@ models:
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
 
-  # - name: "Gemma4-26B_a4b"
+  # # whisper-turbo 模型
+  # - model_path: "HiModel-whisper-large_v3_turbo_1chip_2cores_v1.2.0-20260420.gguf"
+  #   model_type: "asr"
   #   instances:
-  #     - port: 7802
-  #       model_path: "Gemma4-26B_a4b"
-  #       model_type: "llm"
-  #       vllm_config:
+  #     - vllm_config:
   #         engine:
-  #           max-model-len: 131072
-  #           max-num-seqs: 1
+  #           load-format: "dummy"
   #           no-enable-prefix-caching: true
-  #           max-num-batched-tokens: 131072
-  #         serving:
-  #           enable-auto-tool-choice: true
-  #           tool-call-parser: "gemma4"
-  #       additional_config:
-  #         device_ids: [0]
-  #         # enable_cacheprompt: "False"
-  #         "vit_model_name": "mmproj_xh2_gemma4-26b-a4b_2cores_vit_448x448_v1.4.0_20260610.gguf"
+  #         api-server:
+  #           port: 7803
+  #           server-model-name: "whisper-turbo"
 
   # # Qwen3-ASR-1.7B 模型
   # - model_path: "HiModel_xh2_qwen3_asr_1.7b_1chip_2cores_v1.3.0_20260604.gguf"
@@ -143,13 +134,13 @@ models:
   #           load-format: "dummy"
   #           no-enable-prefix-caching: true
   #         api-server:
-  #           port: 7999
+  #           port: 7803
   #           server-model-name: "Qwen3-ASR-1.7B"
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_qwen3-asr_1.7b_2cores_v1.3.0_20260604.gguf"
 
   # # Qwen3-ForcedAligner-0.6B 模型
-  # - model_path: "HiModel-Qwen3-ForcedAligner-0.6B-Q4_0.gguf"
+  # - model_path: "HiModel_xh2_qwen3-ForcedAligner_0.6b_2cores_v1.3.0_20260525.gguf"
   #   model_type: "forced_aligner"
   #   instances:
   #     - vllm_config:
@@ -161,41 +152,61 @@ models:
   #           hf-overrides:
   #             architectures: ["Qwen3ASRForcedAlignerForTokenClassification"]
   #         api-server:
-  #           port: 7802
+  #           port: 7804
   #           server-model-name: "Qwen3-ForcedAligner-0.6B"
   #       additional_config:
-  #         "vit_model_name": "mmproj-Qwen3-ForcedAligner-Q4_0.gguf"
+  #         "vit_model_name": "mmproj_xh2_qwen3-ForcedAligner_0.6b_2cores_v1.3.0_20260525.gguf"
 
-  # - name: "glm-ocr"
-  #   instances:
-  #     - port: 7802
-  #       model_path: "glm-ocr"
-  #       model_type: "llm"
-  #       vllm_config:
-  #         engine:
-  #           max-model-len: 2048
-  #           max-num-seqs: 1
-  #           no-enable-prefix-caching: true
-  #           max-num-batched-tokens: 2048
-  #       additional_config:
-  #         "vit_model_name": "mmproj_xh2_glm-ocr_0.8b_2cores_v1.3.0_20260519.gguf"
-
-  # # Fun-CosyVoice3 模型
-  # - model_path: HiModel_xh2_cosyvoice3_0.5b_256_2k_1chip_2cores_v1.3.0-20260615.gguf
+  # # Fun-CosyVoice3-0.5B 模型
+  # - model_path: HiModel_xh2_cosyvoice3_0.5b_1chip_2cores_v1.1.0-20260409.gguf
   #   model_type: "tts"
   #   instances:
   #     - vllm_config:
   #         api-server:
-  #           port: 7804
+  #           port: 7805
   #           server-model-name: "Fun-CosyVoice3-0.5B"
-  #       additional_config:
-  #         device_ids: [0]
 
-  # # text embedding 模型
-  # - name: "qwen3-embedding-8b"
+  # # Qwen3-Embedding-8B 模型
+  # - model_path: "HiModel_xh2_qwen3-embedding_8b_256_8k_b1_1chip_2cores_v1.2.0_20260421.gguf"
+  #   model_type: "embedding"
   #   instances:
-  #     - port: 7805
-  #       model_path: "qwen3-embedding-8b"
-  #       model_type: "embedding"
-  #       additional_config:
-  #         device_ids: [0]
+  #     - vllm_config:
+  #         api-server:
+  #           port: 7806
+  #           server-model-name: "Qwen3-Embedding-8B"
+
+  # # bge-m3 模型
+  # - model_path: "HiModel_xh2_bge_0.5b_0.5k_b10_1chip_2cores_v1.3.0_20260609.gguf"
+  #   model_type: "embedding"
+  #   instances:
+  #     - vllm_config:
+  #         api-server:
+  #           port: 7806
+  #           server-model-name: "bge-m3"
+
+  # # Qwen3-Reranker-8B 模型
+  # - model_path: "HiModel_xh2_qwen3-reranker_8b_256_8k_b1_1chip_2cores_v1.2.0_20260421.gguf"
+  #   model_type: "reranker"
+  #   instances:
+  #     - vllm_config:
+  #         api-server:
+  #           port: 7807
+  #           server-model-name: "Qwen3-Reranker-8B"
+  #         engine:
+  #           hf-overrides: 
+  #             "architectures": ["Qwen3ForSequenceClassification"]
+  #             "classifier_from_token": ["no", "yes"]
+  #             "is_original_qwen3_reranker": true
+
+  # # bge-reranker-v2-m3 模型
+  # - model_path: "HiModel_xh2_bge-reranker-v2-m3_0.5b_0.5k_b10_1chip_2cores_v1.3.0_20260609.gguf"
+  #   model_type: "reranker"
+  #   instances:
+  #     - vllm_config:
+  #         api-server:
+  #           port: 7807
+  #           server-model-name: "bge-reranker-v2-m3"
+  #         serving:
+  #           tool-call-parser: "hermes"
+  #         engine:
+  #           max-model-len: 512

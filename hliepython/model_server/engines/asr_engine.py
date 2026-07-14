@@ -1,24 +1,17 @@
 import io
 import os
-import json
 import time
 import asyncio
-import librosa
 import math
 import re
-from http import HTTPStatus
 from typing import Any, Dict
 
 import numpy as np
-from math import ceil
 from fastapi import Request
-from fastapi.responses import Response
 from hliepython.utils.logging import async_logger as logger
 
-from typing import Final, Literal, TypeAlias, TypeVar, cast
-from typing import Callable, Literal, Optional, TypeVar, Union, cast
+from typing import Literal, TypeAlias, TypeVar, cast, Callable
 from collections.abc import AsyncGenerator, Set
-from collections.abc import Mapping, Sequence
 
 from hliepython.model_server.engines.base_engine import InferenceEngine
 from hliepython.model_server.engines.utils import (
@@ -38,8 +31,6 @@ from vllm.renderers.inputs import DictPrompt, EncoderDecoderDictPrompt
 from vllm.inputs import EncoderDecoderInput
 from vllm.multimodal.processing import ProcessorInputs
 from vllm.logprobs import FlatLogprobs, Logprob
-from vllm.inputs import PromptType
-from vllm.entrypoints.utils import create_error_response
 from vllm import AsyncLLMEngine, SamplingParams
 from vllm.sampling_params import BeamSearchParams, SamplingParams
 from vllm.engine.arg_utils import AsyncEngineArgs
@@ -57,10 +48,7 @@ from vllm.entrypoints.speech_to_text.transcription.protocol import (
     TranscriptionResponseVerbose,  
 )
 from vllm.entrypoints.openai.speech_to_text.protocol import (
-    # TranscriptionRequest,
-    # TranscriptionResponse,
     TranscriptionResponseStreamChoice,
-    # TranscriptionResponseVerbose,
     TranscriptionSegment,
     TranscriptionStreamResponse,
     TranslationResponse,
@@ -80,13 +68,7 @@ from vllm.entrypoints.openai.engine.protocol import (
     ToolCall,
     UsageInfo,
 )
-from vllm.inputs import (
-    ExplicitEncoderDecoderPrompt,
-    PromptType,
-    TextPrompt,
-)
 from vllm.renderers.inputs.preprocess import parse_enc_dec_prompt, parse_model_prompt
-from vllm.utils.async_utils import merge_async_iterators
 from vllm.sampling_params import RequestOutputKind
 
 from vllm_houmo.models.export_meta_from_gguf import parse_gguf
@@ -136,6 +118,7 @@ class ASREngine(InferenceEngine):
         )
 
         self.task_type = "transcribe"
+        self.enable_force_include_usage = False
         self.model_sr = 16000
         self.hop_length = 160
         self.max_audio_clip_s = MAX_AUDIO_CLIP_SECONDS
@@ -213,11 +196,14 @@ class ASREngine(InferenceEngine):
             engine_args = AsyncEngineArgs(**engine_arg_kwargs)
 
             self.engine = AsyncLLMEngine.from_engine_args(engine_args)
+            self.engine_client = self.engine
 
             self.model_cls, self.arch_name = get_model_architecture(self.engine.model_config)
             self.asr_config = self.model_cls.get_speech_to_text_config(
                 self.engine.model_config, self.task_type
             )
+            
+            self.tokenizer = self.engine.get_tokenizer()
             
             self.model_config = self.engine.model_config
             self.default_sampling_params = self.model_config.get_diff_sampling_param()
@@ -233,27 +219,6 @@ class ASREngine(InferenceEngine):
             logger.error(f"ASREngine: vLLM 引擎加载失败 {e}")
             raise RuntimeError(f"Failed to load vLLM engine: {e}")
 
-    @staticmethod
-    def create_error_response(
-        message: str | Exception,
-        err_type: str = "BadRequestError",
-        status_code: HTTPStatus = HTTPStatus.BAD_REQUEST,
-        param: str | None = None,
-    ) -> ErrorResponse:
-        return create_error_response(message, err_type, status_code, param)
-
-    def create_streaming_error_response(
-            self,
-            message: str,
-            err_type: str = "BadRequestError",
-            status_code: HTTPStatus = HTTPStatus.BAD_REQUEST) -> str:
-        json_str = json.dumps({
-            "error":
-            self.create_error_response(message=message,
-                                       err_type=err_type,
-                                       status_code=status_code).model_dump()
-        })
-        return json_str
 
     @staticmethod
     def _post_process_asr_text(text: str | None) -> str:
@@ -275,11 +240,10 @@ class ASREngine(InferenceEngine):
         request_metadata: RequestResponseMetadata,
         audio_duration_s: float,
         chunk_object_type: Literal["translation.chunk", "transcription.chunk"],
-        response_stream_choice_class: Union[
-            type[TranscriptionResponseStreamChoice],
-            type[TranslationResponseStreamChoice]],
-        stream_response_class: Union[type[TranscriptionStreamResponse],
-                                     type[TranslationStreamResponse]],
+        response_stream_choice_class: type[TranscriptionResponseStreamChoice]
+        | type[TranslationResponseStreamChoice],
+        stream_response_class: type[TranscriptionStreamResponse]
+        | type[TranslationStreamResponse],
     ) -> AsyncGenerator[str, None]:
         created_time = int(time.time())
         model_name = request.model
@@ -289,27 +253,22 @@ class ASREngine(InferenceEngine):
 
         include_usage = request.stream_include_usage \
             if request.stream_include_usage else False
-        include_continuous_usage = request.stream_continuous_usage_stats\
-            if include_usage and request.stream_continuous_usage_stats\
+        include_continuous_usage = (
+            request.stream_continuous_usage_stats
+            if include_usage and request.stream_continuous_usage_stats
             else False
+        )
 
         try:
             for result_generator in list_result_generator:
-                previous_text = ""
                 async for res in result_generator:
                     # On first result.
                     if res.prompt_token_ids is not None:
-                        # Do not account the 4-tokens `<|startoftranscript|>..`
-                        # Could be negative when language token
-                        # is not specified.
-                        num_prompt_tokens = max(
-                            len(res.prompt_token_ids) - 4, 0)
-                        # NOTE(NickLucche) user can't pass encoder
-                        # prompts directly at least not to Whisper.
-                        # One indicator of the encoder amount of processing
-                        # is the log-mel spectogram length.
-                        num_prompt_tokens += ceil(
-                            audio_duration_s * self.model_sr / self.hop_length)
+                        num_prompt_tokens = len(res.prompt_token_ids)
+                        if audio_tokens := self.model_cls.get_num_audio_tokens(
+                            audio_duration_s, self.asr_config, self.model_config
+                        ):
+                            num_prompt_tokens += audio_tokens
 
                     # We need to do it here, because if there are exceptions in
                     # the result_generator, it needs to be sent as the FIRST
@@ -319,28 +278,31 @@ class ASREngine(InferenceEngine):
                     assert len(res.outputs) == 1
                     output = res.outputs[0]
 
-                    processed_text = self._post_process_asr_text(output.text)
-                    delta_text = processed_text[len(previous_text):]
-                    previous_text = processed_text
-                    delta_message = DeltaMessage(content=delta_text)
+                    # TODO: For models that output structured formats (e.g.,
+                    # Qwen3-ASR with "language X<asr_text>" prefix), streaming
+                    # would need buffering to strip the prefix properly since
+                    # deltas may split the tag across chunks.
+                    delta_message = DeltaMessage(content=output.text)
                     completion_tokens += len(output.token_ids)
 
                     if output.finish_reason is None:
                         # Still generating, send delta update.
-                        choice_data = response_stream_choice_class(
-                            delta=delta_message)
+                        choice_data = response_stream_choice_class(delta=delta_message)
                     else:
                         # Model is finished generating.
                         choice_data = response_stream_choice_class(
                             delta=delta_message,
                             finish_reason=output.finish_reason,
-                            stop_reason=output.stop_reason)
+                            stop_reason=output.stop_reason,
+                        )
 
-                    chunk = stream_response_class(id=request_id,
-                                                  object=chunk_object_type,
-                                                  created=created_time,
-                                                  choices=[choice_data],
-                                                  model=model_name)
+                    chunk = stream_response_class(
+                        id=request_id,
+                        object=chunk_object_type,
+                        created=created_time,
+                        choices=[choice_data],
+                        model=model_name,
+                    )
 
                     # handle usage stats if requested & if continuous
                     if include_continuous_usage:
@@ -356,10 +318,11 @@ class ASREngine(InferenceEngine):
             # Once the final token is handled, if stream_options.include_usage
             # is sent, send the usage.
             if include_usage:
-                final_usage = UsageInfo(prompt_tokens=num_prompt_tokens,
-                                        completion_tokens=completion_tokens,
-                                        total_tokens=num_prompt_tokens +
-                                        completion_tokens)
+                final_usage = UsageInfo(
+                    prompt_tokens=num_prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=num_prompt_tokens + completion_tokens,
+                )
 
                 final_usage_chunk = stream_response_class(
                     id=request_id,
@@ -367,33 +330,80 @@ class ASREngine(InferenceEngine):
                     created=created_time,
                     choices=[],
                     model=model_name,
-                    usage=final_usage)
-                final_usage_data = (final_usage_chunk.model_dump_json(
-                    exclude_unset=True, exclude_none=True))
+                    usage=final_usage,
+                )
+                final_usage_data = final_usage_chunk.model_dump_json(
+                    exclude_unset=True, exclude_none=True
+                )
                 yield f"data: {final_usage_data}\n\n"
 
             # report to FastAPI middleware aggregate usage across all choices
             request_metadata.final_usage_info = UsageInfo(
                 prompt_tokens=num_prompt_tokens,
                 completion_tokens=completion_tokens,
-                total_tokens=num_prompt_tokens + completion_tokens)
+                total_tokens=num_prompt_tokens + completion_tokens,
+            )
 
         except Exception as e:
-            # TODO: Use a vllm-specific Validation Error
             logger.exception("Error in %s stream generator.", self.task_type)
-            data = create_error_response(str(e), "internal_error", HTTPStatus.INTERNAL_SERVER_ERROR)
+            data = self.create_streaming_error_response(e)
             yield f"data: {data}\n\n"
         # Send the final done message after all response.n are finished
         yield "data: [DONE]\n\n"
+
+    async def _detect_language(
+        self,
+        audio_chunk: np.ndarray,
+        request_id: str,
+    ) -> str:
+        """Auto-detect the spoken language from an audio chunk.
+
+        Delegates prompt construction and output parsing to the model class
+        via ``get_language_detection_prompt`` and
+        ``parse_language_detection_output``.
+        """
+        prompt = self.model_cls.get_language_detection_prompt(
+            audio_chunk,
+            self.asr_config,
+        )
+        allowed_token_ids = self.model_cls.get_language_token_ids(
+            self.tokenizer,
+        )
+        sampling_params = SamplingParams(
+            max_tokens=1,
+            temperature=0.0,
+            allowed_token_ids=allowed_token_ids,
+        )
+
+        result_generator = self.engine_client.generate(
+            prompt,
+            sampling_params,
+            request_id,
+        )
+
+        final_output: RequestOutput
+        async for final_output in result_generator:
+            if final_output.finished:
+                break
+
+        token_ids = list(final_output.outputs[0].token_ids)
+        lang = self.model_cls.parse_language_detection_output(
+            token_ids,
+            self.tokenizer,
+        )
+
+        logger.info("Auto-detected language: '%s'", lang)
+        return lang
 
     async def _preprocess_speech_to_text(
         self,
         request: SpeechToTextRequest,
         audio_data: bytes,
         request_id: str,
-    ) -> tuple[list[PromptType], float]:
+    ) -> tuple[list[ProcessorInputs], float]:
         # Validate request
         language = self.model_cls.validate_language(request.language)
+        # Skip to_language validation to avoid extra logging for Whisper.
         request.to_language = (
             self.model_cls.validate_language(request.to_language)
             if request.to_language
@@ -441,13 +451,13 @@ class ASREngine(InferenceEngine):
             f"分段时长 {[get_audio_duration(y=chunk, sr=sr) for chunk in chunks]} 秒"
         )
 
-        # if request.language is None and getattr(
-        #     self.model_cls, "supports_explicit_language_detection", False
-        # ):
-        #     # Auto-detect language from the first chunk.
-        #     request.language = await self._detect_language(
-        #         chunks[0], f"{request_id}-lang_detect"
-        #     )
+        if request.language is None and getattr(
+            self.model_cls, "supports_explicit_language_detection", False
+        ):
+            # Auto-detect language from the first chunk.
+            request.language = await self._detect_language(
+                chunks[0], f"{request_id}-lang_detect"
+            )
 
         parsed_prompts: list[DictPrompt] = []
         for chunk in chunks:
@@ -572,14 +582,11 @@ class ASREngine(InferenceEngine):
         # if error_check_ret is not None:
         #     return error_check_ret
 
-        # if not request.model:
-        #     request.model = self.models.model_name()
-
-        # # If the engine is dead, raise the engine's DEAD_ERROR.
-        # # This is required for the streaming case, where we return a
-        # # success status before we actually start generating text :).
-        # if self.engine_client.errored:
-        #     raise self.engine_client.dead_error
+        # If the engine is dead, raise the engine's DEAD_ERROR.
+        # This is required for the streaming case, where we return a
+        # success status before we actually start generating text :).
+        if self.engine.errored:
+            raise self.engine.dead_error
 
         if request.response_format not in ["text", "json", "verbose_json"]:
             return self.create_error_response(
@@ -607,7 +614,7 @@ class ASREngine(InferenceEngine):
 
         # lora_request = self._maybe_get_adapters(request)
 
-        engine_inputs, duration_s = await self._preprocess_speech_to_text(
+        engine_prompts, duration_s = await self._preprocess_speech_to_text(
             request=request,
             audio_data=audio_data,
             request_id=request_id,
@@ -618,7 +625,7 @@ class ASREngine(InferenceEngine):
         list_result_generator: list[AsyncGenerator[RequestOutput, None]] | None = None
 
         input_len = (
-            ASREngine._get_decoder_prompt_len(engine_inputs)
+            ASREngine._get_decoder_prompt_len(engine_prompts)
             if request.use_beam_search
             else 0
         )
@@ -647,69 +654,46 @@ class ASREngine(InferenceEngine):
         if request.response_format == "verbose_json":
             sampling_params.logprobs = 1
 
-        engine_request_ids = [
-            request_id if len(engine_inputs) == 1 else f"{request_id}-{idx}"
-            for idx in range(len(engine_inputs))
-        ]
         list_result_generator = []
-        try:
-            for request_id_item, engine_input in zip(engine_request_ids, engine_inputs):
-                # self._log_inputs(
-                #     request_id_item,
-                #     engine_input,
-                #     params=sampling_params,
-                #     lora_request=lora_request,
-                # )
+        for i, engine_prompt in enumerate(engine_prompts):
+            request_id_item = f"{request_id}_{i}"
 
-                # trace_headers = (
-                #     None
-                #     if raw_request is None
-                #     else await self._get_trace_headers(raw_request.headers)
-                # )
+            # self._log_inputs(
+            #     request_id_item,
+            #     engine_prompt,
+            #     params=sampling_params,
+            #     lora_request=lora_request,
+            # )
 
-                # if isinstance(sampling_params, BeamSearchParams):
-                if 0:
-                    generator = self.beam_search(
-                        prompt=engine_input,
-                        params=sampling_params,
-                        request_id=request_id_item,
-                        lora_request=lora_request,
-                        trace_headers=trace_headers,
-                    )
-                else:
-                    generator = self.engine.generate(
-                        engine_input,
-                        sampling_params,
-                        request_id_item,
-                        # lora_request=lora_request,
-                        # trace_headers=trace_headers,
-                    )
+            # trace_headers = (
+            #     None
+            #     if raw_request is None
+            #     else await self._get_trace_headers(raw_request.headers)
+            # )
 
-                list_result_generator.append(generator)
-        except asyncio.CancelledError:
-            logger.info(
-                "Request %s cancelled; aborting %d transcription engine request(s).",
-                request_id,
-                len(engine_request_ids),
-            )
-            await asyncio.gather(
-                self.engine.abort(engine_request_ids),
-                return_exceptions=True,
-            )
-            raise
+            # if isinstance(sampling_params, BeamSearchParams):
+            if 0:
+                generator = self.beam_search(
+                    prompt=engine_prompt,
+                    params=sampling_params,
+                    request_id=request_id_item,
+                    lora_request=lora_request,
+                    trace_headers=trace_headers,
+                )
+            else:
+                generator = self.engine.generate(
+                    engine_prompt,
+                    sampling_params,
+                    request_id_item,
+                    # lora_request=lora_request,
+                    # trace_headers=trace_headers,
+                )
 
-        separator = asr_inter_chunk_separator(
-            request.language, self.model_cls.no_space_languages
-        )
+            list_result_generator.append(generator)
 
         if request.stream:
             return stream_generator_method(
-                request,
-                list_result_generator,
-                request_id,
-                request_metadata,
-                duration_s,
-                separator,
+                request, list_result_generator, request_id, request_metadata, duration_s
             )
 
         # Non-streaming response.
@@ -717,10 +701,6 @@ class ASREngine(InferenceEngine):
         text_parts = []
         try:
             assert list_result_generator is not None
-            chunk_segment_parts: list[list[SpeechToTextSegment]] = [
-                [] for _ in list_result_generator
-            ]
-            chunk_text_parts: list[list[str]] = [[] for _ in list_result_generator]
             segments_types: dict[str, type[SpeechToTextSegment]] = {
                 "transcribe": TranscriptionSegment,
                 "translate": TranslationSegment,
@@ -732,35 +712,30 @@ class ASREngine(InferenceEngine):
                 assert len(list_result_generator) == 1, (
                     "`max_audio_clip_s` is set to None, audio cannot be chunked"
                 )
-            result_generator = merge_async_iterators(*list_result_generator)
-            async for idx, op in result_generator:
+            for idx, result_generator in enumerate(list_result_generator):
                 start_time = (
                     float(idx * chunk_size_in_s) if chunk_size_in_s is not None else 0.0
                 )
-                if request.response_format == "verbose_json":
-                    assert op.outputs[0].logprobs
-                    segments: list[SpeechToTextSegment] = self._get_verbose_segments(
-                        tokens=tuple(op.outputs[0].token_ids),
-                        segment_class=segment_class,
-                        request=request,
-                        start_time=start_time,
-                        log_probs=op.outputs[0].logprobs,
-                    )
+                async for op in result_generator:
+                    if request.response_format == "verbose_json":
+                        assert op.outputs[0].logprobs
+                        segments: list[SpeechToTextSegment] = (
+                            self._get_verbose_segments(
+                                tokens=tuple(op.outputs[0].token_ids),
+                                segment_class=segment_class,
+                                request=request,
+                                start_time=start_time,
+                                log_probs=op.outputs[0].logprobs,
+                            )
+                        )
 
-                    chunk_segment_parts[idx].extend(segments)
-                    chunk_text_parts[idx].extend([seg.text for seg in segments])
-                else:
-                    raw_text = op.outputs[0].text
-                    chunk_text_parts[idx].append(
-                        self.model_cls.post_process_output(raw_text)
-                    )
-            total_segments = [
-                segment
-                for segment_parts in chunk_segment_parts
-                for segment in segment_parts
-            ]
-            text_parts = [text for text_part in chunk_text_parts for text in text_part]
-            text = separator.join(text_parts)
+                        total_segments.extend(segments)
+                        text_parts.extend([seg.text for seg in segments])
+                    else:
+                        raw_text = op.outputs[0].text
+                        text_parts.append(self.model_cls.post_process_output(raw_text))
+
+            text = "".join(text_parts)
             if self.task_type == "transcribe":
                 final_response: ResponseType
                 # add usage in TranscriptionResponse.
@@ -799,16 +774,7 @@ class ASREngine(InferenceEngine):
                     )
             return final_response
         except asyncio.CancelledError:
-            logger.info(
-                "Request %s cancelled; aborting %d transcription engine request(s).",
-                request_id,
-                len(engine_request_ids),
-            )
-            await asyncio.gather(
-                self.engine.abort(engine_request_ids),
-                return_exceptions=True,
-            )
-            raise
+            return self.create_error_response("Client disconnected")
 
     def _get_verbose_segments(
         self,
@@ -914,7 +880,6 @@ class ASREngine(InferenceEngine):
         request_id: str,
         request_metadata: RequestResponseMetadata,
         audio_duration_s: float,
-        separator: str,
     ) -> AsyncGenerator[str, None]:
         generator = self._speech_to_text_stream_generator(
             request=request,
@@ -925,7 +890,6 @@ class ASREngine(InferenceEngine):
             chunk_object_type="transcription.chunk",
             response_stream_choice_class=TranscriptionResponseStreamChoice,
             stream_response_class=TranscriptionStreamResponse,
-            separator=separator,
         )
         async for chunk in generator:
             yield chunk
