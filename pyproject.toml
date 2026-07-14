@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hliepython"
-version = "3.0.1"
+version = "3.1.0"
 description = "A multi-process multi-instance OpenAI API server"
 authors = [
     {name = "wenhao.yang", email = "wenhao.yang@houmo.ai"},
@@ -36,7 +36,7 @@ dependencies = [
     "vllm[audio]",
 ]
 readme = "hliepython/README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 
 [project.scripts]
 hliepython = "hliepython.main:main"

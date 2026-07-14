@@ -14,15 +14,11 @@ from hliepython.model_server.engines.protocol.audio_speech import (
 )
 from hliepython.utils.logging import async_logger as logger
 
+from vllm.utils import random_uuid
 from vllm.entrypoints.utils import create_error_response
 from vllm.entrypoints.openai.engine.protocol import (
     ErrorResponse,
 )
-
-MASK_64_BITS = (1 << 64) - 1
-
-def random_uuid() -> str:
-    return f"{uuid.uuid4().int & MASK_64_BITS:016x}"  # 16 hex chars
 
 class InferenceEngine(ABC):
     """抽象推理引擎接口"""

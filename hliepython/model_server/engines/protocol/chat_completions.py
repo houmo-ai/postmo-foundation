@@ -9,18 +9,12 @@ from pydantic import (
     BaseModel, ConfigDict, Field, TypeAdapter,
     ValidationInfo, field_validator, model_validator)
 from typing import List, Literal, ClassVar, Optional, Union, Tuple, Dict, Any, Callable, cast
-from hliepython.utils.logging import async_logger as logger
-
 from typing import Union, Iterable
 from typing_extensions import Literal, Required, TypedDict, TypeAlias
 from typing import Annotated, Any, ClassVar, Literal
 
 from functools import partial
 from collections.abc import Iterable
-
-from vllm.entrypoints.openai.engine.protocol import (
-    OpenAIBaseModel
-)
 
 from vllm.exceptions import VLLMValidationError
 from vllm.sampling_params import (
@@ -30,73 +24,22 @@ from vllm.sampling_params import (
     SamplingParams,
     StructuredOutputsParams,
 )
-
-from openai.types.chat.chat_completion_content_part_input_audio_param import InputAudio
+from vllm.utils import random_uuid
 from vllm.entrypoints.chat_utils import (
     ConversationMessage,
+    make_tool_call_id,
+)
+from vllm.entrypoints.openai.engine.protocol import (
+    OpenAIBaseModel
 )
 
+from openai.types.chat.chat_completion_content_part_input_audio_param import InputAudio
 
+from hliepython.utils.logging import async_logger as logger
 
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 _LONG_INFO = torch.iinfo(torch.long)
-
-def random_uuid() -> str:
-    return str(uuid.uuid4().hex)
-
-def random_tool_call_id() -> str:
-    return f"chatcmpl-tool-{random_uuid()}"
-
-def make_tool_call_id(id_type: str = "random", func_name=None, idx=None):
-    if id_type == "kimi_k2":
-        return f"functions.{func_name}:{idx}"
-    else:
-        # by default return random
-        return f"chatcmpl-tool-{random_uuid()}"
-
-# class OpenAIBaseModel(BaseModel):
-#     # OpenAI API does allow extra fields
-#     model_config = ConfigDict(extra="allow")
-#     # Cache class field names
-#     field_names: ClassVar[Optional[set[str]]] = None
-#     @model_validator(mode="wrap")
-#     @classmethod
-#     def __log_extra_fields__(cls, data, handler):
-#         result = handler(data)
-#         if not isinstance(data, dict):
-#             return result
-#         field_names = cls.field_names
-#         if field_names is None:
-#             # Get all class field names and their potential aliases
-#             field_names = set()
-#             for field_name, field in cls.model_fields.items():
-#                 field_names.add(field_name)
-#                 if alias := getattr(field, "alias", None):
-#                     field_names.add(alias)
-#             cls.field_names = field_names
-#         # Compare against both field names and aliases
-#         if any(k not in field_names for k in data):
-#             logger.warning(
-#                 "The following fields were present in the request "
-#                 "but ignored: %s",
-#                 data.keys() - field_names,
-#             )
-#         return result
-
-# class ErrorInfo(OpenAIBaseModel):
-#     message: str
-#     type: str
-#     param: str | None = None
-#     code: int
-
-# class ErrorResponse(OpenAIBaseModel):
-#     object: str = "error"
-#     message: str
-#     type: str
-#     param: Optional[str] = None
-#     code: int
-
 
 #####################  Request  #####################
 class Audio(TypedDict, total=False):

@@ -28,7 +28,6 @@ from hliepython.model_server.engines.utils import (
 from hliepython.model_server.engines.base_engine import InferenceEngine
 from hliepython.model_server.engines.protocol.chat_completions import (
     ChatCompletionRequest,
-    # parse_chat_messages,
     ChatCompletionRequest,
     ChatCompletionResponse,
     ChatCompletionResponseStreamChoice,
@@ -120,7 +119,6 @@ class TextEngine(InferenceEngine):
             logger.warning(f"TextEngine: 终止请求 {request_id} 失败: {e}")
 
     def _load_model(self):
-        """加载文本模型（使用 vLLM）"""
         if AsyncLLMEngine is None:
             raise RuntimeError("vLLM not available")
 
@@ -198,19 +196,18 @@ class TextEngine(InferenceEngine):
                 "model": self.model_path,
                 "additional_config": additional_config,
             }
-
             logger.info(f"vllm 启动参数: {engine_arg_kwargs}")
             logger.info(f"vllm frontend/chat serving 参数: {vllm_frontend_args}")
 
             engine_args = AsyncEngineArgs(**engine_arg_kwargs)
-
-            # 创建异步引擎
             self.engine = AsyncLLMEngine.from_engine_args(engine_args)
+            self.engine_client = self.engine
+
             self._init_vllm_openai_serving(vllm_frontend_args)
             logger.info(f"vllm 实际启动参数：{self.engine.vllm_config}")
             logger.info(f"模型配置：{self.engine.vllm_config.model_config}")
             logger.info(f"并行配置：{self.engine.vllm_config.parallel_config}")
-            logger.info(f"TextEngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
+            logger.info(f"vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
 
             self.tokenizer = self.engine.get_tokenizer()
 
@@ -228,7 +225,8 @@ class TextEngine(InferenceEngine):
             if frontend_args is None:
                 return
 
-            served_model_names = getattr(frontend_args, "served_model_name", None) or [self.model_name]
+            served_model_names = getattr(
+                frontend_args, "served_model_name", None) or [self.model_name]
             if isinstance(served_model_names, str):
                 served_model_names = [served_model_names]
 
@@ -339,37 +337,6 @@ class TextEngine(InferenceEngine):
         payload.pop("port", None)
         payload.setdefault("model", self.model_name)
         return ResponsesRequest.model_validate(payload)
-
-
-    def _build_usage(self, prompt: str, content: str) -> Dict[str, int]:
-        """构建 usage 字段（当前保持原有的粗略 token 统计方式）。"""
-        prompt_tokens = len(prompt.split())
-        completion_tokens = len(content.split())
-        return {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        }
-
-
-    def _build_full_response(self, request_id: str, content: str, prompt: str) -> Dict[str, Any]:
-        return {
-            "id": f"chatcmpl-{request_id}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": self.model_name,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": content,
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": self._build_usage(prompt, content),
-        }
 
 
     def get_chat_request_role(self, request: ChatCompletionRequest) -> str:

@@ -185,7 +185,8 @@ class ASREngine(InferenceEngine):
             )
 
             parse_gguf(self.model_path)
-
+            
+            # 配置 vLLM 引擎参数
             engine_arg_kwargs = {
                 **vllm_engine_args,
                 "model": self.model_path,
@@ -193,8 +194,8 @@ class ASREngine(InferenceEngine):
             }
             logger.info(f"vllm 启动参数: {engine_arg_kwargs}")
             logger.info(f"vllm serving/frontend 参数: {vllm_frontend_args}")
-            engine_args = AsyncEngineArgs(**engine_arg_kwargs)
 
+            engine_args = AsyncEngineArgs(**engine_arg_kwargs)
             self.engine = AsyncLLMEngine.from_engine_args(engine_args)
             self.engine_client = self.engine
 
@@ -202,18 +203,15 @@ class ASREngine(InferenceEngine):
             self.asr_config = self.model_cls.get_speech_to_text_config(
                 self.engine.model_config, self.task_type
             )
-            
             self.tokenizer = self.engine.get_tokenizer()
-            
             self.model_config = self.engine.model_config
             self.default_sampling_params = self.model_config.get_diff_sampling_param()
 
-            logger.info(f"ASREngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
             logger.info(f"vllm 实际启动参数：{self.engine.vllm_config}")
             logger.info(f"asr 模型配置参数：{self.asr_config}")
             logger.info(f"模型配置：{self.engine.vllm_config.model_config}")
             logger.info(f"并行配置：{self.engine.vllm_config.parallel_config}")
-            logger.info(f"TextEngine: vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
+            logger.info(f"vLLM 引擎加载完成 {self.model_path} 到设备 {self.device_ids}")
 
         except Exception as e:
             logger.error(f"ASREngine: vLLM 引擎加载失败 {e}")
