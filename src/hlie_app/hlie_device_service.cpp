@@ -85,6 +85,41 @@ namespace {
             }
         }
     }
+#else
+    void append_unique_path(std::vector<std::filesystem::path>& paths, const std::filesystem::path& path) {
+        if (std::find(paths.begin(), paths.end(), path) == paths.end()) {
+            paths.push_back(path);
+        }
+    }
+
+    void append_installed_sdk_hal_paths(std::vector<std::filesystem::path>& hal_paths) {
+        constexpr auto SDK_SUFFIX = "-sdk";
+        constexpr auto SDK_SUFFIX_LENGTH = std::char_traits<char>::length(SDK_SUFFIX);
+        const std::filesystem::path install_root = "/usr/local";
+        std::vector<std::filesystem::path> discovered;
+        std::error_code error;
+
+        for (const auto& entry : std::filesystem::directory_iterator(install_root, error)) {
+            if (error) {
+                break;
+            }
+            if (!entry.is_directory(error) || error) {
+                error.clear();
+                continue;
+            }
+
+            const auto directory_name = entry.path().filename().string();
+            if (directory_name.size() >= SDK_SUFFIX_LENGTH &&
+                directory_name.compare(directory_name.size() - SDK_SUFFIX_LENGTH, SDK_SUFFIX_LENGTH, SDK_SUFFIX) == 0) {
+                discovered.push_back(entry.path() / "hal" / "lib");
+            }
+        }
+
+        std::sort(discovered.begin(), discovered.end());
+        for (const auto& path : discovered) {
+            append_unique_path(hal_paths, path);
+        }
+    }
 #endif
 
     struct hm_device_info {
@@ -215,23 +250,32 @@ namespace {
                 LOG_ERROR("custom HAL candidate exists but failed to load: {}, error {}", path.string(), dlerror());
             }
 
+            std::vector<std::filesystem::path> hal_paths;
             const char* env_paths[] = {
                 std::getenv("HOUMO_SDK_PATH"),
                 std::getenv("HOUMO_DRV_PATH"),
                 std::getenv("TCIM_RUNTIME_PATH"),
-                "/usr/local/houmo-sdk/hal/lib",
-                "/usr/local/houmo-drv/hal/lib",
-                ".",
-                nullptr,
             };
+            for (const char* env_path : env_paths) {
+                if (env_path && *env_path) {
+                    append_unique_path(hal_paths, env_path);
+                }
+            }
+
+            const std::filesystem::path standard_hal_paths[] = {
+                "/usr/local/houmo-sdk/hal/lib",
+                "/usr/local/sensenext-sdk/hal/lib",
+                "/usr/local/houmo-drv/hal/lib",
+            };
+            for (const auto& path : standard_hal_paths) {
+                append_unique_path(hal_paths, path);
+            }
+            append_installed_sdk_hal_paths(hal_paths);
+            append_unique_path(hal_paths, ".");
 
             if (!handle) {
-                for (const char** env_path = env_paths; *env_path != nullptr; ++env_path) {
-                    if (!*env_path || !**env_path) {
-                        continue;
-                    }
-
-                    const auto path = std::filesystem::path(*env_path) / library_name();
+                for (const auto& hal_path : hal_paths) {
+                    const auto path = hal_path / library_name();
                     handle = dlopen(path.string().c_str(), RTLD_LAZY | RTLD_LOCAL);
                     if (handle) {
                         LOG_INFO("loaded Houmo HAL library from {}", path.string());
