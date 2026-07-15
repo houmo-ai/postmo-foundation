@@ -1,6 +1,9 @@
 #ifndef HLIE_LOGGER_H
 #define HLIE_LOGGER_H
 
+#include <cstdint>
+#include <filesystem>
+
 #include <spdlog/spdlog.h>
 
 #include "hlie_base.h"
@@ -74,6 +77,40 @@ public:
      */
     static std::shared_ptr<spdlog::logger> create_logger(const std::string& log_file_name, const std::string& module_name,
                                                          const std::string& level, int max_files = 7);
+
+    /**
+     * Create a logger whose files are stored under YYYY-MM-DD directories and
+     * split into numbered parts when max_file_size_bytes is reached.
+     */
+    static std::shared_ptr<spdlog::logger> init_managed_default_logger(const std::string& log_root,
+                                                                       const std::string& log_file_name,
+                                                                       const std::string& module_name,
+                                                                       const std::string& level,
+                                                                       std::uintmax_t max_file_size_bytes,
+                                                                       int retention_days = 7);
+
+    static std::shared_ptr<spdlog::logger> create_managed_logger(const std::string& log_root,
+                                                                 const std::string& log_file_name,
+                                                                 const std::string& module_name,
+                                                                 const std::string& level,
+                                                                 std::uintmax_t max_file_size_bytes,
+                                                                 int retention_days = 7);
+
+    /** Create a console-only logger for messages emitted before sys.cfg is available. */
+    static std::shared_ptr<spdlog::logger> create_console_logger(const std::string& module_name,
+                                                                 const std::string& level);
+
+    /** Route TCIM logs through the managed date/size sink. */
+    static bool register_tcim_log_handler(const std::string& log_root,
+                                          const std::string& log_file_name,
+                                          std::uintmax_t max_file_size_bytes,
+                                          int retention_days = 7);
+
+    /** Return log_root/YYYY-MM-DD for the current local date and create it if needed. */
+    static std::filesystem::path current_date_directory(const std::string& log_root);
+
+    /** Delete expired managed YYYY-MM-DD directories. Unmarked directories are never removed. */
+    static void cleanup_old_log_directories(const std::string& log_root, int retention_days);
 
     /**
      * Get the logger with module-name which you created with

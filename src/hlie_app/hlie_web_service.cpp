@@ -23,6 +23,7 @@
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_singleton.h"
 #include "hlie_base/hlie_util.h"
+#include "hlie_base/hlie_version.h"
 
 HLIE_NAMESPACE_BEGIN
 
@@ -257,7 +258,9 @@ namespace {
                 "replica.memory_saving",
             };
             static const std::unordered_set<std::string> int_keys = {
+                "log.max_file_size_mb",
                 "log.max_files",
+                "log.retention_days",
                 "log.tcim_level",
                 "balancer.heartbeat_interval_ms",
                 "replica.count",
@@ -412,6 +415,7 @@ namespace {
         const auto& config_service = Singleton<HLIEConfigService>::instance();
         const auto config = config_service->get_config(section);
         json response = {
+            {"version", HLIE_VERSION},
             {"path", config_service->get_config_path()},
             {"config", config_map_to_json(config)}
         };
@@ -452,6 +456,7 @@ namespace {
 
         json response = {
             {"code", 0},
+            {"version", HLIE_VERSION},
             {"path", config_service->get_config_path()},
             {"config", config_map_to_json(config_service->get_config(section))}
         };
@@ -493,6 +498,7 @@ namespace {
 
         const json response = {
             {"code", 0},
+            {"version", HLIE_VERSION},
             {"deleted", ret},
             {"section", section},
             {"keys", keys},
@@ -512,8 +518,7 @@ void HLIEWebService::init(int n_threads_http) {
     web_server_->set_default_headers({{"Server", "HLIECpp"}});
 
     web_server_->Get("/version", [](const httplib::Request&, httplib::Response& res) {
-        const std::string json_response = R"({"Version": "v1.7.0"})";
-        res.set_content(json_response, "application/json");
+        res.set_content(json{{"Version", HLIE_VERSION}}.dump(), "application/json");
     });
     web_server_->Get("/hlie/v1/config", handle_get_config);
     web_server_->Get("/hlie/v1/config/:section", handle_get_config);

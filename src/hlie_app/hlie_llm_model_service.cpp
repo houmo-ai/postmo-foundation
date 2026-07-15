@@ -99,7 +99,9 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     const int argc = static_cast<int>(argv_vector.size() - 1); // 不包括终止符nullptr
     // 解析llama-server参数，如果有外部相同配置会覆盖上面的Sampling参数
     if (!common_params_parse(argc, argv, params_, LLAMA_EXAMPLE_SERVER)) {
-        LOG_ERROR("Failed to merge llama-server params, try to abandon it.");
+        LOG_ERROR("Failed to parse llama-server params. Check [llm_params] and command-line values. "
+                  "For scaled LoRA adapters, use: --lora-scaled = FNAME:SCALE[,FNAME:SCALE...]");
+        return -1;
     } else {
         LOG_INFO("Successfully merged llama-server params");
     }
