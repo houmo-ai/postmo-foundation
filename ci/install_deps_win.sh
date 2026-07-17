@@ -4,9 +4,9 @@
 ARCH=x86_64
 
 # SDK URLs
-xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.3.0/2026/05/19/0015/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-1.3.0.tar.gz"
+xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.4.0/2026/07/13/2100/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-1.4.0.tar.gz"
 
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/07/16/1645/windows11/houmo-HLIELLama-xh2_2.1.1_windows11_x86_64.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/07/17/1320/windows11/houmo-HLIELLama-xh2_2.1.1_windows11_x86_64.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.3.0_windows11_x86_64.tar.gz"
 xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.1.0_windows11_x86_64.tar.gz"

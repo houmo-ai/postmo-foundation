@@ -67,7 +67,7 @@ namespace {
         if (name.size() < 4 || name.compare(name.size() - 4, 4, ".log") != 0) {
             return false;
         }
-        return name.rfind("houmo-llm-", 0) == 0 || name.rfind("access-", 0) == 0 ||
+        return name.rfind("hlie-llm-", 0) == 0 || name.rfind("access-", 0) == 0 ||
                name.rfind("service_boot-", 0) == 0 || name.rfind("tcim-", 0) == 0;
     }
 

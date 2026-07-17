@@ -705,9 +705,9 @@ int completion_load_model(HANDLE h, std::string model_path) {
         std::cout << "get userdata dir failed,write do D:\\,please makesure D exists" << std::endl;
     }
     std::string log_folder(userProfile);
-    std::string log_file = log_folder + "\\houmo-llm.log";
+    std::string log_file = log_folder + "\\hlie-llm.log";
 #else
-    std::string log_file = "houmo-llm.log";
+    std::string log_file = "hlie-llm.log";
 #endif
     std::cout << "final logfile path:" << log_file << std::endl;
 
@@ -1188,7 +1188,7 @@ bool HTTP_SERVER_API api_loadmodel_by_buffer(HANDLE handle, uint8_t** buffers, s
     SRV_DBG("buffers_count: %d\n", buffers_count);
 
     const auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    const auto file_sink = std::make_shared<spdlog::sinks::daily_file_sink_mt>("houmo-llm.log", 0, 0, false, 7);
+    const auto file_sink = std::make_shared<spdlog::sinks::daily_file_sink_mt>("hlie-llm.log", 0, 0, false, 7);
     std::vector<spdlog::sink_ptr> sinks{file_sink, console_sink};
     default_logger_ = std::make_shared<spdlog::logger>("HLIECpp", sinks.begin(), sinks.end());
     default_logger_->set_level(spdlog::level::debug);

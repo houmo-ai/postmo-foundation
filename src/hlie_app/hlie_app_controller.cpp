@@ -376,7 +376,7 @@ int HLIEWinAppController::initialize() {
         boot_logger->warn("TCIM managed log handler registration failed; use TCIM_LOG_FILE fallback");
     }
 
-    const std::string log_file_name = "houmo-llm-" + instance_id + ".log";
+    const std::string log_file_name = "hlie-llm-" + instance_id + ".log";
     const auto log_level = config_services->get_string("log", "level", "debug");
     const auto logger = HLIELogger::init_managed_default_logger(log_location, log_file_name, "HLIE", log_level,
                                                                 managed_log_config.max_file_size_bytes(),
@@ -455,7 +455,7 @@ int HLIELinuxAppController::initialize() {
         LOG_WARN("sys_config parsed failed and will use env[HLIE__MODEL__CUR_MODEL] to continue");
     }
 
-    const std::string log_location = config_services->get_string("log", "location", "/var/log/houmo/HLIECpp");
+    const std::string log_location = config_services->get_string("log", "location", "/var/log/HLIECpp");
     const auto managed_log_config = load_managed_log_config(config_services);
     const auto boot_logger = HLIELogger::create_managed_logger(log_location, "service_boot-" + instance_id + ".log",
                                                                HLIE_BOOT, "debug", managed_log_config.max_file_size_bytes(),
@@ -474,7 +474,7 @@ int HLIELinuxAppController::initialize() {
         boot_logger->warn("TCIM managed log handler registration failed; use TCIM_LOG_FILE fallback");
     }
 
-    const std::string log_file_name = "houmo-llm-" + instance_id + ".log";
+    const std::string log_file_name = "hlie-llm-" + instance_id + ".log";
     const auto log_level = config_services->get_string("log", "level", "debug");
     const auto logger = HLIELogger::init_managed_default_logger(log_location, log_file_name, "HLIE", log_level,
                                                                 managed_log_config.max_file_size_bytes(),

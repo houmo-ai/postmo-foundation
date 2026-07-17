@@ -81,7 +81,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
 
     LOG_INFO("Start to merge llama-server params");
     std::vector<char*> argv_vector;
-    argv_vector.push_back(const_cast<char*>("houmo-llm"));
+    argv_vector.push_back(const_cast<char*>("hlie-llm"));
 
     for (const auto& [key, value] : llm_params) {
         LOG_INFO("param: {} = {}", key, value);
