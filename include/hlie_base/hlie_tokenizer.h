@@ -149,6 +149,9 @@ public:
 private:
     std::unordered_map<std::string, int> token_to_id_; // token -> id
     std::unordered_map<int, std::string> id_to_token_; // id -> token (reverse lookup)
+    // Special tokens must bypass byte-level BPE. This list is populated from
+    // the GGUF vocabulary and sorted longest-first to handle overlapping names.
+    std::vector<hlie_token> special_token_ids_;
     bool skip_special_tokens_ = true;
 
 

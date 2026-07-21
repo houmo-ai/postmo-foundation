@@ -1,5 +1,6 @@
 #include "hlie_base/hlie_tokenizer.h"
 
+#include <algorithm>
 #include <fstream>
 #include <gguf.h>
 #include <queue>
@@ -11,7 +12,6 @@
 
 
 namespace {
-    std::vector<hlie_token> cache_special_tokens{151646};
     void append(const hlie_token token_id, std::vector<hlie_token>& output) {
         output.push_back(token_id);
     }
@@ -37,8 +37,8 @@ HLIE_NAMESPACE_BEGIN
 
 void HLIETokenizer::tokenizer_st_partition(std::forward_list<fragment_buffer_variant>& buffer) const {
     // for each special token
-    for (const hlie_token special_id : cache_special_tokens) {
-        const auto& text = std::string("<|endofprompt|>");// get_token_data(special_id);
+    for (const hlie_token special_id : special_token_ids_) {
+        const auto& text = get_token_data(special_id);
 
         // for each text fragment
         auto it = buffer.begin();
@@ -327,6 +327,7 @@ bool HLIETokenizer::load_from_gguf_ctx(gguf_context* ctx) {
 
     token_to_id_.clear();
     id_to_token_.clear();
+    special_token_ids_.clear();
     const uint32_t n_tokens = gguf_get_arr_n(ctx, token_idx);
     for (int32_t i = 0; i < static_cast<int32_t>(n_tokens); i++) {
         std::string word = gguf_get_arr_str(ctx, token_idx, i);
@@ -336,9 +337,18 @@ bool HLIETokenizer::load_from_gguf_ctx(gguf_context* ctx) {
 
         token_to_id_[word] = i;
         id_to_token_[i] = word;
+        if (word.size() >= 4 && word.starts_with("<|") && word.ends_with("|>")) {
+            special_token_ids_.push_back(i);
+        }
     }
 
-    LOG_INFO("Tokenizer loaded, size: {}", token_to_id_.size());
+    std::sort(special_token_ids_.begin(), special_token_ids_.end(),
+              [this](const hlie_token lhs, const hlie_token rhs) {
+                  return get_token_data(lhs).size() > get_token_data(rhs).size();
+              });
+
+    LOG_INFO("Tokenizer loaded, size: {}, special tokens: {}",
+             token_to_id_.size(), special_token_ids_.size());
 
     const auto merges_idx = gguf_find_key(ctx, "merges");
     if (merges_idx == -1) {

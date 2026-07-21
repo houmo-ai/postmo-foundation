@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <string>
+#include <vector>
 
 #include "hlie_base/hlie_base.h"
 
@@ -16,6 +17,7 @@ struct HLIEModelType {
     static constexpr auto WHISPER = "whisper";
     static constexpr auto COSYVOICE = "cosyvoice";
     static constexpr auto TTS = "tts";
+    static constexpr auto QWEN3_TTS = "qwen3_tts";
     static constexpr auto DOCUMENT = "document";
 
     // model real instance type

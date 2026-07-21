@@ -5,6 +5,7 @@
 #include "hlie_app/hlie_llm_model_service.h"
 #include "hlie_app/hlie_model_service_factory.h"
 #include "hlie_app/hlie_model_service.h"
+#include "hlie_app/hlie_qwen3_tts_model_service.h"
 #include "hlie_app/hlie_sd_model_service.h"
 #include "hlie_app/hlie_whisper_model_service.h"
 
@@ -65,6 +66,9 @@ std::shared_ptr<IHLIEModelService> HLIEModelServiceManager::get_by_type(const st
     if (type == HLIEModelType::COSYVOICE) {
         return cosy_voice_model_service_;
     }
+    if (type == HLIEModelType::TTS || type == HLIEModelType::QWEN3_TTS) {
+        return qwen3_tts_model_service_;
+    }
     if (type == HLIEModelType::DOCUMENT) {
         return document_pipeline_service_;
     }
@@ -89,6 +93,12 @@ bool HLIEModelServiceManager::load_whisper(const std::string& model_dir, const H
 bool HLIEModelServiceManager::load_cosyvoice(const std::string& model_dir, const HLIEModelInfo& model_info,
                                              const std::shared_ptr<HLIEDeviceService>& device_service) {
     return load_service(cosy_voice_model_service_, HLIEModelServiceFactory::create_cosyvoice, model_dir, model_info, device_service);
+}
+
+bool HLIEModelServiceManager::load_qwen3_tts(const std::string& model_dir, const HLIEModelInfo& model_info,
+                                             const std::shared_ptr<HLIEDeviceService>& device_service) {
+    return load_service(qwen3_tts_model_service_, HLIEModelServiceFactory::create_qwen3_tts,
+                        model_dir, model_info, device_service);
 }
 
 bool HLIEModelServiceManager::load_document_pipeline(const std::string& model_dir, const HLIEModelInfo& model_info,
@@ -136,6 +146,16 @@ bool HLIEModelServiceManager::start_cosyvoice(const std::string& model_dir, cons
                          model_dir, model_info, device_service);
 }
 
+bool HLIEModelServiceManager::start_qwen3_tts(const std::string& model_dir, const HLIEModelInfo& model_info,
+                                              const std::shared_ptr<HLIEDeviceService>& device_service) {
+    return start_service(qwen3_tts_model_service_,
+                         [this](const std::string& dir, const HLIEModelInfo& info,
+                                const std::shared_ptr<HLIEDeviceService>& service) {
+                             return load_qwen3_tts(dir, info, service);
+                         },
+                         model_dir, model_info, device_service);
+}
+
 bool HLIEModelServiceManager::start_document_pipeline(const std::string& model_dir, const HLIEModelInfo& model_info,
                                                       const std::shared_ptr<HLIEDeviceService>& device_service) {
     return start_service(document_pipeline_service_,
@@ -170,6 +190,12 @@ std::shared_ptr<CosyVoiceModelService> HLIEModelServiceManager::detach_cosyvoice
     return service;
 }
 
+std::shared_ptr<Qwen3TTSModelService> HLIEModelServiceManager::detach_qwen3_tts() {
+    auto service = qwen3_tts_model_service_;
+    qwen3_tts_model_service_.reset();
+    return service;
+}
+
 std::shared_ptr<DocumentPipelineService> HLIEModelServiceManager::detach_document_pipeline() {
     auto service = document_pipeline_service_;
     document_pipeline_service_.reset();
@@ -192,6 +218,10 @@ void HLIEModelServiceManager::reset_cosyvoice() {
     cosy_voice_model_service_.reset();
 }
 
+void HLIEModelServiceManager::reset_qwen3_tts() {
+    qwen3_tts_model_service_.reset();
+}
+
 void HLIEModelServiceManager::reset_document_pipeline() {
     document_pipeline_service_.reset();
 }
@@ -210,6 +240,10 @@ void HLIEModelServiceManager::stop_and_reset_whisper() {
 
 void HLIEModelServiceManager::stop_and_reset_cosyvoice() {
     stop_and_reset(cosy_voice_model_service_);
+}
+
+void HLIEModelServiceManager::stop_and_reset_qwen3_tts() {
+    stop_and_reset(qwen3_tts_model_service_);
 }
 
 void HLIEModelServiceManager::stop_and_reset_document_pipeline() {

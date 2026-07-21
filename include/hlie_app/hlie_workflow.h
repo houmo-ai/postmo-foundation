@@ -23,6 +23,7 @@ class SDModelService;
 class WhisperModelService;
 class HLIEConfigService;
 class CosyVoiceModelService;
+class Qwen3TTSModelService;
 
 class HLIEWorkflow {
 public:
@@ -79,6 +80,9 @@ private:
 
     int start_cosyvoice(std::optional<server_model_meta>& meta, std::unique_ptr<server_res_generator_light>& res, const server_http_req& req,
                        const std::string& model_name, const std::string& model_path, const std::string& devices);
+
+    int start_qwen3_tts(std::optional<server_model_meta>& meta, std::unique_ptr<server_res_generator_light>& res, const server_http_req& req,
+                        const std::string& model_name, const std::string& model_path, const std::string& devices);
 
     bool router_validate_model(const std::string& name, const std::unique_ptr<server_res_generator_light>& res);
 

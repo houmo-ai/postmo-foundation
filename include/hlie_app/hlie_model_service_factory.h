@@ -14,6 +14,7 @@ class LLModelService;
 class SDModelService;
 class WhisperModelService;
 class CosyVoiceModelService;
+class Qwen3TTSModelService;
 class DocumentPipelineService;
 
 // Service category used by the factory before creating a concrete service.
@@ -22,6 +23,7 @@ enum class ModelServiceKind {
     SD,
     Whisper,
     CosyVoice,
+    Qwen3TTS,
     Document,
 };
 
@@ -48,6 +50,7 @@ public:
     static std::shared_ptr<SDModelService> create_sd();
     static std::shared_ptr<WhisperModelService> create_whisper();
     static std::shared_ptr<CosyVoiceModelService> create_cosyvoice();
+    static std::shared_ptr<Qwen3TTSModelService> create_qwen3_tts();
     static std::shared_ptr<DocumentPipelineService> create_document_pipeline();
 };
 

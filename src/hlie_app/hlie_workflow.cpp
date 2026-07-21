@@ -29,6 +29,7 @@
 #include "hlie_app/hlie_sd_model_service.h"
 #include "hlie_app/hlie_whisper_model_service.h"
 #include "hlie_app/hlie_cosyvoice_model_service.h"
+#include "hlie_app/hlie_qwen3_tts_model_service.h"
 #include "hlie_app/hlie_ws_service.h"
 
 HLIE_NAMESPACE_BEGIN
@@ -566,6 +567,14 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                 }
                 break;
             }
+            case ModelServiceKind::Qwen3TTS: {
+                LOG_INFO("Initializing Qwen3TTSModelService");
+                if (!model_service_manager_.load_qwen3_tts(model_dir, model_info, device_service_)) {
+                    LOG_ERROR("failed to init the Qwen3-TTS model service");
+                    return -1;
+                }
+                break;
+            }
             case ModelServiceKind::SD: {
                 LOG_INFO("Initializing SDModelService");
                 if (!model_service_manager_.load_sd(model_dir, model_info, device_service_)) {
@@ -690,6 +699,14 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
             LOG_INFO("Initializing CosyVoiceModelService");
             if (!model_service_manager_.load_cosyvoice(model_dir, default_model_info, device_service_)) {
                 LOG_ERROR("failed to init the cosyvoice model service");
+                return -1;
+            }
+            break;
+        }
+        case ModelServiceKind::Qwen3TTS: {
+            LOG_INFO("Initializing Qwen3TTSModelService");
+            if (!model_service_manager_.load_qwen3_tts(model_dir, default_model_info, device_service_)) {
+                LOG_ERROR("failed to init the Qwen3-TTS model service");
                 return -1;
             }
             break;
@@ -829,6 +846,19 @@ void HLIEWorkflow::run() {
         }
     }
 
+    if (model_service_manager_.qwen3_tts()) {
+        model_service_manager_.qwen3_tts()->run();
+        const auto model_key = model_service_manager_.qwen3_tts()->get_model_key();
+        model_registry_.mark_loaded(model_key, port_);
+        if (is_slave_ && !replicas_mode_) {
+            std::thread([this, model_key] {
+                model_registry_.update_port(model_key, port_);
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                update_status(master_port_, model_key, port_);
+            }).detach();
+        }
+    }
+
     ensure_asr_websocket();
     start_residency_ttl_worker();
 }
@@ -860,6 +890,13 @@ void HLIEWorkflow::stop() {
             update_status(master_port_, model_service_manager_.cosyvoice()->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
         }
         model_service_manager_.stop_and_reset_cosyvoice();
+    }
+
+    if (model_service_manager_.qwen3_tts()) {
+        if (is_slave_ && !replicas_mode_) {
+            update_status(master_port_, model_service_manager_.qwen3_tts()->get_model_key(), port_, SERVER_MODEL_STATUS_UNLOADED);
+        }
+        model_service_manager_.stop_and_reset_qwen3_tts();
     }
 
     if (model_service_manager_.llm()) {
@@ -999,6 +1036,10 @@ int HLIEWorkflow::get_model_service_state() const {
         return model_service_manager_.cosyvoice()->get_state();
     }
 
+    if (model_service_manager_.qwen3_tts()) {
+        return model_service_manager_.qwen3_tts()->get_state();
+    }
+
     LOG_WARN("model service not initialized");
     return -1;
 }
@@ -1078,6 +1119,9 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
     auto body = json::parse(req.body);
     std::string model_type = body.value("model_type", LLM);
+    if (model_type == HLIEModelType::TTS) {
+        model_type = HLIEModelType::QWEN3_TTS;
+    }
     std::string devices = body.value("devices", "undefined");
     std::string model_name = body.value("model", std::string());
     const std::string model_path = body.value("model_path", std::string());
@@ -1413,6 +1457,11 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             LOG_ERROR("failed to start the COSYVOICE model");
             return res;
         }
+    } else if (model_type == HLIEModelType::QWEN3_TTS) {
+        if (start_qwen3_tts(meta, res, req, model_name, model_path, devices) < 0) {
+            LOG_ERROR("failed to start the Qwen3-TTS model");
+            return res;
+        }
     }
 
     // TODO: 模型启动参数校验, device 是否可用
@@ -1617,6 +1666,109 @@ int HLIEWorkflow::start_cosyvoice(std::optional<server_model_meta>& meta, std::u
         }
     }
 
+    return 0;
+}
+
+int HLIEWorkflow::start_qwen3_tts(std::optional<server_model_meta>& meta,
+                                  std::unique_ptr<server_res_generator_light>& res,
+                                  const server_http_req& req,
+                                  const std::string& model_name,
+                                  const std::string& model_path,
+                                  const std::string& devices) {
+    (void)req;
+    if (!meta) {
+        HLIEModelInfo model_info_tmp;
+        if (model_info_tmp.parse_from_gguf_filename(model_path) < 0) {
+            res->error(format_error_response_ex("invalid Qwen3-TTS model filename",
+                                                ERROR_TYPE_INVALID_REQUEST, 80007));
+            return -1;
+        }
+
+        ModelInstance model_instance;
+        server_model_meta model_meta;
+        model_meta.name = model_info_tmp.get_model_name();
+        model_instance.path = model_info_tmp.get_model_path();
+        model_instance.meta = std::move(model_meta);
+        const auto model_key = model_info_tmp.get_model_name();
+        model_info_tmp.model_key_ = model_key;
+        model_instance.model_info = model_info_tmp;
+        model_instance.key = model_key;
+        model_registry_.upsert(std::move(model_instance));
+        LOG_INFO("Service Starting Add Qwen3-TTS Model: {}", model_key);
+    }
+
+    const auto model_inst = get_model_inst(model_name);
+    if (!model_inst) {
+        res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
+        return -1;
+    }
+
+    const std::string model_key = model_inst->get().key;
+    auto model_info_opt = model_registry_.prepare_model_info_with_devices(model_key, devices);
+    if (!model_info_opt) {
+        res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
+        return -1;
+    }
+    auto model_info = std::move(*model_info_opt);
+    if (model_info.model_version_.empty() ||
+        !HlieUtil::version_ge(model_info.model_version_, "v1.0.0")) {
+        res->error(format_error_response_ex("build_version must be >= v1.0.0",
+                                            ERROR_TYPE_INVALID_REQUEST, 80007));
+        return -1;
+    }
+
+    model_registry_.mark_loading(model_key);
+    if (!model_service_manager_.qwen3_tts()) {
+        if (!model_service_manager_.start_qwen3_tts(model_dir_, model_info, device_service_)) {
+            LOG_ERROR("failed to init the Qwen3-TTS model service");
+            res->error(format_error_response_ex("failed to init the Qwen3-TTS model service",
+                                                ERROR_TYPE_SERVER, 80001));
+            rollback_model_start(model_key, "qwen3_tts_init_failed");
+            return -1;
+        }
+
+        mark_local_model_started(model_key,
+                                 model_service_manager_.qwen3_tts()->get_model_key(), false);
+        return 0;
+    }
+
+    if (port_ != master_port_) {
+        LOG_ERROR("slave cannot start new slave");
+        res->error(format_error_response_ex("slave cannot start new slave",
+                                            ERROR_TYPE_SERVER, 80001));
+        rollback_model_start(model_key, "slave_cannot_start_new_slave");
+        return -1;
+    }
+
+    const std::string json_info_file = generate_meta_info(model_info, model_dir_, res);
+    if (json_info_file.empty()) {
+        rollback_model_start(model_key, "generate_meta_info_failed");
+        return -1;
+    }
+
+    const auto instance_id = generate_instance_id();
+    std::vector args_for_sub_process = {
+        std::string("--instance_id"), std::to_string(instance_id),
+        std::string("--device_id"), devices,
+        std::string("--json_info"), json_info_file,
+    };
+    const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
+    for (const auto& [key, val] : args) {
+        args_for_sub_process.push_back(key);
+        args_for_sub_process.push_back(val);
+    }
+
+    const auto pid = Singleton<HLIEProcessManager>::instance()->create_process(
+        program_path_, args_for_sub_process, {model_name}, instance_id);
+    if (pid == 0 || pid == -1) {
+        LOG_ERROR("Failed to start Qwen3-TTS process for instance_id[{}]", instance_id);
+        res->error(format_error_response_ex("failed to start model subprocess",
+                                            ERROR_TYPE_SERVER, 80001));
+        rollback_model_start(model_key, "create_process_failed");
+        return -1;
+    }
+
+    LOG_INFO("Started Qwen3-TTS process PID[{}] instance_id[{}]", pid, instance_id);
     return 0;
 }
 
@@ -1994,6 +2146,31 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
             },
             method);
     };
+    auto route_qwen3_tts = [this](const server_http_req& req, auto handler) -> server_http_res_ptr {
+        std::shared_ptr<Qwen3TTSModelService> service;
+        std::unique_ptr<ModelRequestLease> lease;
+        std::string model_key;
+        {
+            std::lock_guard workflow_lock(mutex_);
+            service = model_service_manager_.qwen3_tts();
+            if (!service || service->get_state() != SERVER_STATE_READY) {
+                auto res = std::make_unique<server_res_generator_light>();
+                res->error(format_error_response("Model is not available for now.",
+                                                 ERROR_TYPE_UNAVAILABLE));
+                return res;
+            }
+            model_key = service->get_model_key();
+            lease = std::make_unique<ModelRequestLease>(model_registry_, model_key);
+            if (!lease->active()) {
+                auto res = std::make_unique<server_res_generator_light>();
+                res->error(format_error_response("model is not loaded",
+                                                 ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        }
+        return attach_model_request_lease(
+            (service.get()->*handler)(req), model_registry_, model_key, *lease);
+    };
     return {{
                 {"/health", "/v1/health"},
                 GET,
@@ -2078,28 +2255,103 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 {"/v1/audio/speech"},
                 POST,
                 nullptr,
-                true,
-                HLIEModelType::COSYVOICE,
+                false,
+                HLIEModelType::TTS,
                 [this](const httplib::Request& req, httplib::Response& res) {
-                    if (!model_service_manager_.cosyvoice() || model_service_manager_.cosyvoice()->get_state() != SERVER_STATE_READY) {
-                        auto error_data = format_error_response_ex("Model is not available for now.", ERROR_TYPE_UNAVAILABLE, 80004);
+                    const auto fail = [&](const std::string& message, const error_type type) {
+                        const auto error_data = format_error_response_ex(message, type, 80004);
                         const json final_response{{"error", error_data}};
                         res.set_content(safe_json_to_str(final_response), MIMETYPE_JSON);
                         res.status = json_value(error_data, "code", 500);
+                    };
+                    const auto body = json::parse(req.body, nullptr, false);
+                    if (body.is_discarded() || !body.is_object()) {
+                        fail("request body must be a JSON object", ERROR_TYPE_INVALID_REQUEST);
                         return;
                     }
 
-                    const auto model_key = model_service_manager_.cosyvoice()->get_model_key();
-                    ModelRequestLease lease(model_registry_, model_key);
-                    if (!lease.active()) {
-                        auto error_data = format_error_response_ex("model is not loaded", ERROR_TYPE_INVALID_REQUEST, 80004);
-                        const json final_response{{"error", error_data}};
-                        res.set_content(safe_json_to_str(final_response), MIMETYPE_JSON);
-                        res.status = json_value(error_data, "code", 500);
+                    enum class SpeechBackend { NONE, COSYVOICE, QWEN3_TTS };
+                    SpeechBackend backend = SpeechBackend::NONE;
+                    const std::string requested_model =
+                        body.contains("model") && body.at("model").is_string()
+                            ? body.at("model").get<std::string>() : std::string();
+                    if (body.contains("model") && !body.at("model").is_null() &&
+                        !body.at("model").is_string()) {
+                        fail("model must be a string", ERROR_TYPE_INVALID_REQUEST);
                         return;
                     }
 
-                    model_service_manager_.cosyvoice()->handle_speech(req, res);
+                    std::shared_ptr<Qwen3TTSModelService> qwen_service;
+                    std::shared_ptr<CosyVoiceModelService> cosy_service;
+                    std::unique_ptr<ModelRequestLease> lease;
+                    {
+                        std::lock_guard workflow_lock(mutex_);
+                        qwen_service = model_service_manager_.qwen3_tts();
+                        cosy_service = model_service_manager_.cosyvoice();
+                        const bool cosy_ready = cosy_service &&
+                            cosy_service->get_state() == SERVER_STATE_READY;
+                        const bool qwen_ready = qwen_service &&
+                            qwen_service->get_state() == SERVER_STATE_READY;
+
+                        if (!requested_model.empty()) {
+                            std::string requested_type;
+                            if (const auto instance = get_model_inst(requested_model)) {
+                                requested_type = normalize_model_name(
+                                    instance->get().model_info.get_model_type());
+                            }
+                            const std::string normalized = normalize_model_name(requested_model);
+                            if (requested_type == HLIEModelType::COSYVOICE ||
+                                normalized == HLIEModelType::COSYVOICE ||
+                                (cosy_service && normalized == normalize_model_name(
+                                    cosy_service->get_model_key()))) {
+                                backend = SpeechBackend::COSYVOICE;
+                            } else if (requested_type == HLIEModelType::QWEN3_TTS ||
+                                       requested_type == HLIEModelType::TTS ||
+                                       normalized == HLIEModelType::QWEN3_TTS ||
+                                       normalized == "qwen3-tts" ||
+                                       (qwen_service && normalized == normalize_model_name(
+                                           qwen_service->get_model_key()))) {
+                                backend = SpeechBackend::QWEN3_TTS;
+                            } else {
+                                fail("requested speech model is not loaded",
+                                     ERROR_TYPE_INVALID_REQUEST);
+                                return;
+                            }
+                        } else if (qwen_ready != cosy_ready) {
+                            backend = qwen_ready ? SpeechBackend::QWEN3_TTS
+                                                 : SpeechBackend::COSYVOICE;
+                        } else if (qwen_ready && cosy_ready) {
+                            fail("multiple speech models are loaded; specify model",
+                                 ERROR_TYPE_INVALID_REQUEST);
+                            return;
+                        }
+
+                        if (backend == SpeechBackend::QWEN3_TTS && !qwen_ready) {
+                            fail("Qwen3-TTS model is not available", ERROR_TYPE_UNAVAILABLE);
+                            return;
+                        }
+                        if (backend == SpeechBackend::COSYVOICE && !cosy_ready) {
+                            fail("CosyVoice model is not available", ERROR_TYPE_UNAVAILABLE);
+                            return;
+                        }
+                        if (backend == SpeechBackend::NONE) {
+                            fail("No speech model is available", ERROR_TYPE_UNAVAILABLE);
+                            return;
+                        }
+                        const std::string model_key = backend == SpeechBackend::QWEN3_TTS
+                            ? qwen_service->get_model_key() : cosy_service->get_model_key();
+                        lease = std::make_unique<ModelRequestLease>(model_registry_, model_key);
+                        if (!lease->active()) {
+                            fail("model is not loaded", ERROR_TYPE_INVALID_REQUEST);
+                            return;
+                        }
+                    }
+
+                    if (backend == SpeechBackend::QWEN3_TTS) {
+                        qwen_service->handle_speech(req, res);
+                    } else {
+                        cosy_service->handle_speech(req, res);
+                    }
                 },
             },
             {
@@ -2228,6 +2480,42 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 false // 不需要模型Running
             },
             {
+                {"/hlie/v1/qwen3_tts/prefill_debug"},
+                POST,
+                [route_qwen3_tts](const server_http_req& req) -> server_http_res_ptr {
+                    return route_qwen3_tts(req, &Qwen3TTSModelService::handle_prefill_debug);
+                },
+                true,
+                HLIEModelType::QWEN3_TTS
+            },
+            {
+                {"/hlie/v1/qwen3_tts/codec_frames_debug"},
+                POST,
+                [route_qwen3_tts](const server_http_req& req) -> server_http_res_ptr {
+                    return route_qwen3_tts(req, &Qwen3TTSModelService::handle_codec_frames_debug);
+                },
+                true,
+                HLIEModelType::QWEN3_TTS
+            },
+            {
+                {"/hlie/v1/qwen3_tts/speech_debug"},
+                POST,
+                [route_qwen3_tts](const server_http_req& req) -> server_http_res_ptr {
+                    return route_qwen3_tts(req, &Qwen3TTSModelService::handle_speech_debug);
+                },
+                true,
+                HLIEModelType::QWEN3_TTS
+            },
+            {
+                {"/hlie/v1/qwen3_tts/stateful_decoder_debug"},
+                POST,
+                [route_qwen3_tts](const server_http_req& req) -> server_http_res_ptr {
+                    return route_qwen3_tts(req, &Qwen3TTSModelService::handle_stateful_decoder_debug);
+                },
+                true,
+                HLIEModelType::QWEN3_TTS
+            },
+            {
                 {"/hlie/v1/unload_model", "/models/unload"},
                 POST,
                 [this](const server_http_req& req) -> server_http_res_ptr { return handle_unload_model(req); },
@@ -2253,6 +2541,10 @@ void HLIEWorkflow::set_server_port(const int port) {
     if (model_service_manager_.whisper()) {
         model_registry_.update_port(model_service_manager_.whisper()->get_model_key(), port);
     }
+
+    if (model_service_manager_.qwen3_tts()) {
+        model_registry_.update_port(model_service_manager_.qwen3_tts()->get_model_key(), port);
+    }
 }
 
 server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
@@ -2276,6 +2568,7 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
         std::shared_ptr<SDModelService> sd_to_stop;
         std::shared_ptr<WhisperModelService> whisper_to_stop;
         std::shared_ptr<CosyVoiceModelService> cosy_voice_to_stop;
+        std::shared_ptr<Qwen3TTSModelService> qwen3_tts_to_stop;
         std::vector<std::string> busy_models;
         std::vector<std::string> eviction_keys;
         {
@@ -2319,6 +2612,17 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
                 }
             }
 
+            if (model_service_manager_.qwen3_tts()) {
+                const auto model_key = model_service_manager_.qwen3_tts()->get_model_key();
+                if (model_registry_.try_begin_eviction(model_key)) {
+                    eviction_keys.push_back(model_key);
+                } else {
+                    LOG_WARN("Model stop_service skipped busy Qwen3-TTS model: key={}",
+                             json(model_key).dump());
+                    busy_models.push_back(model_key);
+                }
+            }
+
             if (!busy_models.empty()) {
                 for (const auto& key : eviction_keys) {
                     model_registry_.abort_eviction(key);
@@ -2336,6 +2640,9 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
                 }
                 if (model_service_manager_.cosyvoice()) {
                     cosy_voice_to_stop = model_service_manager_.detach_cosyvoice();
+                }
+                if (model_service_manager_.qwen3_tts()) {
+                    qwen3_tts_to_stop = model_service_manager_.detach_qwen3_tts();
                 }
             }
         }
@@ -2367,6 +2674,7 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
         stop_outside_workflow_lock(sd_to_stop, SD);
         stop_outside_workflow_lock(whisper_to_stop, WHISPER);
         stop_outside_workflow_lock(cosy_voice_to_stop, HLIEModelType::COSYVOICE);
+        stop_outside_workflow_lock(qwen3_tts_to_stop, HLIEModelType::QWEN3_TTS);
         if (llm_to_stop) {
             model_registry_.mark_unloaded(llm_to_stop->get_model_key());
         }
@@ -2378,6 +2686,9 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
         }
         if (cosy_voice_to_stop) {
             model_registry_.mark_unloaded(cosy_voice_to_stop->get_model_key());
+        }
+        if (qwen3_tts_to_stop) {
+            model_registry_.mark_unloaded(qwen3_tts_to_stop->get_model_key());
         }
 
         LOG_INFO("Succeed to stop service process for instance_id[{}][{}]", instance_id, process_id);
@@ -2460,6 +2771,16 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
         }
     }
 
+    if (model_service_manager_.qwen3_tts()) {
+        const auto model_inst = get_model_inst(model_service_manager_.qwen3_tts()->get_model_key());
+        const std::string model_name = model_inst
+                                           ? model_inst->get().model_info.get_model_name()
+                                           : model_service_manager_.qwen3_tts()->get_model_key();
+        if (!model_name.empty()) {
+            models.push_back(model_name);
+        }
+    }
+
     processors.push_back({{"params", ""},
                           {"instance_id", 0},
                           {"port", port_},
@@ -2536,7 +2857,10 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
     }
 
     const auto body = json::parse(req.body);
-    const std::string model_type = body.value("model_type", LLM);
+    std::string model_type = body.value("model_type", LLM);
+    if (model_type == HLIEModelType::TTS) {
+        model_type = HLIEModelType::QWEN3_TTS;
+    }
     if (!HLIEModelServiceFactory::is_supported_model_type(model_type)) {
         res->error(format_error_response_ex("Invalid model type.", ERROR_TYPE_INVALID_REQUEST, 80006));
         return res;
@@ -2547,6 +2871,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
     std::shared_ptr<SDModelService> sd_to_stop;
     std::shared_ptr<WhisperModelService> whisper_to_stop;
     std::shared_ptr<CosyVoiceModelService> cosy_voice_to_stop;
+    std::shared_ptr<Qwen3TTSModelService> qwen3_tts_to_stop;
     std::string notify_model_key;
     bool unload_refused = false;
     {
@@ -2580,6 +2905,13 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
             } else {
                 unload_refused = true;
             }
+        } else if (model_type == HLIEModelType::QWEN3_TTS && model_service_manager_.qwen3_tts()) {
+            notify_model_key = model_service_manager_.qwen3_tts()->get_model_key();
+            if (model_registry_.try_begin_eviction(notify_model_key)) {
+                qwen3_tts_to_stop = model_service_manager_.detach_qwen3_tts();
+            } else {
+                unload_refused = true;
+            }
         }
     }
 
@@ -2607,6 +2939,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
     stop_outside_workflow_lock(sd_to_stop, SD);
     stop_outside_workflow_lock(whisper_to_stop, WHISPER);
     stop_outside_workflow_lock(cosy_voice_to_stop, HLIEModelType::COSYVOICE);
+    stop_outside_workflow_lock(qwen3_tts_to_stop, HLIEModelType::QWEN3_TTS);
     if (!notify_model_key.empty()) {
         model_registry_.mark_unloaded(notify_model_key);
         slave_cv_.notify_all();
@@ -2649,6 +2982,7 @@ bool HLIEWorkflow::evict_model(const ModelInstance& model_inst, const std::strin
     std::shared_ptr<SDModelService> sd_to_stop;
     std::shared_ptr<WhisperModelService> whisper_to_stop;
     std::shared_ptr<CosyVoiceModelService> cosy_voice_to_stop;
+    std::shared_ptr<Qwen3TTSModelService> qwen3_tts_to_stop;
     {
         std::unique_lock lock(mutex_);
         if (model_service_manager_.llm() && matches(model_service_manager_.llm()->get_model_key())) {
@@ -2667,6 +3001,10 @@ bool HLIEWorkflow::evict_model(const ModelInstance& model_inst, const std::strin
         } else if (model_service_manager_.cosyvoice() && matches(model_service_manager_.cosyvoice()->get_model_key())) {
             cosy_voice_to_stop = model_service_manager_.detach_cosyvoice();
             local_service_type = HLIEModelType::COSYVOICE;
+            evicted = true;
+        } else if (model_service_manager_.qwen3_tts() && matches(model_service_manager_.qwen3_tts()->get_model_key())) {
+            qwen3_tts_to_stop = model_service_manager_.detach_qwen3_tts();
+            local_service_type = HLIEModelType::QWEN3_TTS;
             evicted = true;
         }
     }
@@ -2690,6 +3028,7 @@ bool HLIEWorkflow::evict_model(const ModelInstance& model_inst, const std::strin
     stop_evicted_service(sd_to_stop);
     stop_evicted_service(whisper_to_stop);
     stop_evicted_service(cosy_voice_to_stop);
+    stop_evicted_service(qwen3_tts_to_stop);
 
     if (!evicted) {
         const auto processes = Singleton<HLIEProcessManager>::instance()->get_running_processes();

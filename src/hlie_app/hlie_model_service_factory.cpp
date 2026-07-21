@@ -5,6 +5,7 @@
 #include "hlie_app/hlie_llm_model_service.h"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_app/hlie_model_service.h"
+#include "hlie_app/hlie_qwen3_tts_model_service.h"
 #include "hlie_app/hlie_sd_model_service.h"
 #include "hlie_app/hlie_whisper_model_service.h"
 #include "hlie_base/hlie_util.h"
@@ -13,6 +14,12 @@ HLIE_NAMESPACE_BEGIN
 
 ModelServiceKind HLIEModelServiceFactory::service_kind(const HLIEModelInfo& model_info) {
     const auto& model_name = model_info.get_model_name();
+    const auto& model_type = model_info.get_model_type();
+    if (model_type == HLIEModelType::TTS || model_type == HLIEModelType::QWEN3_TTS ||
+        HlieUtil::contains_ignore_case(model_name, "qwen3-tts") ||
+        HlieUtil::contains_ignore_case(model_name, "qwen3_tts")) {
+        return ModelServiceKind::Qwen3TTS;
+    }
     if (HlieUtil::contains_ignore_case(model_name, WHISPER)) {
         return ModelServiceKind::Whisper;
     }
@@ -31,6 +38,8 @@ std::shared_ptr<IHLIEModelService> HLIEModelServiceFactory::create_by_model_info
         return create_whisper();
     case ModelServiceKind::CosyVoice:
         return create_cosyvoice();
+    case ModelServiceKind::Qwen3TTS:
+        return create_qwen3_tts();
     case ModelServiceKind::SD:
         return create_sd();
     case ModelServiceKind::LLM:
@@ -42,6 +51,7 @@ std::shared_ptr<IHLIEModelService> HLIEModelServiceFactory::create_by_model_info
 bool HLIEModelServiceFactory::is_supported_model_type(const std::string& model_type) {
     return model_type == HLIEModelType::LLM || model_type == HLIEModelType::SD ||
            model_type == HLIEModelType::WHISPER || model_type == HLIEModelType::COSYVOICE ||
+           model_type == HLIEModelType::TTS || model_type == HLIEModelType::QWEN3_TTS ||
            model_type == HLIEModelType::DOCUMENT;
 }
 
@@ -57,6 +67,9 @@ std::shared_ptr<IHLIEModelService> HLIEModelServiceFactory::create_by_model_type
     }
     if (model_type == HLIEModelType::COSYVOICE) {
         return create_cosyvoice();
+    }
+    if (model_type == HLIEModelType::TTS || model_type == HLIEModelType::QWEN3_TTS) {
+        return create_qwen3_tts();
     }
     if (model_type == HLIEModelType::DOCUMENT) {
         return create_document_pipeline();
@@ -78,6 +91,10 @@ std::shared_ptr<WhisperModelService> HLIEModelServiceFactory::create_whisper() {
 
 std::shared_ptr<CosyVoiceModelService> HLIEModelServiceFactory::create_cosyvoice() {
     return std::make_shared<CosyVoiceModelService>();
+}
+
+std::shared_ptr<Qwen3TTSModelService> HLIEModelServiceFactory::create_qwen3_tts() {
+    return std::make_shared<Qwen3TTSModelService>();
 }
 
 std::shared_ptr<DocumentPipelineService> HLIEModelServiceFactory::create_document_pipeline() {
