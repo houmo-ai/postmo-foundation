@@ -63,10 +63,10 @@ std::shared_ptr<IHLIEModelService> HLIEModelServiceManager::get_by_type(const st
     if (type == HLIEModelType::WHISPER) {
         return whisper_model_service_;
     }
-    if (type == HLIEModelType::COSYVOICE) {
+    if (type == HLIEModelType::COSYVOICE || type == HLIEModelType::TTS) {
         return cosy_voice_model_service_;
     }
-    if (type == HLIEModelType::TTS || type == HLIEModelType::QWEN3_TTS) {
+    if (type == HLIEModelType::QWEN3_TTS) {
         return qwen3_tts_model_service_;
     }
     if (type == HLIEModelType::DOCUMENT) {

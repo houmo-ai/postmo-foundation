@@ -1120,7 +1120,9 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     auto body = json::parse(req.body);
     std::string model_type = body.value("model_type", LLM);
     if (model_type == HLIEModelType::TTS) {
-        model_type = HLIEModelType::QWEN3_TTS;
+        // Keep the historical generic TTS alias bound to CosyVoice. Qwen3-TTS
+        // has its own explicit model type and must not hijack legacy clients.
+        model_type = HLIEModelType::COSYVOICE;
     }
     std::string devices = body.value("devices", "undefined");
     std::string model_name = body.value("model", std::string());
@@ -2301,12 +2303,13 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                             }
                             const std::string normalized = normalize_model_name(requested_model);
                             if (requested_type == HLIEModelType::COSYVOICE ||
+                                requested_type == HLIEModelType::TTS ||
                                 normalized == HLIEModelType::COSYVOICE ||
+                                normalized == HLIEModelType::TTS ||
                                 (cosy_service && normalized == normalize_model_name(
                                     cosy_service->get_model_key()))) {
                                 backend = SpeechBackend::COSYVOICE;
                             } else if (requested_type == HLIEModelType::QWEN3_TTS ||
-                                       requested_type == HLIEModelType::TTS ||
                                        normalized == HLIEModelType::QWEN3_TTS ||
                                        normalized == "qwen3-tts" ||
                                        (qwen_service && normalized == normalize_model_name(
@@ -2317,11 +2320,13 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                                      ERROR_TYPE_INVALID_REQUEST);
                                 return;
                             }
-                        } else if (qwen_ready != cosy_ready) {
-                            backend = qwen_ready ? SpeechBackend::QWEN3_TTS
-                                                 : SpeechBackend::COSYVOICE;
-                        } else if (qwen_ready && cosy_ready) {
-                            fail("multiple speech models are loaded; specify model",
+                        } else if (cosy_ready) {
+                            // Backward compatibility: /v1/audio/speech without
+                            // a model has always meant CosyVoice, including its
+                            // prompt_text/prompt_wav_path voice-clone fields.
+                            backend = SpeechBackend::COSYVOICE;
+                        } else if (qwen_ready) {
+                            fail("model is required when using Qwen3-TTS",
                                  ERROR_TYPE_INVALID_REQUEST);
                             return;
                         }
@@ -2347,6 +2352,12 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                         }
                     }
 
+                    const char* backend_name = backend == SpeechBackend::QWEN3_TTS
+                        ? HLIEModelType::QWEN3_TTS : HLIEModelType::COSYVOICE;
+                    res.set_header("X-HLIE-TTS-Backend", backend_name);
+                    LOG_INFO("Speech request routed to {} (requested_model={})",
+                             backend_name,
+                             requested_model.empty() ? "<legacy-default>" : requested_model);
                     if (backend == SpeechBackend::QWEN3_TTS) {
                         qwen_service->handle_speech(req, res);
                     } else {
@@ -2859,7 +2870,7 @@ server_http_res_ptr HLIEWorkflow::handle_unload_model(const server_http_req& req
     const auto body = json::parse(req.body);
     std::string model_type = body.value("model_type", LLM);
     if (model_type == HLIEModelType::TTS) {
-        model_type = HLIEModelType::QWEN3_TTS;
+        model_type = HLIEModelType::COSYVOICE;
     }
     if (!HLIEModelServiceFactory::is_supported_model_type(model_type)) {
         res->error(format_error_response_ex("Invalid model type.", ERROR_TYPE_INVALID_REQUEST, 80006));

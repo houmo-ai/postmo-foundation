@@ -402,7 +402,7 @@ void HLIEWebSocketService::run(AudioHandler handler, const int port) {
                  .maxBackpressure = 4 * 1024 * 1024,
                  .closeOnBackpressureLimit = false,
                  .resetIdleTimeoutOnSend = true,
-                 .sendPingsAutomatically = false,
+                 .sendPingsAutomatically = true,
                  .upgrade =
                      [](auto* res, auto* req, auto* context) {
                          Session session;

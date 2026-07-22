@@ -1,4 +1,5 @@
 #include "hlie_app/models/hlie_cosyvoice_model.h"
+#include "hlie_app/models/hlie_cosyvoice3_special_tokens.h"
 
 #include <cstring>
 #include <random>
@@ -474,7 +475,31 @@ int HLIECosyVoiceModel::load_model(const std::string& model) {
         }
 
         tokenizer_ = std::make_shared<HLIETokenizer>();
-        tokenizer_->load_from_gguf_ctx(ctx);
+        if (!tokenizer_->load_from_gguf_ctx(ctx)) {
+            LOG_ERROR("Failed to load CosyVoice3 tokenizer from GGUF");
+            ggml_free(ctx_data);
+            gguf_free(ctx);
+            return -1;
+        }
+        if (!tokenizer_->add_special_tokens(cosyvoice3::kSpecialTokens.data(),
+                                            cosyvoice3::kSpecialTokens.size(),
+                                            cosyvoice3::kSpecialTokenFirstId)) {
+            LOG_ERROR("Failed to register CosyVoice3 special tokens");
+            ggml_free(ctx_data);
+            gguf_free(ctx);
+            return -1;
+        }
+        constexpr int32_t kEndOfPromptOffset = 3;
+        constexpr int32_t kEndOfPromptId =
+            cosyvoice3::kSpecialTokenFirstId + kEndOfPromptOffset;
+        if (tokenizer_->text_to_token("<|endofprompt|>") != kEndOfPromptId) {
+            LOG_ERROR("CosyVoice3 <|endofprompt|> token ID mismatch, expected {}",
+                      kEndOfPromptId);
+            ggml_free(ctx_data);
+            gguf_free(ctx);
+            return -1;
+        }
+
 
         ggml_free(ctx_data);
         gguf_free(ctx);

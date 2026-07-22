@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "sections": {
+    "server": {
+      "description": "HTTP service and hardware device settings.",
+      "keys": {
+        "port": {
+          "type": "integer",
+          "description": "TCP port used by the HTTP API service."
+        },
+        "devices": {
+          "type": "string",
+          "description": "Comma-separated device IDs available to this service instance."
+        },
+        "rk_perf": {
+          "type": "boolean",
+          "description": "Enable RK3588 CPU affinity and TCIM synchronization optimizations."
+        },
+        "rk_perf_cores": {
+          "type": "string",
+          "description": "Comma-separated RK3588 Cortex-A76 CPU core IDs used when rk_perf is enabled."
+        },
+        "replicas": {
+          "type": "integer",
+          "description": "Legacy total process instance count; use replica.count for new configurations."
+        },
+        "memory_saving": {
+          "type": "boolean",
+          "description": "Legacy worker delayed-loading switch; use replica.memory_saving for new configurations."
+        }
+      }
+    },
+    "replica": {
+      "description": "Multi-process replica scheduling settings.",
+      "keys": {
+        "count": {
+          "type": "integer",
+          "description": "Total hi.cpp process instances, including the master instance."
+        },
+        "device_policy": {
+          "type": "string",
+          "description": "Policy used to assign devices to replica processes.",
+          "options": [
+            "prefer_idle_card",
+            "prefer_used_card",
+            "exclusive_card"
+          ]
+        },
+        "max_instances_per_device": {
+          "type": "integer",
+          "description": "Maximum process instances assigned to one device unless exclusive_card is selected."
+        },
+        "memory_saving": {
+          "type": "boolean",
+          "description": "Delay worker model loading to reduce peak startup memory use."
+        },
+        "startup_delay_sec": {
+          "type": "integer",
+          "description": "Per-instance startup delay in seconds when memory_saving is enabled."
+        }
+      }
+    },
+    "balancer": {
+      "description": "External management service and load balancer registration settings.",
+      "keys": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Register this service instance with the external management service."
+        },
+        "management_url": {
+          "type": "string",
+          "description": "Base URL of the external management service."
+        },
+        "target_host": {
+          "type": "string",
+          "description": "Host address advertised by this instance to the management service."
+        },
+        "heartbeat_interval_ms": {
+          "type": "integer",
+          "description": "Heartbeat interval to the management service in milliseconds."
+        }
+      }
+    },
+    "log": {
+      "description": "Application and TCIM logging settings.",
+      "keys": {
+        "level": {
+          "type": "string",
+          "description": "Application log verbosity level.",
+          "options": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ]
+        },
+        "tcim_level": {
+          "type": "integer",
+          "description": "TCIM log level: 1=info, 2=error, 3=warn, 4=debug.",
+          "options": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "retention_days": {
+          "type": "integer",
+          "description": "Number of calendar-day log directories retained, including today."
+        },
+        "max_files": {
+          "type": "integer",
+          "description": "Legacy maximum number of rotated log files."
+        },
+        "max_file_size_mb": {
+          "type": "integer",
+          "description": "Maximum size of each application and TCIM log part in MiB."
+        },
+        "location": {
+          "type": "string",
+          "description": "Directory used to store application log files."
+        },
+        "open_console_window": {
+          "type": "boolean",
+          "description": "Open a console window when running the Windows SDK or demo application."
+        }
+      }
+    },
+    "llm_params": {
+      "description": "Command-line options passed through to llama-server.",
+      "keys": {
+        "--jinja": {
+          "type": "string",
+          "description": "Enable llama-server Jinja chat template processing when the option is present."
+        },
+        "--reasoning-format": {
+          "type": "string",
+          "description": "Reasoning content extraction format used by llama-server.",
+          "options": [
+            "auto",
+            "none",
+            "deepseek",
+            "deepseek-legacy"
+          ]
+        }
+      }
+    },
+    "model": {
+      "description": "Model discovery, loading, and runtime residency settings.",
+      "keys": {
+        "cur_model": {
+          "type": "string",
+          "description": "Root directory scanned for model files."
+        },
+        "default": {
+          "type": "string",
+          "description": "Default LLM or Whisper model name without its file extension."
+        },
+        "default_mmproj": {
+          "type": "string",
+          "description": "Default multimodal projector model name without its file extension."
+        },
+        "enable_sd3": {
+          "type": "boolean",
+          "description": "Load the configured Stable Diffusion 3 model by default."
+        },
+        "auto_load": {
+          "type": "boolean",
+          "description": "Automatically load the model requested by completion or embedding APIs."
+        },
+        "auto_unload": {
+          "type": "boolean",
+          "description": "Allow idle models to be evicted by memory, count, or idle-time policies."
+        },
+        "idle_ttl_sec": {
+          "type": "integer",
+          "description": "Idle time in seconds before a model may be evicted; 0 disables TTL eviction."
+        },
+        "max_loaded_models": {
+          "type": "integer",
+          "description": "Maximum concurrently loaded models; 0 means unlimited."
+        },
+        "pinned_models": {
+          "type": "string",
+          "description": "Comma-separated model identifiers protected from automatic eviction."
+        },
+        "llm_lazy_mode": {
+          "type": "boolean",
+          "description": "Enable lazy loading for LLM models."
+        }
+      }
+    }
+  }
+}

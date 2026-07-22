@@ -320,6 +320,8 @@ private:
 };
 
 
+
+
 HLIE_NAMESPACE_END
 
 #endif // HLIE_COSYVOICE_MODEL_H

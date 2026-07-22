@@ -51,8 +51,9 @@ preserving the original portable bundle layout.
 
 ## Dynamic loading
 
-The C++ service accepts both `qwen3_tts` and the compatibility alias `tts` as
-the dynamic service type. For example:
+The C++ service uses the explicit dynamic service type `qwen3_tts`. The
+generic legacy type `tts` remains an alias for CosyVoice so existing
+voice-clone clients are not redirected to Qwen3-TTS. For example:
 
 ```json
 {
@@ -87,6 +88,10 @@ loaded model key. `input` and `voice` follow the OpenAI request surface;
 `language` and `max_frames` are optional HLIE extensions. The current native
 backend supports `response_format=wav` and `speed=1.0`. Streaming behavior and
 additional encoded formats will be added separately.
+
+Requests without a `model` preserve the historical CosyVoice behavior,
+including `prompt_text` and `prompt_wav_path`. Qwen3-TTS requests must select
+the Qwen3-TTS model explicitly.
 
 The production route samples Talker with temperature 0.9 and top-k 50, plus
 repetition penalty, minimum EOS length, and reserved-token suppression. Talker

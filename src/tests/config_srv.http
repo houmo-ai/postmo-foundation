@@ -1,7 +1,7 @@
 @baseUrl = http://127.0.0.1:7901
 
 ### Get full sys.cfg
-GET {{baseUrl}}/hlie/v1/config
+GET {{baseUrl}}/hlie/v2/config
 Content-Type: application/json
 
 ### Get config by query section
@@ -10,6 +10,14 @@ Content-Type: application/json
 
 ### Get config by path section
 GET {{baseUrl}}/hlie/v1/config/server
+Content-Type: application/json
+
+### Get v2 config with section/key descriptions, types, and enum options
+GET {{baseUrl}}/hlie/v2/config
+Content-Type: application/json
+
+### Get one v2 config section with metadata
+GET {{baseUrl}}/hlie/v2/config/replica
 Content-Type: application/json
 
 ### Update config by explicit section and values

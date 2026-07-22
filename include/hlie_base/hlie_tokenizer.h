@@ -4,6 +4,7 @@
 #include <forward_list>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -122,6 +123,14 @@ public:
     bool load_from_gguf_ctx(gguf_context* ctx);
 
     /**
+     * Register tokens that must bypass byte-level BPE.
+     * IDs are assigned consecutively from first_token_id.
+     * Existing token/ID mappings must match exactly; conflicts are rejected.
+     */
+    bool add_special_tokens(const std::string_view* tokens, size_t count,
+                            hlie_token first_token_id);
+
+    /**
      * Encode text to token IDs.
      * @param text Input text
      * @return Vector of token IDs
@@ -188,6 +197,7 @@ private:
      * Check if token ID is a special token
      */
     bool is_special_token(int token_id);
+    void sort_special_tokens();
 
     /**
      * Decode Unicode escape sequences in JSON (\uXXXX)

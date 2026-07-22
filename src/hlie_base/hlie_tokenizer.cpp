@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <fstream>
 #include <gguf.h>
+#include <limits>
 #include <queue>
 #include <regex>
 
@@ -342,10 +343,7 @@ bool HLIETokenizer::load_from_gguf_ctx(gguf_context* ctx) {
         }
     }
 
-    std::sort(special_token_ids_.begin(), special_token_ids_.end(),
-              [this](const hlie_token lhs, const hlie_token rhs) {
-                  return get_token_data(lhs).size() > get_token_data(rhs).size();
-              });
+    sort_special_tokens();
 
     LOG_INFO("Tokenizer loaded, size: {}, special tokens: {}",
              token_to_id_.size(), special_token_ids_.size());
@@ -374,6 +372,60 @@ bool HLIETokenizer::load_from_gguf_ctx(gguf_context* ctx) {
     }
 
     return true;
+}
+
+bool HLIETokenizer::add_special_tokens(const std::string_view* tokens,
+                                       const size_t count,
+                                       const hlie_token first_token_id) {
+    if ((count > 0 && tokens == nullptr) || first_token_id < 0 ||
+        count > static_cast<size_t>(std::numeric_limits<hlie_token>::max() - first_token_id)) {
+        LOG_ERROR("Invalid special token range: first={}, count={}", first_token_id, count);
+        return false;
+    }
+
+    for (size_t index = 0; index < count; ++index) {
+        const std::string token(tokens[index]);
+        const hlie_token token_id = first_token_id + static_cast<hlie_token>(index);
+        if (token.empty()) {
+            LOG_ERROR("Special token {} is empty", token_id);
+            return false;
+        }
+        if (const auto token_it = token_to_id_.find(token);
+            token_it != token_to_id_.end() && token_it->second != token_id) {
+            LOG_ERROR("Special token {} already maps to ID {}, cannot assign {}",
+                      token, token_it->second, token_id);
+            return false;
+        }
+        if (const auto id_it = id_to_token_.find(token_id);
+            id_it != id_to_token_.end() && id_it->second != token) {
+            LOG_ERROR("Special token ID {} already maps to {}, cannot assign {}",
+                      token_id, id_it->second, token);
+            return false;
+        }
+    }
+
+    for (size_t index = 0; index < count; ++index) {
+        const std::string token(tokens[index]);
+        const hlie_token token_id = first_token_id + static_cast<hlie_token>(index);
+        token_to_id_[token] = token_id;
+        id_to_token_[token_id] = token;
+        if (std::find(special_token_ids_.begin(), special_token_ids_.end(), token_id) ==
+            special_token_ids_.end()) {
+            special_token_ids_.push_back(token_id);
+        }
+    }
+    sort_special_tokens();
+    LOG_INFO("Added {} special tokens starting at ID {}", count, first_token_id);
+    return true;
+}
+
+void HLIETokenizer::sort_special_tokens() {
+    std::sort(special_token_ids_.begin(), special_token_ids_.end(),
+              [this](const hlie_token lhs, const hlie_token rhs) {
+                  const auto lhs_size = get_token_data(lhs).size();
+                  const auto rhs_size = get_token_data(rhs).size();
+                  return lhs_size != rhs_size ? lhs_size > rhs_size : lhs < rhs;
+              });
 }
 
 std::vector<int> HLIETokenizer::encode(const std::string& text) {

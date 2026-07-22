@@ -29,7 +29,7 @@ esac
 # SDK URLs
 xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.4.0/2026/07/13/2100/ubuntu2004/houmo_tcim_runtime_xh2_linux_${ARCH}-1.4.0.tar.gz"
 
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/2026/07/17/1320/linux/houmo-HLIELLama-xh2_2.1.1_linux_${ARCH}.tar.gz"
+xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh2_2.1.1_linux_${ARCH}.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.3.0_linux_${ARCH}.tar.gz"
 xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.1.0_linux_${ARCH}.tar.gz"
@@ -207,6 +207,7 @@ package_service() {
     cp build/bin/houmo-llm-hi-cpp-linux "$release_dir/bin/HLIECpp" || true
     cp samples/zero_shot_prompt.wav "$release_dir/samples/zero_shot_prompt.wav" || true
     cp config/linux/sys.cfg "$release_dir/config/sys.cfg" || true
+    cp config/config_schema.json "$release_dir/config/config_schema.json" || true
     cp config/linux/memory_estimates.json "$release_dir/config/memory_estimates.json" || true
 
     cp third_party/sd.cpp/lib/libstable-diffusion.so "$release_dir/lib/" || true

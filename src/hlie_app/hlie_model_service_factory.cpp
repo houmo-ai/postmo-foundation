@@ -15,7 +15,7 @@ HLIE_NAMESPACE_BEGIN
 ModelServiceKind HLIEModelServiceFactory::service_kind(const HLIEModelInfo& model_info) {
     const auto& model_name = model_info.get_model_name();
     const auto& model_type = model_info.get_model_type();
-    if (model_type == HLIEModelType::TTS || model_type == HLIEModelType::QWEN3_TTS ||
+    if (model_type == HLIEModelType::QWEN3_TTS ||
         HlieUtil::contains_ignore_case(model_name, "qwen3-tts") ||
         HlieUtil::contains_ignore_case(model_name, "qwen3_tts")) {
         return ModelServiceKind::Qwen3TTS;
@@ -23,7 +23,8 @@ ModelServiceKind HLIEModelServiceFactory::service_kind(const HLIEModelInfo& mode
     if (HlieUtil::contains_ignore_case(model_name, WHISPER)) {
         return ModelServiceKind::Whisper;
     }
-    if (HlieUtil::contains_ignore_case(model_name, HLIEModelType::COSYVOICE)) {
+    if (model_type == HLIEModelType::COSYVOICE || model_type == HLIEModelType::TTS ||
+        HlieUtil::contains_ignore_case(model_name, HLIEModelType::COSYVOICE)) {
         return ModelServiceKind::CosyVoice;
     }
     if (model_info.is_llm_) {
@@ -65,10 +66,10 @@ std::shared_ptr<IHLIEModelService> HLIEModelServiceFactory::create_by_model_type
     if (model_type == HLIEModelType::WHISPER) {
         return create_whisper();
     }
-    if (model_type == HLIEModelType::COSYVOICE) {
+    if (model_type == HLIEModelType::COSYVOICE || model_type == HLIEModelType::TTS) {
         return create_cosyvoice();
     }
-    if (model_type == HLIEModelType::TTS || model_type == HLIEModelType::QWEN3_TTS) {
+    if (model_type == HLIEModelType::QWEN3_TTS) {
         return create_qwen3_tts();
     }
     if (model_type == HLIEModelType::DOCUMENT) {

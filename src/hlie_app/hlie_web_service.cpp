@@ -4,6 +4,8 @@
 #include <cerrno>
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -243,87 +245,304 @@ namespace {
         return value.dump();
     }
 
-    json config_map_to_json(const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& config) {
-        const auto config_string_to_json_value = [](const std::string& section, const std::string& key, const std::string& value) -> json {
-            if (section == "llm_params") {
-                return value;
-            }
+    constexpr const char* CONFIG_SCHEMA_FILENAME = "config_schema.json";
 
-            static const std::unordered_set<std::string> bool_keys = {
-                "log.open_console_window",
-                "model.auto_load",
-                "model.enable_sd3",
-                "model.llm_lazy_mode",
-                "balancer.enabled",
-                "replica.memory_saving",
-            };
-            static const std::unordered_set<std::string> int_keys = {
-                "log.max_file_size_mb",
-                "log.max_files",
-                "log.retention_days",
-                "log.tcim_level",
-                "balancer.heartbeat_interval_ms",
-                "replica.count",
-                "replica.max_instances_per_device",
-                "replica.startup_delay_sec",
-                "server.port",
-            };
+    struct ConfigSchemaCache {
+        json schema = json::object();
+        std::filesystem::path path;
+    };
 
-            const std::string full_key = section + "." + key;
-            std::string lower_value = value;
-            std::transform(lower_value.begin(), lower_value.end(), lower_value.begin(), [](unsigned char c) {
-                return static_cast<char>(std::tolower(c));
-            });
+    ConfigSchemaCache& config_schema_cache() {
+        static ConfigSchemaCache cache;
+        return cache;
+    }
 
-            if (bool_keys.find(full_key) != bool_keys.end()) {
-                return lower_value == "true" || lower_value == "1" || lower_value == "yes" || lower_value == "on";
-            }
+    std::filesystem::path config_schema_path(const std::string& config_path) {
+        if (config_path.empty()) {
+            return CONFIG_SCHEMA_FILENAME;
+        }
+        return std::filesystem::path(config_path).parent_path() / CONFIG_SCHEMA_FILENAME;
+    }
 
-            if (int_keys.find(full_key) != int_keys.end()) {
-                char* end = nullptr;
-                errno = 0;
-                const long long int_value = std::strtoll(value.c_str(), &end, 10);
-                if (end != value.c_str() && *end == '\0' && errno != ERANGE) {
-                    return int_value;
-                }
-                return value;
-            }
+    json load_config_schema(const std::string& config_path) {
+        const auto schema_path = config_schema_path(config_path);
+        std::ifstream input(schema_path, std::ios::binary);
+        if (!input.is_open()) {
+            LOG_WARN("Config schema file is unavailable: {}", schema_path.string());
+            return json::object();
+        }
 
-            if (lower_value == "true") {
-                return true;
+        try {
+            json schema;
+            input >> schema;
+            if (!schema.is_object() || !schema.contains("sections") || !schema["sections"].is_object()) {
+                LOG_WARN("Config schema file has no sections object: {}", schema_path.string());
+                return json::object();
             }
-            if (lower_value == "false") {
-                return false;
-            }
-            if (value.empty()) {
-                return value;
-            }
+            return schema;
+        } catch (const json::exception& e) {
+            LOG_WARN("Failed to parse config schema file {}: {}", schema_path.string(), e.what());
+            return json::object();
+        }
+    }
 
+    void initialize_config_schema(const std::string& config_path) {
+        auto& cache = config_schema_cache();
+        cache.path = config_schema_path(config_path);
+        cache.schema = load_config_schema(config_path);
+        if (cache.schema.contains("sections") && cache.schema["sections"].is_object()) {
+            LOG_INFO("Loaded config schema: path={}, version={}, sections={}", cache.path.string(),
+                     cache.schema.value("version", 0), cache.schema["sections"].size());
+        }
+    }
+
+    const json& cached_config_schema() {
+        return config_schema_cache().schema;
+    }
+
+    const json* find_config_section_metadata(const json& schema, const std::string& section) {
+        if (!schema.is_object() || !schema.contains("sections") || !schema["sections"].is_object()) {
+            return nullptr;
+        }
+        const auto& sections = schema["sections"];
+        const auto it = sections.find(section);
+        return it == sections.end() || !it->is_object() ? nullptr : &(*it);
+    }
+
+    const json* find_config_key_metadata(const json& schema, const std::string& section, const std::string& key) {
+        const json* section_metadata = find_config_section_metadata(schema, section);
+        if (section_metadata == nullptr || !section_metadata->contains("keys") ||
+            !section_metadata->at("keys").is_object()) {
+            return nullptr;
+        }
+        const auto& keys = section_metadata->at("keys");
+        const auto it = keys.find(key);
+        return it == keys.end() || !it->is_object() ? nullptr : &(*it);
+    }
+
+    json config_string_to_json_value_v2(
+        const json& schema, const std::string& section, const std::string& key, const std::string& value) {
+        if (section == "llm_params") {
+            return value;
+        }
+
+        const json* metadata = find_config_key_metadata(schema, section, key);
+        const std::string expected_type = metadata != nullptr && metadata->contains("type") && metadata->at("type").is_string()
+            ? metadata->at("type").get<std::string>()
+            : std::string();
+        std::string lower_value = value;
+        std::transform(lower_value.begin(), lower_value.end(), lower_value.begin(), [](const unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+
+        if (expected_type == "string") {
+            return value;
+        }
+
+        if (expected_type == "boolean") {
+            return lower_value == "true" || lower_value == "1" || lower_value == "yes" || lower_value == "on";
+        }
+
+        if (expected_type == "integer") {
             char* end = nullptr;
             errno = 0;
             const long long int_value = std::strtoll(value.c_str(), &end, 10);
             if (end != value.c_str() && *end == '\0' && errno != ERANGE) {
                 return int_value;
             }
+            return value;
+        }
 
-            end = nullptr;
+        if (expected_type == "number") {
+            char* end = nullptr;
             errno = 0;
             const double double_value = std::strtod(value.c_str(), &end);
             if (end != value.c_str() && *end == '\0' && errno != ERANGE) {
                 return double_value;
             }
-
             return value;
+        }
+
+        if (lower_value == "true") {
+            return true;
+        }
+        if (lower_value == "false") {
+            return false;
+        }
+        if (value.empty()) {
+            return value;
+        }
+
+        char* end = nullptr;
+        errno = 0;
+        const long long int_value = std::strtoll(value.c_str(), &end, 10);
+        if (end != value.c_str() && *end == '\0' && errno != ERANGE) {
+            return int_value;
+        }
+
+        end = nullptr;
+        errno = 0;
+        const double double_value = std::strtod(value.c_str(), &end);
+        if (end != value.c_str() && *end == '\0' && errno != ERANGE) {
+            return double_value;
+        }
+
+        return value;
+    }
+
+    json config_string_to_json_value_v1(const std::string& section, const std::string& key, const std::string& value) {
+        if (section == "llm_params") {
+            return value;
+        }
+
+        static const std::unordered_set<std::string> bool_keys = {
+            "log.open_console_window",
+            "model.auto_load",
+            "model.enable_sd3",
+            "model.llm_lazy_mode",
+            "balancer.enabled",
+            "replica.memory_saving",
+        };
+        static const std::unordered_set<std::string> int_keys = {
+            "log.max_file_size_mb",
+            "log.max_files",
+            "log.retention_days",
+            "log.tcim_level",
+            "balancer.heartbeat_interval_ms",
+            "replica.count",
+            "replica.max_instances_per_device",
+            "replica.startup_delay_sec",
+            "server.port",
         };
 
+        const std::string full_key = section + "." + key;
+        std::string lower_value = value;
+        std::transform(lower_value.begin(), lower_value.end(), lower_value.begin(), [](const unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+
+        if (bool_keys.find(full_key) != bool_keys.end()) {
+            return lower_value == "true" || lower_value == "1" || lower_value == "yes" || lower_value == "on";
+        }
+
+        if (int_keys.find(full_key) != int_keys.end()) {
+            char* end = nullptr;
+            errno = 0;
+            const long long int_value = std::strtoll(value.c_str(), &end, 10);
+            if (end != value.c_str() && *end == '\0' && errno != ERANGE) {
+                return int_value;
+            }
+            return value;
+        }
+
+        if (lower_value == "true") {
+            return true;
+        }
+        if (lower_value == "false") {
+            return false;
+        }
+        if (value.empty()) {
+            return value;
+        }
+
+        char* end = nullptr;
+        errno = 0;
+        const long long int_value = std::strtoll(value.c_str(), &end, 10);
+        if (end != value.c_str() && *end == '\0' && errno != ERANGE) {
+            return int_value;
+        }
+
+        end = nullptr;
+        errno = 0;
+        const double double_value = std::strtod(value.c_str(), &end);
+        if (end != value.c_str() && *end == '\0' && errno != ERANGE) {
+            return double_value;
+        }
+
+        return value;
+    }
+
+    json config_map_to_json(
+        const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& config,
+        const bool use_v2_types,
+        const json& schema) {
         json result = json::object();
         for (const auto& [section, values] : config) {
             result[section] = json::object();
             for (const auto& [key, value] : values) {
-                result[section][key] = config_string_to_json_value(section, key, value);
+                result[section][key] = use_v2_types
+                    ? config_string_to_json_value_v2(schema, section, key, value)
+                    : config_string_to_json_value_v1(section, key, value);
             }
         }
         return result;
+    }
+
+    std::string config_json_type(const json& value) {
+        if (value.is_boolean()) {
+            return "boolean";
+        }
+        if (value.is_number_integer() || value.is_number_unsigned()) {
+            return "integer";
+        }
+        if (value.is_number_float()) {
+            return "number";
+        }
+        if (value.is_array()) {
+            return "array";
+        }
+        if (value.is_object()) {
+            return "object";
+        }
+        if (value.is_null()) {
+            return "null";
+        }
+        return "string";
+    }
+
+    json config_metadata_to_json(
+        const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& config,
+        const json& schema) {
+        const json typed_config = config_map_to_json(config, true, schema);
+        json sections = json::object();
+
+        for (const auto& [section, values] : config) {
+            const json* source_section_metadata = find_config_section_metadata(schema, section);
+            const std::string section_description = source_section_metadata != nullptr &&
+                source_section_metadata->contains("description") && source_section_metadata->at("description").is_string()
+                ? source_section_metadata->at("description").get<std::string>()
+                : "Custom configuration section.";
+            json section_metadata = {
+                {"description", section_description},
+                {"keys", json::object()},
+            };
+
+            for (const auto& [key, value] : values) {
+                const json* metadata = find_config_key_metadata(schema, section, key);
+                const json& typed_value = typed_config.at(section).at(key);
+                const std::string description = metadata != nullptr && metadata->contains("description") &&
+                    metadata->at("description").is_string()
+                    ? metadata->at("description").get<std::string>()
+                    : section == "llm_params"
+                        ? "Command-line option passed through to llama-server."
+                        : "Custom configuration value.";
+                const std::string type = metadata != nullptr && metadata->contains("type") && metadata->at("type").is_string()
+                    ? metadata->at("type").get<std::string>()
+                    : config_json_type(typed_value);
+                json key_metadata = {
+                    {"description", description},
+                    {"type", type},
+                };
+                if (metadata != nullptr && metadata->contains("options") && metadata->at("options").is_array() &&
+                    !metadata->at("options").empty()) {
+                    key_metadata["options"] = metadata->at("options");
+                }
+                section_metadata["keys"][key] = std::move(key_metadata);
+            }
+
+            sections[section] = std::move(section_metadata);
+        }
+        return sections;
     }
 
     std::unordered_map<std::string, std::unordered_map<std::string, std::string>> parse_config_updates(
@@ -410,22 +629,46 @@ namespace {
         return keys;
     }
 
-    void handle_get_config(const httplib::Request& req, httplib::Response& res) {
+    void add_config_v2_metadata(
+        json& response,
+        const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& config,
+        const json& schema,
+        const std::string& config_path) {
+        response["api_version"] = 2;
+        response["schema_version"] = schema.value("version", 0);
+        response["schema_path"] = config_schema_path(config_path).string();
+        response["sections"] = config_metadata_to_json(config, schema);
+    }
+
+    void handle_get_config_impl(const httplib::Request& req, httplib::Response& res, const bool include_metadata) {
         const std::string section = get_config_section_param(req);
         const auto& config_service = Singleton<HLIEConfigService>::instance();
         const auto config = config_service->get_config(section);
+        const auto config_path = config_service->get_config_path();
+        const json& schema = cached_config_schema();
         json response = {
             {"version", HLIE_VERSION},
-            {"path", config_service->get_config_path()},
-            {"config", config_map_to_json(config)}
+            {"path", config_path},
+            {"config", config_map_to_json(config, include_metadata, schema)}
         };
         if (!section.empty()) {
             response["section"] = section;
         }
+        if (include_metadata) {
+            add_config_v2_metadata(response, config, schema, config_path);
+        }
         res_ok(res, response);
     }
 
-    void handle_post_config(const httplib::Request& req, httplib::Response& res) {
+    void handle_get_config(const httplib::Request& req, httplib::Response& res) {
+        handle_get_config_impl(req, res, false);
+    }
+
+    void handle_get_config_v2(const httplib::Request& req, httplib::Response& res) {
+        handle_get_config_impl(req, res, true);
+    }
+
+    void handle_post_config_impl(const httplib::Request& req, httplib::Response& res, const bool include_metadata) {
         json body;
         try {
             body = json::parse(req.body);
@@ -454,19 +697,33 @@ namespace {
             return;
         }
 
+        const auto config = config_service->get_config(section);
+        const auto config_path = config_service->get_config_path();
+        const json& schema = cached_config_schema();
         json response = {
             {"code", 0},
             {"version", HLIE_VERSION},
-            {"path", config_service->get_config_path()},
-            {"config", config_map_to_json(config_service->get_config(section))}
+            {"path", config_path},
+            {"config", config_map_to_json(config, include_metadata, schema)}
         };
         if (!section.empty()) {
             response["section"] = section;
         }
+        if (include_metadata) {
+            add_config_v2_metadata(response, config, schema, config_path);
+        }
         res_ok(res, response);
     }
 
-    void handle_delete_config(const httplib::Request& req, httplib::Response& res) {
+    void handle_post_config(const httplib::Request& req, httplib::Response& res) {
+        handle_post_config_impl(req, res, false);
+    }
+
+    void handle_post_config_v2(const httplib::Request& req, httplib::Response& res) {
+        handle_post_config_impl(req, res, true);
+    }
+
+    void handle_delete_config_impl(const httplib::Request& req, httplib::Response& res, const bool include_metadata) {
         const std::string section = get_config_section_param(req);
         if (section != "llm_params") {
             res_error(res, format_error_response_ex("delete config only supports llm_params section", ERROR_TYPE_PERMISSION, 80008));
@@ -496,16 +753,30 @@ namespace {
             return;
         }
 
-        const json response = {
+        const auto config = config_service->get_config(section);
+        const auto config_path = config_service->get_config_path();
+        const json& schema = cached_config_schema();
+        json response = {
             {"code", 0},
             {"version", HLIE_VERSION},
             {"deleted", ret},
             {"section", section},
             {"keys", keys},
-            {"path", config_service->get_config_path()},
-            {"config", config_map_to_json(config_service->get_config(section))}
+            {"path", config_path},
+            {"config", config_map_to_json(config, include_metadata, schema)}
         };
+        if (include_metadata) {
+            add_config_v2_metadata(response, config, schema, config_path);
+        }
         res_ok(res, response);
+    }
+
+    void handle_delete_config(const httplib::Request& req, httplib::Response& res) {
+        handle_delete_config_impl(req, res, false);
+    }
+
+    void handle_delete_config_v2(const httplib::Request& req, httplib::Response& res) {
+        handle_delete_config_impl(req, res, true);
     }
 } // namespace
 
@@ -514,6 +785,7 @@ HLIEWebService::HLIEWebService(const std::shared_ptr<HLIEWorkflow>& workflow) {
 }
 
 void HLIEWebService::init(int n_threads_http) {
+    initialize_config_schema(Singleton<HLIEConfigService>::instance()->get_config_path());
     web_server_ = std::make_shared<httplib::Server>();
     web_server_->set_default_headers({{"Server", "HLIECpp"}});
 
@@ -526,6 +798,12 @@ void HLIEWebService::init(int n_threads_http) {
     web_server_->Post("/hlie/v1/config/:section", handle_post_config);
     web_server_->Delete("/hlie/v1/config/:section", handle_delete_config);
     web_server_->Delete("/hlie/v1/config/:section/:key", handle_delete_config);
+    web_server_->Get("/hlie/v2/config", handle_get_config_v2);
+    web_server_->Get("/hlie/v2/config/:section", handle_get_config_v2);
+    web_server_->Post("/hlie/v2/config", handle_post_config_v2);
+    web_server_->Post("/hlie/v2/config/:section", handle_post_config_v2);
+    web_server_->Delete("/hlie/v2/config/:section", handle_delete_config_v2);
+    web_server_->Delete("/hlie/v2/config/:section/:key", handle_delete_config_v2);
 
     web_server_->set_logger(log_server_request);
     web_server_->set_exception_handler(exception_handler);

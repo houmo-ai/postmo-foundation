@@ -57,6 +57,7 @@ Content-Type: application/json
 }
 
 ### 6. Generate speech through the OpenAI-compatible API
+# Response header: X-HLIE-TTS-Backend: qwen3_tts
 # @timeout 600
 POST {{host}}/v1/audio/speech
 Content-Type: application/json
