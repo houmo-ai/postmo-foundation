@@ -107,8 +107,8 @@ private:
     std::vector<server_model_meta> get_all_model_metas();
 
     std::optional<server_model_meta> get_model_meta(const std::string& name);
-    std::optional<std::reference_wrapper<ModelInstance>> get_model_inst(const std::string& model_name);
-    void register_model_instance(HLIEModelInfo& model_info);
+    std::optional<ModelInstance> get_model_inst(const std::string& model_name);
+    std::string register_model_instance(HLIEModelInfo& model_info);
     void rollback_model_start(const std::string& model_key, const std::string& reason);
     void mark_local_model_started(const std::string& model_key, const std::string& notify_model_key, bool enable_asr_websocket);
     bool evict_model(const ModelInstance& model_inst, const std::string& reason);

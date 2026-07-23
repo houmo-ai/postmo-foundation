@@ -14,6 +14,12 @@ class INIReader;
 
 HLIE_NAMESPACE_BEGIN
 
+struct HLIEModelCapabilities {
+    bool text = true;
+    bool vision = false;
+    bool audio = false;
+};
+
 class HLIE_API HLIEModelInfo {
 public:
     int parse_from_file(const std::string& file_path = "info.json");
@@ -39,12 +45,19 @@ public:
                   const std::string& clip_l_model, const std::string& mmdit_model, const std::string& devices);
 
     void set_devices(const std::string& devices) { devices_ = devices; }
+    void set_service_kind(const std::string& service_kind);
+    void set_mm_proj_path(const std::string& mm_proj_path, bool inspect_metadata = true);
 
     [[nodiscard]] int to_json_file(const std::string& file_path) const;
 
     [[nodiscard]] const std::string& get_model_name() const { return model_name_; }
     [[nodiscard]] const std::string& get_model_path() const { return model_path_; }
+    // Legacy mixed-semantics field retained for info.json and API compatibility.
     [[nodiscard]] const std::string& get_model_type() const { return model_type_; }
+    [[nodiscard]] const std::string& get_service_kind() const { return service_kind_; }
+    [[nodiscard]] const std::string& get_model_family() const { return model_family_; }
+    [[nodiscard]] const std::string& get_architecture() const { return architecture_; }
+    [[nodiscard]] const HLIEModelCapabilities& get_capabilities() const { return capabilities_; }
     [[nodiscard]] int get_batch_num() const { return batch_num_; }
     [[nodiscard]] const std::string& get_model_version() const { return model_version_; }
     [[nodiscard]] const std::string& get_mm_proj_path() const { return mm_proj_path_; }
@@ -80,8 +93,16 @@ public:
     std::string build_time_;      // 20251202...
 
 private:
+    void inspect_main_gguf_metadata();
+    void inspect_mmproj_gguf_metadata();
+    void infer_service_kind_from_name();
+
     // ===== 基本信息 =====
     std::string model_type_;      // qwen2.5 / qwen2.5-vl / qwen3-vl
+    std::string service_kind_ = "llm";
+    std::string model_family_;
+    std::string architecture_;
+    HLIEModelCapabilities capabilities_;
     std::string model_path_;      // /path/to/model.gguf
     std::string model_name_;
     std::string params_;          // 7b / 4b

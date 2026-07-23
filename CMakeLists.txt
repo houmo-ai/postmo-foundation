@@ -101,4 +101,16 @@ endif()
 add_subdirectory(src)
 add_subdirectory(third_party/cpp-httplib)
 
+option(HLIE_BUILD_TESTS "Build focused HLIE regression tests" OFF)
+if (HLIE_BUILD_TESTS)
+    enable_testing()
+    add_executable(hlie-model-info-tests
+            tests/cpp/unit/hlie_model_family_registry_test.cpp
+            src/hlie_app/hlie_model_family_registry.cpp)
+    target_include_directories(hlie-model-info-tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_compile_definitions(hlie-model-info-tests PRIVATE HLIE_SHARED_LIB_BUILDING)
+    target_compile_features(hlie-model-info-tests PRIVATE cxx_std_17)
+    add_test(NAME hlie-model-info-tests COMMAND hlie-model-info-tests)
+endif ()
+
 

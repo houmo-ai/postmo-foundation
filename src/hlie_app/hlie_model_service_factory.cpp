@@ -14,16 +14,18 @@ HLIE_NAMESPACE_BEGIN
 
 ModelServiceKind HLIEModelServiceFactory::service_kind(const HLIEModelInfo& model_info) {
     const auto& model_name = model_info.get_model_name();
-    const auto& model_type = model_info.get_model_type();
-    if (model_type == HLIEModelType::QWEN3_TTS ||
+    const auto& service_kind = model_info.get_service_kind();
+    const auto& legacy_model_type = model_info.get_model_type();
+    if (service_kind == HLIEModelType::QWEN3_TTS || legacy_model_type == HLIEModelType::QWEN3_TTS ||
         HlieUtil::contains_ignore_case(model_name, "qwen3-tts") ||
         HlieUtil::contains_ignore_case(model_name, "qwen3_tts")) {
         return ModelServiceKind::Qwen3TTS;
     }
-    if (HlieUtil::contains_ignore_case(model_name, WHISPER)) {
+    if (service_kind == HLIEModelType::WHISPER || HlieUtil::contains_ignore_case(model_name, WHISPER)) {
         return ModelServiceKind::Whisper;
     }
-    if (model_type == HLIEModelType::COSYVOICE || model_type == HLIEModelType::TTS ||
+    if (service_kind == HLIEModelType::COSYVOICE || service_kind == HLIEModelType::TTS ||
+        legacy_model_type == HLIEModelType::COSYVOICE || legacy_model_type == HLIEModelType::TTS ||
         HlieUtil::contains_ignore_case(model_name, HLIEModelType::COSYVOICE)) {
         return ModelServiceKind::CosyVoice;
     }

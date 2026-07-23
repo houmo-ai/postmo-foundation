@@ -88,16 +88,45 @@ void HLIEModelRegistry::register_model(HLIEModelInfo& model_info) {
 
     upsert(std::move(model_instance));
 
-    const auto registered = get_instance(model_key);
+    const auto registered = get_instance_snapshot(model_key);
     if (registered) {
         LOG_INFO("Registered model instance: key={}, model_name={}, meta_name={}, model_path={}, mmproj={}",
-                 json(model_key).dump(), json(registered->get().model_info.get_model_name()).dump(),
-                 json(registered->get().meta.name).dump(), json(registered->get().path).dump(),
-                 json(registered->get().path_mmproj).dump());
+                 json(model_key).dump(), json(registered->model_info.get_model_name()).dump(),
+                 json(registered->meta.name).dump(), json(registered->path).dump(),
+                 json(registered->path_mmproj).dump());
     }
 }
 
 void HLIEModelRegistry::upsert(ModelInstance model_instance) {
+    if (model_instance.key.empty()) {
+        model_instance.key = HLIEModelInfo::build_model_key(model_instance.model_info);
+    }
+    if (model_instance.meta.name.empty()) {
+        model_instance.meta.name = model_instance.key;
+    }
+    if (model_instance.path.empty()) {
+        model_instance.path = model_instance.model_info.get_model_path();
+    }
+    if (model_instance.path_mmproj.empty()) {
+        model_instance.path_mmproj = model_instance.model_info.get_mm_proj_path();
+    }
+    model_instance.model_info.model_key_ = model_instance.key;
+
+    if (!model_instance.meta.loaded_info.is_object()) {
+        model_instance.meta.loaded_info = json::object();
+    }
+    if (!model_instance.model_info.get_model_type().empty()) {
+        model_instance.meta.loaded_info["model_type"] = model_instance.model_info.get_model_type();
+    }
+    model_instance.meta.loaded_info["service_kind"] = model_instance.model_info.get_service_kind();
+    model_instance.meta.loaded_info["model_family"] = model_instance.model_info.get_model_family();
+    model_instance.meta.loaded_info["architecture"] = model_instance.model_info.get_architecture();
+    model_instance.meta.loaded_info["multimodal"] = model_instance.model_info.is_multi_model_;
+    const auto& capabilities = model_instance.model_info.get_capabilities();
+    model_instance.meta.loaded_info["capabilities"] = {
+        {"text", capabilities.text}, {"vision", capabilities.vision}, {"audio", capabilities.audio}
+    };
+
     std::lock_guard lk(mutex_);
     model_instances_[model_instance.key] = std::move(model_instance);
 }
@@ -173,6 +202,15 @@ std::optional<std::reference_wrapper<HLIEModelRegistry::ModelInstance>> HLIEMode
     }
 
     return std::nullopt;
+}
+
+std::optional<HLIEModelRegistry::ModelInstance> HLIEModelRegistry::get_instance_snapshot(const std::string& model_name) const {
+    std::lock_guard lk(mutex_);
+    const ModelInstance* matched = find_instance_locked(model_name);
+    if (!matched) {
+        return std::nullopt;
+    }
+    return *matched;
 }
 
 std::vector<server_model_meta> HLIEModelRegistry::get_all_metas() const {

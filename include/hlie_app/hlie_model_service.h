@@ -2,6 +2,7 @@
 #define HLIE_MODEL_SERVICE_H
 
 #include <atomic>
+#include <memory>
 #include <string>
 #include <vector>
 

@@ -48,7 +48,9 @@ public:
     // Lookup accepts key, model_name, or meta.name after trim/lower normalization.
     // 查找支持 key/model_name/meta.name 的规范化全等匹配。
     [[nodiscard]] std::optional<server_model_meta> get_meta(const std::string& model_name) const;
+    // Compatibility-only mutable lookup. New callers should use the snapshot API.
     [[nodiscard]] std::optional<std::reference_wrapper<ModelInstance>> get_instance(const std::string& model_name);
+    [[nodiscard]] std::optional<ModelInstance> get_instance_snapshot(const std::string& model_name) const;
     [[nodiscard]] std::vector<server_model_meta> get_all_metas() const;
     [[nodiscard]] std::vector<ModelInstance> get_all_instances() const;
 

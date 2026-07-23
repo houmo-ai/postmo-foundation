@@ -306,7 +306,7 @@ async def run(args: argparse.Namespace) -> str:
     try:
         import websockets
     except ImportError as exc:
-        raise RuntimeError("Missing dependency: install test requirements with `pip install -r src/tests/requirements.txt`") from exc
+        raise RuntimeError("Missing dependency: install test requirements with `pip install -r tests/python/server/requirements.txt`") from exc
 
     audio_path = Path(args.audio).expanduser().resolve()
     if not audio_path.exists():

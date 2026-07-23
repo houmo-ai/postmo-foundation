@@ -79,7 +79,7 @@ temporary model-specific verification routes:
 
 The debug speech and codec-frame routes use deterministic greedy generation for
 Python/C++ graph comparison. They decode 12-frame Stateful Decoder chunks and
-return a mono 24 kHz PCM16 WAV. See `src/tests/qwen3_tts_client.http` for load,
+return a mono 24 kHz PCM16 WAV. See `tests/http/qwen3_tts_client.http` for load,
 inference, decoder-isolation, and unload requests.
 
 The synchronous pipeline is also available from the OpenAI-compatible

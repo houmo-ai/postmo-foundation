@@ -736,19 +736,9 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                     return -1;
                 }
 
-                default_model_info.mm_proj_path_ = mmproj_path;
-                default_model_info.vl_spec_ = HLIEModelInfo::parse_mmproj_vl_spec(mmproj_path);
-                default_model_info.model_key_ = HLIEModelInfo::build_model_key(default_model_info);
+                default_model_info.set_mm_proj_path(mmproj_path, true);
                 if (!model_registry_.contains(default_model_info.model_key_)) {
-                    ModelInstance model_instance;
-                    server_model_meta meta;
-                    meta.name = default_model_info.model_key_;
-                    model_instance.path = default_model_info.get_model_path();
-                    model_instance.path_mmproj = default_model_info.get_mm_proj_path();
-                    model_instance.meta = std::move(meta);
-                    model_instance.key = default_model_info.model_key_;
-                    model_instance.model_info = default_model_info;
-                    model_registry_.upsert(std::move(model_instance));
+                    register_model_instance(default_model_info);
                 }
             }
 
@@ -792,7 +782,7 @@ void HLIEWorkflow::run() {
             LOG_ERROR("LLM model instance is missing after initialization: key={}", json(model_key).dump());
             return;
         }
-        model_registry_.mark_loaded(model_key, inst->get().meta.port);
+        model_registry_.mark_loaded(model_key, inst->meta.port);
 
         if (is_slave_ && !replicas_mode_) {
             std::thread([this, model_key] {
@@ -1085,7 +1075,7 @@ server_http_res_ptr HLIEWorkflow::handle_models(const server_http_req& req) {
             status["exit_code"] = meta.exit_code;
             status["failed"] = true;
         }
-        models_json.push_back(json{
+        json model_json{
             {"id", meta.name},
             {"aliases", meta.aliases},
             {"tags", meta.tags},
@@ -1095,7 +1085,24 @@ server_http_res_ptr HLIEWorkflow::handle_models(const server_http_req& req) {
             {"port", meta.port},
             {"status", status},
             // TODO: add other fields, may require reading GGUF metadata
-        });
+        };
+        if (meta.loaded_info.is_object()) {
+            if (const auto it = meta.loaded_info.find("model_type"); it != meta.loaded_info.end() && it->is_string()) {
+                model_json["model_type"] = *it;
+            }
+            for (const auto* field : {"service_kind", "model_family", "architecture"}) {
+                if (const auto it = meta.loaded_info.find(field); it != meta.loaded_info.end() && it->is_string() && !it->get<std::string>().empty()) {
+                    model_json[field] = *it;
+                }
+            }
+            if (const auto it = meta.loaded_info.find("multimodal"); it != meta.loaded_info.end() && it->is_boolean()) {
+                model_json["multimodal"] = *it;
+            }
+            if (const auto it = meta.loaded_info.find("capabilities"); it != meta.loaded_info.end() && it->is_object()) {
+                model_json["capabilities"] = *it;
+            }
+        }
+        models_json.push_back(std::move(model_json));
     }
     res->ok({
         {"data", models_json},
@@ -1153,9 +1160,9 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             return res;
         }
         const auto model_inst = get_model_inst(model_name);
-        mem_est = model_inst ? model_inst->get().model_info.get_estimated_mem() : HLIEModelInfo::estimate_mem(model_name);
+        mem_est = model_inst ? model_inst->model_info.get_estimated_mem() : HLIEModelInfo::estimate_mem(model_name);
         if (model_inst) {
-            required_device_num = model_inst->get().model_info.get_device_num();
+            required_device_num = model_inst->model_info.get_device_num();
         }
     } else if (model_path.empty()) {
         res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
@@ -1207,7 +1214,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             return false;
         }
 
-        const auto model_copy = inst->get();
+        const auto model_copy = *inst;
         return evict_model(model_copy, reason);
     };
 
@@ -1298,28 +1305,16 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             if (body.contains("params") && body["params"].is_object()) {
                 auto& params = body["params"];
                 if (std::string mm_proj_path = params.value("mm_proj_path", std::string{}); !mm_proj_path.empty()) {
-                    model_info_tmp.is_multi_model_ = true;
-                    model_info_tmp.mm_proj_path_ = mm_proj_path;
-                    model_info_tmp.vl_spec_ = HLIEModelInfo::parse_mmproj_vl_spec(mm_proj_path);
                     if (std::error_code ec;
                         !std::filesystem::exists(mm_proj_path, ec) || !std::filesystem::is_regular_file(mm_proj_path, ec)) {
                         res->error(format_error_response_ex("mm_proj_path file not exist.", ERROR_TYPE_INVALID_REQUEST, 80006));
                         return res;
                     }
+                    model_info_tmp.set_mm_proj_path(mm_proj_path, true);
                 }
             }
 
-            ModelInstance model_instance;
-            server_model_meta model_meta;
-            const auto model_key = HLIEModelInfo::build_model_key(model_info_tmp);
-            model_meta.name = model_key;
-            model_instance.path = model_info_tmp.get_model_path();
-            model_instance.path_mmproj = model_info_tmp.get_mm_proj_path();
-            model_instance.meta = std::move(model_meta);
-            model_info_tmp.model_key_ = model_key;
-            model_instance.model_info = model_info_tmp;
-            model_instance.key = model_key;
-            model_registry_.upsert(std::move(model_instance));
+            const auto model_key = register_model_instance(model_info_tmp);
             LOG_INFO("Service Starting Add Model: {} {}", model_key, model_info_tmp.get_mm_proj_path());
         }
 
@@ -1329,7 +1324,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             return res;
         }
 
-        const std::string model_key = model_inst->get().key;
+        const std::string model_key = model_inst->key;
         auto model_info_opt = model_registry_.prepare_model_info_with_devices(model_key, devices);
         if (!model_info_opt) {
             res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
@@ -1483,20 +1478,10 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
     const server_http_req& req, const std::string& model_name, const std::string& model_path, const std::string& devices) {
 
     if (!meta) {
-        auto body = json::parse(req.body);
         HLIEModelInfo model_info_tmp;
         model_info_tmp.parse_from_gguf_filename(model_path);
-
-        ModelInstance model_instance;
-        server_model_meta model_meta;
-        model_meta.name = model_info_tmp.get_model_name();
-        model_instance.path = model_info_tmp.get_model_path();
-        model_instance.meta = std::move(model_meta);
-        auto model_key = model_info_tmp.get_model_name();
-        model_info_tmp.model_key_ = model_key;
-        model_instance.model_info = model_info_tmp;
-        model_instance.key = model_key;
-        model_registry_.upsert(std::move(model_instance));
+        model_info_tmp.set_service_kind(HLIEModelType::WHISPER);
+        const auto model_key = register_model_instance(model_info_tmp);
         LOG_INFO("Service Starting Add WHISPER Model: {}", model_key);
     }
 
@@ -1506,7 +1491,7 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         return -1;
     }
 
-    const std::string model_key = model_inst->get().key;
+    const std::string model_key = model_inst->key;
     auto model_info_opt = model_registry_.prepare_model_info_with_devices(model_key, devices);
     if (!model_info_opt) {
         res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
@@ -1579,20 +1564,10 @@ int HLIEWorkflow::start_cosyvoice(std::optional<server_model_meta>& meta, std::u
     const server_http_req& req, const std::string& model_name, const std::string& model_path, const std::string& devices) {
 
     if (!meta) {
-        auto body = json::parse(req.body);
         HLIEModelInfo model_info_tmp;
         model_info_tmp.parse_from_gguf_filename(model_path);
-
-        ModelInstance model_instance;
-        server_model_meta model_meta;
-        model_meta.name = model_info_tmp.get_model_name();
-        model_instance.path = model_info_tmp.get_model_path();
-        model_instance.meta = std::move(model_meta);
-        auto model_key = model_info_tmp.get_model_name();
-        model_info_tmp.model_key_ = model_key;
-        model_instance.model_info = model_info_tmp;
-        model_instance.key = model_key;
-        model_registry_.upsert(std::move(model_instance));
+        model_info_tmp.set_service_kind(HLIEModelType::COSYVOICE);
+        const auto model_key = register_model_instance(model_info_tmp);
         LOG_INFO("Service Starting Add COSYVOICE Model: {}", model_key);
     }
 
@@ -1602,7 +1577,7 @@ int HLIEWorkflow::start_cosyvoice(std::optional<server_model_meta>& meta, std::u
         return -1;
     }
 
-    const std::string model_key = model_inst->get().key;
+    const std::string model_key = model_inst->key;
     auto model_info_opt = model_registry_.prepare_model_info_with_devices(model_key, devices);
     if (!model_info_opt) {
         res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
@@ -1686,16 +1661,8 @@ int HLIEWorkflow::start_qwen3_tts(std::optional<server_model_meta>& meta,
             return -1;
         }
 
-        ModelInstance model_instance;
-        server_model_meta model_meta;
-        model_meta.name = model_info_tmp.get_model_name();
-        model_instance.path = model_info_tmp.get_model_path();
-        model_instance.meta = std::move(model_meta);
-        const auto model_key = model_info_tmp.get_model_name();
-        model_info_tmp.model_key_ = model_key;
-        model_instance.model_info = model_info_tmp;
-        model_instance.key = model_key;
-        model_registry_.upsert(std::move(model_instance));
+        model_info_tmp.set_service_kind(HLIEModelType::QWEN3_TTS);
+        const auto model_key = register_model_instance(model_info_tmp);
         LOG_INFO("Service Starting Add Qwen3-TTS Model: {}", model_key);
     }
 
@@ -1705,7 +1672,7 @@ int HLIEWorkflow::start_qwen3_tts(std::optional<server_model_meta>& meta,
         return -1;
     }
 
-    const std::string model_key = model_inst->get().key;
+    const std::string model_key = model_inst->key;
     auto model_info_opt = model_registry_.prepare_model_info_with_devices(model_key, devices);
     if (!model_info_opt) {
         res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
@@ -1786,7 +1753,7 @@ bool HLIEWorkflow::router_validate_model(const std::string& name, const std::uni
         return false;
     }
 
-    if (meta->get().meta.status != SERVER_MODEL_STATUS_LOADED) {
+    if (meta->meta.status != SERVER_MODEL_STATUS_LOADED) {
         res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
@@ -2064,9 +2031,9 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
         return res;
     }
     const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
-    LOG_INFO("LLM Request route info, model [{}] status [{}] port [{}]" , name, static_cast<int>(inst->get().meta.status), inst->get().meta.port);
-    if (inst->get().meta.status == SERVER_MODEL_STATUS_LOADED && (inst->get().meta.port == master_port || master_port != port_)) {
-        const auto model_key = inst->get().key;
+    LOG_INFO("LLM Request route info, model [{}] status [{}] port [{}]" , name, static_cast<int>(inst->meta.status), inst->meta.port);
+    if (inst->meta.status == SERVER_MODEL_STATUS_LOADED && (inst->meta.port == master_port || master_port != port_)) {
+        const auto model_key = inst->key;
         ModelRequestLease lease(model_registry_, model_key);
         if (!lease.active()) {
             res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
@@ -2077,7 +2044,7 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
 
     const bool auto_load = Singleton<HLIEConfigService>::instance()->get_bool("model", "auto_load", true, true);
     // If the model is unloaded, try to auto-load it.
-    if (inst->get().meta.status == SERVER_MODEL_STATUS_UNLOADED) {
+    if (inst->meta.status == SERVER_MODEL_STATUS_UNLOADED) {
         if (auto_load) {
             if (method != "POST") {
                 res->error(format_error_response(
@@ -2085,7 +2052,7 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
                 return res;
             }
             std::lock_guard lk(slave_mutex_);
-            model_registry_.mark_loading(inst->get().key);
+            model_registry_.mark_loading(inst->key);
             auto rest_res = start_service(req);
             if (rest_res.get()->status != 200) {
                 // 加载失败
@@ -2097,28 +2064,34 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
         }
     }
 
-    const auto inst1 = get_model_inst(name);
-    if (inst1 && inst1->get().meta.status == SERVER_MODEL_STATUS_LOADING) {
+    auto inst1 = get_model_inst(name);
+    if (inst1 && inst1->meta.status == SERVER_MODEL_STATUS_LOADING) {
         std::unique_lock<std::mutex> lk(slave_mutex_);
         slave_cv_.wait(lk, [this, &name]() {
             const auto inst_inner = get_model_inst(name);
             if (inst_inner) {
-                return inst_inner->get().meta.status != SERVER_MODEL_STATUS_LOADING;
+                return inst_inner->meta.status != SERVER_MODEL_STATUS_LOADING;
             }
 
             return false;
         });
+        inst1 = get_model_inst(name);
     }
 
-    if (inst1->get().meta.status == SERVER_MODEL_STATUS_UNLOADED) {
+    if (!inst1) {
+        res->error(format_error_response("model not found after load", ERROR_TYPE_NOT_FOUND));
+        return res;
+    }
+
+    if (inst1->meta.status == SERVER_MODEL_STATUS_UNLOADED) {
         // 加载失败
         res->error("failed to load model: " + name);
         return res;
     }
 
     // 如果已加载则直接调用
-    if (inst1->get().meta.port == port_) {
-        const auto model_key = inst1->get().key;
+    if (inst1->meta.port == port_) {
+        const auto model_key = inst1->key;
         ModelRequestLease lease(model_registry_, model_key);
         if (!lease.active()) {
             res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
@@ -2127,13 +2100,13 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
         return handle_local_llm_or_document(model_key, lease);
     }
 
-    const auto model_key = inst1->get().key;
+    const auto model_key = inst1->key;
     ModelRequestLease lease(model_registry_, model_key);
     if (!lease.active()) {
         res->error(format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
-    return attach_model_request_lease(proxy_request(req, method, name, inst1->get().meta.port), model_registry_, model_key, lease);
+    return attach_model_request_lease(proxy_request(req, method, name, inst1->meta.port), model_registry_, model_key, lease);
 }
 
 std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
@@ -2299,7 +2272,7 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                             std::string requested_type;
                             if (const auto instance = get_model_inst(requested_model)) {
                                 requested_type = normalize_model_name(
-                                    instance->get().model_info.get_model_type());
+                                    instance->model_info.get_service_kind());
                             }
                             const std::string normalized = normalize_model_name(requested_model);
                             if (requested_type == HLIEModelType::COSYVOICE ||
@@ -2710,7 +2683,7 @@ server_http_res_ptr HLIEWorkflow::stop_service(const server_http_req& req) {
         for (const auto& model : models) {
             auto model_inst = get_model_inst(model);
             if (model_inst) {
-                model_registry_.mark_unloaded(model_inst->get().key);
+                model_registry_.mark_unloaded(model_inst->key);
             }
         }
 
@@ -2742,7 +2715,7 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
         std::unordered_set<std::string> seen;
         for (const auto& name : names) {
             const auto model_inst = get_model_inst(name);
-            const std::string public_name = model_inst ? model_inst->get().model_info.get_model_name() : name;
+            const std::string public_name = model_inst ? model_inst->model_info.get_model_name() : name;
             if (public_name.empty()) {
                 continue;
             }
@@ -2758,7 +2731,7 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
     if (model_service_manager_.llm()) {
         const auto model_inst = get_model_inst(model_service_manager_.llm()->get_model_key());
         const std::string model_name =
-            model_inst ? model_inst->get().model_info.get_model_name() : model_service_manager_.llm()->get_model_key();
+            model_inst ? model_inst->model_info.get_model_name() : model_service_manager_.llm()->get_model_key();
         if (!model_name.empty()) {
             models.push_back(model_name);
         }
@@ -2785,7 +2758,7 @@ server_http_res_ptr HLIEWorkflow::handle_get_status(const server_http_req& req) 
     if (model_service_manager_.qwen3_tts()) {
         const auto model_inst = get_model_inst(model_service_manager_.qwen3_tts()->get_model_key());
         const std::string model_name = model_inst
-                                           ? model_inst->get().model_info.get_model_name()
+                                           ? model_inst->model_info.get_model_name()
                                            : model_service_manager_.qwen3_tts()->get_model_key();
         if (!model_name.empty()) {
             models.push_back(model_name);
@@ -2831,8 +2804,8 @@ server_http_res_ptr HLIEWorkflow::handle_post_status(const server_http_req& req)
 
     if (const auto inst = get_model_inst(model); inst.has_value()) {
         std::lock_guard lk(mutex_);
-        const auto resolved_key = inst->get().key;
-        const auto resolved_model_name = inst->get().model_info.get_model_name();
+        const auto resolved_key = inst->key;
+        const auto resolved_model_name = inst->model_info.get_model_name();
         model_registry_.update_status(resolved_key, status, port);
         LOG_INFO("Model status updated: request_model={}, resolved_key={}, resolved_model_name={}, status={}, port={}",
                  json(model).dump(), json(resolved_key).dump(), json(resolved_model_name).dump(),
@@ -3135,7 +3108,7 @@ void HLIEWorkflow::residency_ttl_loop() {
             continue;
         }
 
-        const auto model_copy = inst->get();
+        const auto model_copy = *inst;
         evict_model(model_copy, "idle_ttl");
     }
 }
@@ -3144,8 +3117,9 @@ std::vector<server_model_meta> HLIEWorkflow::get_all_model_metas() {
     return model_registry_.get_all_metas();
 }
 
-void HLIEWorkflow::register_model_instance(HLIEModelInfo& model_info) {
+std::string HLIEWorkflow::register_model_instance(HLIEModelInfo& model_info) {
     model_registry_.register_model(model_info);
+    return model_info.model_key_;
 }
 
 void HLIEWorkflow::rollback_model_start(const std::string& model_key, const std::string& reason) {
@@ -3171,8 +3145,8 @@ std::optional<server_model_meta> HLIEWorkflow::get_model_meta(const std::string&
     return model_registry_.get_meta(model_name);
 }
 
-std::optional<std::reference_wrapper<HLIEWorkflow::ModelInstance>> HLIEWorkflow::get_model_inst(const std::string& model_name) {
-    return model_registry_.get_instance(model_name);
+std::optional<HLIEWorkflow::ModelInstance> HLIEWorkflow::get_model_inst(const std::string& model_name) {
+    return model_registry_.get_instance_snapshot(model_name);
 }
 
 HLIE_NAMESPACE_END
