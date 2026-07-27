@@ -26,6 +26,9 @@ public:
 
     int parse_from_gguf_filename(const std::string& file_path);
 
+    // Parse routing identity from a filename without opening the GGUF file.
+    int parse_identity_from_gguf_filename(const std::string& file_path);
+
     static std::string parse_mmproj_vl_spec(const std::string& name);
 
     static std::string build_model_key(const HLIEModelInfo& model_info);

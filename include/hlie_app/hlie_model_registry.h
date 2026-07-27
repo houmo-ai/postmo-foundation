@@ -37,11 +37,14 @@ public:
         std::time_t last_load_time = 0;
         uint64_t hit_count = 0;
         int active_requests = 0;
+        // Captured when the instance is registered. Eviction selection must
+        // not perform filesystem or GGUF inspection.
+        int estimated_mem_mb = 0;
         bool pinned = false;
         bool evictable = true;
     };
 
-    void register_model(HLIEModelInfo& model_info);
+    void register_model(HLIEModelInfo& model_info, int estimated_mem_mb);
     void upsert(ModelInstance model_instance);
     [[nodiscard]] bool contains(const std::string& model_key) const;
 

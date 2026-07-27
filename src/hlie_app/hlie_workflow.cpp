@@ -177,6 +177,22 @@ namespace {
         return policy;
     }
 
+    ProxyTimeoutOptions build_proxy_timeout_options() {
+        const auto& config = Singleton<HLIEConfigService>::instance();
+        ProxyTimeoutOptions options;
+        options.connect_timeout_ms = config->get_int(
+            "proxy", "connect_timeout_ms", options.connect_timeout_ms, true);
+        options.non_stream_read_timeout_sec = config->get_int(
+            "proxy", "non_stream_read_timeout_sec", options.non_stream_read_timeout_sec, true);
+        options.stream_idle_timeout_sec = config->get_int(
+            "proxy", "stream_idle_timeout_sec", options.stream_idle_timeout_sec, true);
+        options.write_timeout_sec = config->get_int(
+            "proxy", "write_timeout_sec", options.write_timeout_sec, true);
+        options.max_request_timeout_sec = config->get_int(
+            "proxy", "max_request_timeout_sec", options.max_request_timeout_sec, true);
+        return options.normalized();
+    }
+
     std::optional<HLIEModelEvictionCandidate> select_eviction_candidate(const HLIEModelRegistry& registry,
                                                                         const std::string& requested_model,
                                                                         const int required_mem_mb,
@@ -1780,7 +1796,8 @@ server_http_res_ptr HLIEWorkflow::proxy_request(const server_http_req & req, con
             req.headers,
             req.body,
             req.files,
-            req.should_stop);
+            req.should_stop,
+            build_proxy_timeout_options());
     return proxy;
 }
 
@@ -3118,7 +3135,7 @@ std::vector<server_model_meta> HLIEWorkflow::get_all_model_metas() {
 }
 
 std::string HLIEWorkflow::register_model_instance(HLIEModelInfo& model_info) {
-    model_registry_.register_model(model_info);
+    model_registry_.register_model(model_info, model_info.get_estimated_mem());
     return model_info.model_key_;
 }
 

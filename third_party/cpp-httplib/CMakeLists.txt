@@ -5,6 +5,7 @@ find_package(Threads REQUIRED)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
+target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 if (NOT MSVC)
     # disable warnings in 3rd party code
     target_compile_options(${TARGET} PRIVATE -w -fPIC)

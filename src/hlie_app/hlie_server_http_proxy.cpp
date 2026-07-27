@@ -156,19 +156,27 @@ struct pipe_t {
 
 
 ServerHttpProxy::ServerHttpProxy(const std::string& method, const std::string& host, int port, const std::string& path,
-                                        const std::map<std::string, std::string>& headers, const std::string& body,
-                                        const std::map<std::string, uploaded_file>& files,
-                                        const std::function<bool()>& should_stop) {
+                                         const std::map<std::string, std::string>& headers, const std::string& body,
+                                         const std::map<std::string, uploaded_file>& files,
+                                         const std::function<bool()>& should_stop,
+                                         const ProxyTimeoutOptions& timeout_options) {
 // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::Client>(host, port);
     auto pipe = std::make_shared<pipe_t<msg_t>>();
 
     // setup Client
-    cli->set_connection_timeout(0, 200000); // 200 milliseconds
+    const auto timeouts = timeout_options.normalized();
+    const auto connect_seconds = timeouts.connect_timeout_ms / 1000;
+    const auto connect_microseconds = (timeouts.connect_timeout_ms % 1000) * 1000;
+    cli->set_connection_timeout(connect_seconds, connect_microseconds);
+    cli->set_read_timeout(timeouts.read_timeout_for_body(body), 0);
+    cli->set_write_timeout(timeouts.write_timeout_sec, 0);
+    cli->set_max_timeout(static_cast<time_t>(timeouts.max_request_timeout_sec) * 1000);
     this->status = 500; // to be overwritten upon response
-    this->cleanup = [pipe]() {
+    this->cleanup = [pipe, cli]() {
         pipe->close_read();
         pipe->close_write();
+        cli->stop();
     };
 
     // wire up the receive end of the pipe

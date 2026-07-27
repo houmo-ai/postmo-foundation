@@ -45,7 +45,7 @@ std::optional<HLIEModelEvictionCandidate> HLIEModelResidencyManager::select_lru_
     candidate.key = selected->key;
     candidate.model_name = selected->model_info.get_model_name();
     candidate.port = selected->meta.port;
-    candidate.estimated_mem_mb = selected->model_info.get_estimated_mem();
+    candidate.estimated_mem_mb = selected->estimated_mem_mb;
     candidate.last_access_time = selected->last_access_time;
     candidate.last_load_time = selected->last_load_time;
     candidate.hit_count = selected->hit_count;
@@ -116,7 +116,7 @@ std::optional<HLIEModelEvictionCandidate> HLIEModelResidencyManager::select_for_
     candidate.key = selected->key;
     candidate.model_name = selected->model_info.get_model_name();
     candidate.port = selected->meta.port;
-    candidate.estimated_mem_mb = selected->model_info.get_estimated_mem();
+    candidate.estimated_mem_mb = selected->estimated_mem_mb;
     candidate.last_access_time = selected->last_access_time;
     candidate.last_load_time = selected->last_load_time;
     candidate.hit_count = selected->hit_count;

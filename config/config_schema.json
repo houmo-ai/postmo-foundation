@@ -30,6 +30,31 @@
         }
       }
     },
+    "proxy": {
+      "description": "Timeouts for HTTP forwarding from the master service to model subprocesses.",
+      "keys": {
+        "connect_timeout_ms": {
+          "type": "integer",
+          "description": "Maximum time to connect to a local model subprocess, clamped to 100-10000 ms."
+        },
+        "non_stream_read_timeout_sec": {
+          "type": "integer",
+          "description": "Idle read timeout for non-streaming model responses, clamped to 60-3600 seconds."
+        },
+        "stream_idle_timeout_sec": {
+          "type": "integer",
+          "description": "Maximum interval without response bytes for streaming requests, clamped to 10-600 seconds."
+        },
+        "write_timeout_sec": {
+          "type": "integer",
+          "description": "Timeout for writing a request to a model subprocess, clamped to 5-300 seconds."
+        },
+        "max_request_timeout_sec": {
+          "type": "integer",
+          "description": "Absolute upper bound for a proxied request, clamped to 300-7200 seconds."
+        }
+      }
+    },
     "replica": {
       "description": "Multi-process replica scheduling settings.",
       "keys": {

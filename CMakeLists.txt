@@ -98,19 +98,27 @@ endif()
 # build the library
 #
 
-add_subdirectory(src)
+option(BUILD_TESTING "Build automated tests" OFF)
+option(HLIE_BUILD_TESTS "Compatibility alias for BUILD_TESTING" OFF)
+option(HLIE_TESTS_ONLY "Configure test targets without proprietary inference dependencies" OFF)
+
+if (HLIE_BUILD_TESTS OR HLIE_TESTS_ONLY)
+    set(BUILD_TESTING ON CACHE BOOL "Build automated tests" FORCE)
+endif ()
+
+include(CTest)
+
+# cpp-httplib is lightweight and is also used by HTTP component tests. Define it
+# before production targets so target resolution is deterministic.
 add_subdirectory(third_party/cpp-httplib)
 
-option(HLIE_BUILD_TESTS "Build focused HLIE regression tests" OFF)
-if (HLIE_BUILD_TESTS)
-    enable_testing()
-    add_executable(hlie-model-info-tests
-            tests/cpp/unit/hlie_model_family_registry_test.cpp
-            src/hlie_app/hlie_model_family_registry.cpp)
-    target_include_directories(hlie-model-info-tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
-    target_compile_definitions(hlie-model-info-tests PRIVATE HLIE_SHARED_LIB_BUILDING)
-    target_compile_features(hlie-model-info-tests PRIVATE cxx_std_17)
-    add_test(NAME hlie-model-info-tests COMMAND hlie-model-info-tests)
+if (NOT HLIE_TESTS_ONLY)
+    add_subdirectory(src)
+endif ()
+
+if (BUILD_TESTING)
+    add_subdirectory(third_party/Catch2 EXCLUDE_FROM_ALL)
+    add_subdirectory(tests/cpp)
 endif ()
 
 

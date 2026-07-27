@@ -26,16 +26,8 @@ namespace {
         return result;
     }
 
-    const std::regex kVersionRegex(R"(v\d+\.\d+\.\d+)", std::regex::icase);
     const std::regex kParamRegex(R"((\d+(?:\.\d+)?)\s*[bBmM])", std::regex::icase);
-    const std::regex kContextRegex(R"((\d+)\s*[kK])");
-    const std::regex kBatchRegex(R"(b(\d+))", std::regex::icase);
-    const std::regex kCoreRegex(R"((\d+)\s*core)", std::regex::icase);
-    const std::regex kChipRegex(R"((\d+)\s*chips?)", std::regex::icase);
-    const std::regex kDeviceRegex(R"((\d+)d)", std::regex::icase);
     const std::regex kSizeLabelRegex(R"((\d+(?:\.\d+)?)\s*([bBmM]))", std::regex::icase);
-    const std::regex kVlResRegex(R"(vit_(\d+)(?:[_x](\d+))?)", std::regex::icase);
-    const std::regex kBuildTimeRegex(R"((\d{8}|\d{14}))");
 
     uint64_t parse_param_count(const std::string& size_label) {
         std::smatch m;
@@ -232,110 +224,15 @@ int HLIEModelInfo::parse_from_file(const std::string& file_path) {
 }
 
 int HLIEModelInfo::parse_from_gguf_filename(const std::string& file_path) {
-    std::filesystem::path p(file_path);
-    const std::string name = to_lower(p.filename().string());
-
-    model_path_ = file_path;
-    service_kind_ = "llm";
-    model_type_.clear();
-    model_family_.clear();
-    architecture_.clear();
-    capabilities_ = {};
-    is_multi_model_ = false;
-    mm_proj_path_.clear();
-
-    auto find = [&](const std::regex& r, std::smatch& m) { return std::regex_search(name, m, r); };
-
-    std::smatch m;
-
-    // ===== xh（必需）=====
-    // if (!std::regex_search(name, m, kXhRegex)) {
-    //     return -1;
-    // }
-
-    // xh_version_ = std::stoi(m[1].str());
-
-    // ===== version=====
-    if (!find(kVersionRegex, m)) {
-        model_version_.clear();
-    } else {
-        model_version_ = m.str();
+    const int result = parse_identity_from_gguf_filename(file_path);
+    if (result != 0) {
+        return result;
     }
-
-    // ===== build time=====
-    if (find(kBuildTimeRegex, m))
-        build_time_ = m.str();
-    else
-        build_time_.clear();
-
-    // ===== param=====
-    if (find(kParamRegex, m))
-        params_ = m.str();
-    else
-        params_.clear();
-
-    // ===== context=====
-    if (find(kContextRegex, m))
-        context_size_ = std::stoi(m[1]) * 1024;
-    else
-        context_size_ = 6400000;
-
-    // ===== batch=====
-    if (find(kBatchRegex, m))
-        batch_num_ = std::stoi(m[1]);
-    else
-        batch_num_ = 1;
-
-    // ===== core=====
-    if (find(kCoreRegex, m))
-        cores_ = std::stoi(m[1]);
-    else
-        cores_ = 2;
-
-    // ===== device =====
-    // 1chip / 2chips
-    device_num_ = estimate_device_num(name);
-
-    // ===== VL family 判断 =====
-    if (const auto family = HLIEModelFamilyRegistry::detect_projector_family(name); !family.empty()) {
-        model_family_ = family;
-        is_multi_model_ = true;
-    } else {
-        // 非 VL：尽量提 family
-        if (const auto pos = name.find("qwen"); pos != std::string::npos) {
-            const auto end = name.find_first_of("-_", pos);
-            model_family_ = name.substr(pos, end - pos);
-        } else {
-            model_family_.clear();
-        }
-        is_multi_model_ = false;
-    }
-
-    // ===== mmproj 的 vl_spec（如果是 mmproj 文件）=====
-    if (name.find("mmproj") != std::string::npos) {
-        if (find(kVlResRegex, m)) {
-            if (m[2].matched)
-                vl_spec_ = "vit_" + m[1].str() + "_" + m[2].str();
-            else
-                vl_spec_ = "vit_" + m[1].str();
-        } else {
-            vl_spec_ = "unknown";
-        }
-    } else {
-        vl_spec_.clear();
-    }
-
-    if (!model_path_.empty()) {
-        const std::filesystem::path model_path_tmp(model_path_);
-        model_name_ = model_path_tmp.filename().stem().string();
-    } else {
-        model_name_.clear();
-    }
-
     inspect_main_gguf_metadata();
     infer_service_kind_from_name();
     model_type_ = !model_family_.empty() ? model_family_ : service_kind_;
     is_llm_ = service_kind_ != "sd";
+    model_key_ = build_model_key(*this);
     estimated_mem_mb_ = estimate_mem_from_gguf(model_path_, context_size_, batch_num_);
     return 0;
 }
@@ -407,29 +304,6 @@ void HLIEModelInfo::inspect_mmproj_gguf_metadata() {
     }
 }
 
-void HLIEModelInfo::infer_service_kind_from_name() {
-    const std::string name = to_lower(model_name_);
-    if (name.find("qwen3-tts") != std::string::npos || name.find("qwen3_tts") != std::string::npos) {
-        service_kind_ = "qwen3_tts";
-    } else if (name.find("whisper") != std::string::npos) {
-        service_kind_ = "whisper";
-    } else if (name.find("cosyvoice") != std::string::npos) {
-        service_kind_ = "cosyvoice";
-    } else if (!clip_model_.empty() || name == "sd3") {
-        service_kind_ = "sd";
-    } else if (service_kind_.empty() || !is_known_service_kind(service_kind_)) {
-        service_kind_ = "llm";
-    }
-}
-
-void HLIEModelInfo::set_service_kind(const std::string& service_kind) {
-    service_kind_ = to_lower(service_kind);
-    if (service_kind_.empty()) {
-        service_kind_ = "llm";
-    }
-    is_llm_ = service_kind_ != "sd";
-}
-
 void HLIEModelInfo::set_mm_proj_path(const std::string& mm_proj_path, const bool inspect_metadata) {
     mm_proj_path_ = mm_proj_path;
     vl_spec_ = mm_proj_path_.empty() ? std::string{} : parse_mmproj_vl_spec(mm_proj_path_);
@@ -444,41 +318,6 @@ void HLIEModelInfo::set_mm_proj_path(const std::string& mm_proj_path, const bool
         inspect_mmproj_gguf_metadata();
     }
     model_key_ = build_model_key(*this);
-}
-
-std::string HLIEModelInfo::parse_mmproj_vl_spec(const std::string& name) {
-    std::smatch m;
-    if (std::regex_search(name, m, kVlResRegex)) {
-        if (m[2].matched)
-            return "vit_" + m[1].str() + "_" + m[2].str();
-        return "vit_" + m[1].str();
-    }
-    return "unknown";
-}
-
-std::string HLIEModelInfo::build_model_key(const HLIEModelInfo& model_info) {
-    if (model_info.get_mm_proj_path().empty()) {
-        return model_info.get_model_name();
-    }
-
-    if (!model_info.vl_spec_.empty() && model_info.vl_spec_ != "unknown") {
-        return model_info.get_model_name() + "_" + model_info.vl_spec_;
-    }
-
-    return model_info.get_model_name();
-}
-
-bool HLIEModelInfo::is_embedding_model() const {
-    return HlieUtil::contains_ignore_case(model_name_, "bge") || HlieUtil::contains_ignore_case(model_name_, "gte") ||
-        HlieUtil::contains_ignore_case(model_name_, "embedding");
-}
-
-bool HLIEModelInfo::is_rerank_model() const {
-    return HlieUtil::contains_ignore_case(model_name_, "rerank");
-}
-
-bool HLIEModelInfo::is_mtp() const {
-    return HlieUtil::contains_ignore_case(model_name_, "mtp");
 }
 
 void HLIEModelInfo::ScanLocalModelsFromDir(std::vector<HLIEModelInfo>& result, const std::string& dir) {
@@ -677,17 +516,6 @@ int HLIEModelInfo::estimate_empirical_mem(const std::string& model_name) {
     return 0;
 }
 
-int HLIEModelInfo::estimate_device_num(const std::string& model_name) {
-    std::smatch match;
-    if (std::regex_search(model_name, match, kChipRegex)) {
-        return std::max(1, std::stoi(match[1].str()));
-    }
-    if (std::regex_search(model_name, match, kDeviceRegex)) {
-        return std::max(1, std::stoi(match[1].str()));
-    }
-    return 1;
-}
-
 int HLIEModelInfo::estimate_mem_from_gguf(const std::string& model_path, const int context_size, const int batch_num) {
     if (model_path.empty()) {
         return 0;
@@ -791,21 +619,6 @@ void HLIEModelInfo::build_llm(const std::string& model_path, const std::string& 
     infer_service_kind_from_name();
     is_llm_ = true;
     estimated_mem_mb_ = estimate_mem_from_gguf(model_path_, context_size_, batch_num_);
-}
-
-void HLIEModelInfo::build_sd(const std::string& model_type, const std::string& vae_model, const std::string& t5_model,
-                             const std::string& clip_model, const std::string& clip_l_model, const std::string& mmdit_model,
-                             const std::string& devices) {
-    model_type_ = to_lower(model_type);
-    service_kind_ = "sd";
-    model_family_ = "sd3";
-    is_llm_ = false;
-    vae_model_ = vae_model;
-    t5_model_ = t5_model;
-    clip_model_ = clip_model;
-    clip_l_model_ = clip_l_model;
-    mmdit_model_ = mmdit_model;
-    devices_ = devices;
 }
 
 int HLIEModelInfo::to_json_file(const std::string& file_path) const {

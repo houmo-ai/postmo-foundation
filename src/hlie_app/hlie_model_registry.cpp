@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <ctime>
+#include <utility>
 
 #include "hlie_base/hlie_logger.h"
 #include "json.hpp"
@@ -23,28 +24,7 @@ std::string HLIEModelRegistry::normalize_model_name(const std::string& name) {
 }
 
 HLIEModelRegistry::ModelInstance* HLIEModelRegistry::find_instance_locked(const std::string& model_name) {
-    if (const auto it = model_instances_.find(model_name); it != model_instances_.end()) {
-        return &it->second;
-    }
-
-    const std::string normalized_name = normalize_model_name(model_name);
-    if (normalized_name.empty()) {
-        return nullptr;
-    }
-
-    ModelInstance* matched = nullptr;
-    for (auto& [name, inst] : model_instances_) {
-        const bool key_matched = normalize_model_name(name) == normalized_name;
-        const bool model_name_matched = normalize_model_name(inst.model_info.get_model_name()) == normalized_name;
-        const bool meta_name_matched = normalize_model_name(inst.meta.name) == normalized_name;
-        if (key_matched || model_name_matched || meta_name_matched) {
-            if (!matched || inst.meta.status == SERVER_MODEL_STATUS_LOADED) {
-                matched = &inst;
-            }
-        }
-    }
-
-    return matched;
+    return const_cast<ModelInstance*>(std::as_const(*this).find_instance_locked(model_name));
 }
 
 const HLIEModelRegistry::ModelInstance* HLIEModelRegistry::find_instance_locked(const std::string& model_name) const {
@@ -58,21 +38,31 @@ const HLIEModelRegistry::ModelInstance* HLIEModelRegistry::find_instance_locked(
     }
 
     const ModelInstance* matched = nullptr;
+    int matched_rank = 2;
+    int matched_state_rank = 2;
+    bool ambiguous = false;
     for (const auto& [name, inst] : model_instances_) {
         const bool key_matched = normalize_model_name(name) == normalized_name;
         const bool model_name_matched = normalize_model_name(inst.model_info.get_model_name()) == normalized_name;
         const bool meta_name_matched = normalize_model_name(inst.meta.name) == normalized_name;
         if (key_matched || model_name_matched || meta_name_matched) {
-            if (!matched || inst.meta.status == SERVER_MODEL_STATUS_LOADED) {
+            const int rank = key_matched ? 0 : 1;
+            const int state_rank = inst.meta.status == SERVER_MODEL_STATUS_LOADED ? 0 : 1;
+            if (!matched || rank < matched_rank || (rank == matched_rank && state_rank < matched_state_rank)) {
                 matched = &inst;
+                matched_rank = rank;
+                matched_state_rank = state_rank;
+                ambiguous = false;
+            } else if (rank == matched_rank && state_rank == matched_state_rank) {
+                ambiguous = true;
             }
         }
     }
 
-    return matched;
+    return ambiguous ? nullptr : matched;
 }
 
-void HLIEModelRegistry::register_model(HLIEModelInfo& model_info) {
+void HLIEModelRegistry::register_model(HLIEModelInfo& model_info, const int estimated_mem_mb) {
     ModelInstance model_instance;
     const std::string model_key = HLIEModelInfo::build_model_key(model_info);
 
@@ -85,6 +75,7 @@ void HLIEModelRegistry::register_model(HLIEModelInfo& model_info) {
     model_instance.path_mmproj = model_info.get_mm_proj_path();
     model_instance.meta = std::move(meta);
     model_instance.model_info = model_info;
+    model_instance.estimated_mem_mb = std::max(0, estimated_mem_mb);
 
     upsert(std::move(model_instance));
 
@@ -138,69 +129,19 @@ bool HLIEModelRegistry::contains(const std::string& model_key) const {
 
 std::optional<server_model_meta> HLIEModelRegistry::get_meta(const std::string& model_name) const {
     std::lock_guard lk(mutex_);
-
-    if (const auto it = model_instances_.find(model_name); it != model_instances_.end()) {
-        return it->second.meta;
-    }
-
-    const std::string normalized_name = normalize_model_name(model_name);
-    if (normalized_name.empty()) {
-        return std::nullopt;
-    }
-
-    for (const auto& [name, inst] : model_instances_) {
-        if (normalize_model_name(name) == normalized_name ||
-            normalize_model_name(inst.model_info.get_model_name()) == normalized_name ||
-            normalize_model_name(inst.meta.name) == normalized_name) {
-            return inst.meta;
-        }
-    }
-
-    return std::nullopt;
+    const ModelInstance* matched = find_instance_locked(model_name);
+    return matched ? std::optional<server_model_meta>{matched->meta} : std::nullopt;
 }
 
 std::optional<std::reference_wrapper<HLIEModelRegistry::ModelInstance>> HLIEModelRegistry::get_instance(const std::string& model_name) {
     std::lock_guard lk(mutex_);
-
-    if (const auto it = model_instances_.find(model_name); it != model_instances_.end()) {
-        LOG_DEBUG("Model lookup exact key matched: request={}, key={}", json(model_name).dump(), json(it->first).dump());
-        return std::ref(it->second);
-    }
-
-    const std::string normalized_name = normalize_model_name(model_name);
-    if (normalized_name.empty()) {
-        LOG_WARN("Model lookup failed because normalized request name is empty: request={}", json(model_name).dump());
-        return std::nullopt;
-    }
-
-    ModelInstance* matched = nullptr;
-    for (auto& [name, inst] : model_instances_) {
-        const bool key_matched = normalize_model_name(name) == normalized_name;
-        const bool model_name_matched = normalize_model_name(inst.model_info.get_model_name()) == normalized_name;
-        const bool meta_name_matched = normalize_model_name(inst.meta.name) == normalized_name;
-        if (key_matched || model_name_matched || meta_name_matched) {
-            LOG_DEBUG(
-                "Model lookup normalized match: request={}, key={}, model_name={}, meta_name={}, key_match={}, model_name_match={}, meta_name_match={}",
-                json(model_name).dump(), json(name).dump(), json(inst.model_info.get_model_name()).dump(), json(inst.meta.name).dump(),
-                key_matched, model_name_matched, meta_name_matched);
-            if (!matched || inst.meta.status == SERVER_MODEL_STATUS_LOADED) {
-                matched = &inst;
-            }
-        }
-    }
-
+    ModelInstance* matched = find_instance_locked(model_name);
     if (matched) {
         return std::ref(*matched);
     }
 
-    LOG_WARN("Model lookup failed: request={}, normalized={}, instance_count={}",
-             json(model_name).dump(), json(normalized_name).dump(), model_instances_.size());
-    for (const auto& [name, inst] : model_instances_) {
-        LOG_WARN("Model lookup candidate: key={}, model_name={}, meta_name={}, mmproj={}, status={}, port={}",
-                 json(name).dump(), json(inst.model_info.get_model_name()).dump(), json(inst.meta.name).dump(),
-                 json(inst.path_mmproj).dump(), static_cast<int>(inst.meta.status), inst.meta.port);
-    }
-
+    LOG_WARN("Model lookup failed or is ambiguous: request={}, normalized={}, instance_count={}",
+             json(model_name).dump(), json(normalize_model_name(model_name)).dump(), model_instances_.size());
     return std::nullopt;
 }
 

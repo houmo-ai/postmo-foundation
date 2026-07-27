@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <cmath>
 
-#include "hlie_base/hlie_logger.h"
-
 HLIE_NAMESPACE_BEGIN
 
 namespace {
@@ -22,6 +20,13 @@ DocumentRegionCrop DocumentRegionCropper::crop_region(const PdfPageImage& image,
                                                       const DocumentCropOptions& options) {
     DocumentRegionCrop crop;
     if (image.width <= 0 || image.height <= 0 || image.channels <= 0 || image.stride <= 0 || image.pixels.empty()) {
+        return crop;
+    }
+
+    const auto row_bytes = static_cast<std::size_t>(image.width) * static_cast<std::size_t>(image.channels);
+    const auto source_stride = static_cast<std::size_t>(image.stride);
+    const auto source_height = static_cast<std::size_t>(image.height);
+    if (source_stride < row_bytes || source_height > image.pixels.size() / source_stride) {
         return crop;
     }
 
@@ -51,7 +56,7 @@ DocumentRegionCrop DocumentRegionCropper::crop_region(const PdfPageImage& image,
     crop.pixels.resize(static_cast<size_t>(crop.stride) * static_cast<size_t>(crop.height));
 
     for (int y = 0; y < crop.height; ++y) {
-        const auto* src = image.pixels.data() + static_cast<size_t>(y0 + y) * static_cast<size_t>(image.stride) +
+        const auto* src = image.pixels.data() + static_cast<size_t>(y0 + y) * source_stride +
                           static_cast<size_t>(x0) * static_cast<size_t>(image.channels);
         auto* dst = crop.pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(crop.stride);
         std::copy(src, src + static_cast<size_t>(crop.stride), dst);
@@ -63,7 +68,6 @@ DocumentRegionCrop DocumentRegionCropper::crop_region(const PdfPageImage& image,
 int DocumentRegionCropper::crop_recognizable_regions(DocumentPreprocessResult& document, const DocumentCropOptions& options) {
     int crop_count = 0;
     for (auto& page : document.pages) {
-        int page_crop_count = 0;
         for (auto& region : page.regions) {
             region.crop = {};
             if (!should_crop_region(region)) {
@@ -72,10 +76,8 @@ int DocumentRegionCropper::crop_recognizable_regions(DocumentPreprocessResult& d
             region.crop = crop_region(page.image, region, options);
             if (!region.crop.pixels.empty()) {
                 ++crop_count;
-                ++page_crop_count;
             }
         }
-        LOG_INFO("Document region crops prepared page={}, crops={}", page.image.page_index, page_crop_count);
     }
     return crop_count;
 }

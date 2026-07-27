@@ -2,6 +2,7 @@
 #define HLIE_REQUEST_PROXY_H
 
 #include "hlie_base/hlie_base.h"
+#include "hlie_app/hlie_proxy_timeout.h"
 #include "server/server-http.h"
 
 
@@ -14,9 +15,10 @@ struct HLIE_API ServerHttpProxy : server_http_res {
                       int port,
                       const std::string & path,
                       const std::map<std::string, std::string> & headers,
-                      const std::string & body,
-                      const std::map<std::string, uploaded_file> & files,
-                      const std::function<bool()>& should_stop);
+                       const std::string & body,
+                       const std::map<std::string, uploaded_file> & files,
+                       const std::function<bool()>& should_stop,
+                       const ProxyTimeoutOptions& timeout_options = {});
     ~ServerHttpProxy() override {
         if (cleanup) {
             cleanup();
