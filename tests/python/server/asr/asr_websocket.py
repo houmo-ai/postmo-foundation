@@ -21,11 +21,14 @@ import base64
 import json
 import math
 import struct
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from asr_stream_assertions import TranscriptionStreamAssertions
 
 
 DEFAULT_URI = "ws://127.0.0.1:7999"
@@ -117,6 +120,22 @@ def load_audio(path: Path, target_rate: int) -> np.ndarray:
     duration = samples.size / target_rate
     log("SUCCESS", f"Audio ready: sample_rate={target_rate}, samples={samples.size}, duration={duration:.2f}s")
     return samples
+
+
+def limit_pcm16_audio_bytes(samples: np.ndarray, audio_bytes: int) -> np.ndarray:
+    if audio_bytes <= 0:
+        return samples
+    if audio_bytes % 2 != 0:
+        raise ValueError(f"PCM16 audio byte limit must be even, got {audio_bytes}")
+
+    sample_count = audio_bytes // 2
+    if samples.size < sample_count:
+        raise ValueError(
+            f"Audio only contains {samples.size * 2} PCM16 bytes, fewer than requested {audio_bytes}"
+        )
+    limited = samples[:sample_count]
+    log("INFO", f"Limited audio payload to {audio_bytes} PCM16 bytes ({sample_count} samples)")
+    return limited
 
 
 def pcm16_base64(samples: np.ndarray) -> str:
@@ -246,10 +265,16 @@ def is_connection_closed_error(exc: BaseException) -> bool:
     return "connectionclosed" in name or "connection closed" in str(exc).lower()
 
 
-async def receive_transcripts(websocket: Any, sender_done: asyncio.Event, final_timeout: float) -> str:
+async def receive_transcripts(
+    websocket: Any,
+    sender_done: asyncio.Event,
+    final_timeout: float,
+    assert_streaming: bool = False,
+) -> str:
     committed_turns = 0
     completed_turns = 0
     transcripts: list[str] = []
+    stream_assertions = TranscriptionStreamAssertions() if assert_streaming else None
     deadline = time.monotonic() + final_timeout
 
     while True:
@@ -283,10 +308,14 @@ async def receive_transcripts(websocket: Any, sender_done: asyncio.Event, final_
             committed_turns += 1
             log("INFO", f"Committed turn {committed_turns}: {event.get('item_id')}")
         elif event_type == "conversation.item.input_audio_transcription.delta":
+            if stream_assertions is not None:
+                stream_assertions.consume(event)
             print(event.get("delta", ""), end="", flush=True)
         elif event_type == "conversation.item.input_audio_transcription.completed":
-            transcript = event.get("transcript", "").strip()
-            transcripts.append(transcript)
+            if stream_assertions is not None:
+                stream_assertions.consume(event)
+            transcript = event.get("transcript", "")
+            transcripts.append(transcript.strip())
             completed_turns += 1
             log("SUCCESS", f"\nCompleted turn {completed_turns}/{committed_turns}: {transcript}")
         elif event_type == "conversation.item.input_audio_transcription.failed":
@@ -298,6 +327,15 @@ async def receive_transcripts(websocket: Any, sender_done: asyncio.Event, final_
             raise RuntimeError(error.get("message", "WebSocket error"))
         else:
             log("DEBUG", f"Ignoring event: {event_type}")
+
+    if stream_assertions is not None:
+        stream_assertions.finish()
+        if committed_turns == 0:
+            raise AssertionError("No input_audio_buffer.committed event received")
+        if completed_turns != committed_turns:
+            raise AssertionError(
+                f"Committed/completed turn count mismatch: committed={committed_turns} completed={completed_turns}"
+            )
 
     return " ".join(text for text in transcripts if text)
 
@@ -313,6 +351,7 @@ async def run(args: argparse.Namespace) -> str:
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
     samples = load_audio(audio_path, args.sample_rate)
+    samples = limit_pcm16_audio_bytes(samples, args.audio_bytes)
     log("INFO", f"Connecting WebSocket: {args.uri}")
 
     async with websockets.connect(
@@ -340,7 +379,14 @@ async def run(args: argparse.Namespace) -> str:
         )
 
         sender_done = asyncio.Event()
-        receiver = asyncio.create_task(receive_transcripts(websocket, sender_done, args.final_timeout))
+        receiver = asyncio.create_task(
+            receive_transcripts(
+                websocket,
+                sender_done,
+                args.final_timeout,
+                assert_streaming=args.assert_streaming,
+            )
+        )
         stream_error: BaseException | None = None
         try:
             try:
@@ -384,6 +430,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uri", default=DEFAULT_URI, help=f"WebSocket URI, default: {DEFAULT_URI}")
     parser.add_argument("--audio", default=str(DEFAULT_AUDIO_FILE), help="Path to a PCM WAV file")
+    parser.add_argument(
+        "--audio-bytes",
+        type=int,
+        default=0,
+        help="Limit the uploaded PCM16 payload to this many bytes; 0 sends the full audio",
+    )
     parser.add_argument("--sample-rate", type=int, default=TARGET_SAMPLE_RATE, help="Input sample rate declared to server")
     parser.add_argument("--model", default="", help="Optional transcription model; overrides model in the WebSocket URI")
     parser.add_argument("--prompt", default="", help="Optional transcription prompt")
@@ -400,6 +452,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ping-interval", type=float, default=0.0, help="WebSocket ping interval seconds; 0 disables client pings")
     parser.add_argument("--ping-timeout", type=float, default=0.0, help="WebSocket ping timeout seconds; 0 disables ping timeout")
     parser.add_argument("--log-every-chunks", type=int, default=20, help="Log one sent-chunk line every N chunks; 0 disables periodic chunk logs")
+    parser.add_argument(
+        "--assert-streaming",
+        action="store_true",
+        help="Require delta events, exact delta/completed equality, and no leaked Qwen ASR markers",
+    )
     return parser.parse_args()
 
 
@@ -410,3 +467,4 @@ if __name__ == "__main__":
         log("WARN", "Interrupted")
     except Exception as exc:
         log("ERROR", str(exc))
+        sys.exit(1)

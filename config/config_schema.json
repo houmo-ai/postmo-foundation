@@ -193,6 +193,22 @@
           "type": "boolean",
           "description": "Automatically load the model requested by completion or embedding APIs."
         },
+        "discovery_scan_interval_sec": {
+          "type": "integer",
+          "description": "Interval in seconds for detecting newly downloaded models; 0 disables periodic discovery."
+        },
+        "discovery_stability_sec": {
+          "type": "integer",
+          "description": "Time a changed model directory must remain unchanged before new GGUF files are validated and registered."
+        },
+        "discovery_scan_on_models_request": {
+          "type": "boolean",
+          "description": "Wake the background discovery worker when listing models or resolving an unknown requested model."
+        },
+        "discovery_request_wait_sec": {
+          "type": "integer",
+          "description": "Maximum seconds an on-demand model lookup waits for discovery registration; 0 disables waiting."
+        },
         "auto_unload": {
           "type": "boolean",
           "description": "Allow idle models to be evicted by memory, count, or idle-time policies."
@@ -212,6 +228,22 @@
         "llm_lazy_mode": {
           "type": "boolean",
           "description": "Enable lazy loading for LLM models."
+        },
+        "llm_presets_enabled": {
+          "type": "boolean",
+          "description": "Enable per-model llama.cpp preset and local override resolution."
+        },
+        "llm_preset_catalog": {
+          "type": "string",
+          "description": "Path to the versioned official per-model llama.cpp preset catalog."
+        },
+        "llm_override_catalog": {
+          "type": "string",
+          "description": "Path to the deployment-local per-model llama.cpp override catalog."
+        },
+        "llm_preset_strict": {
+          "type": "boolean",
+          "description": "Fail initialization when an existing llama.cpp preset catalog is invalid."
         }
       }
     }

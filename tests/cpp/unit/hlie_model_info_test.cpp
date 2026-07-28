@@ -32,21 +32,51 @@ TEST_CASE("ModelInfo parses routing identity without opening a GGUF", "[model-in
     CHECK(info.get_batch_num() == 4);
     CHECK(info.get_cores() == 6);
     CHECK(info.get_device_num() == 2);
+    CHECK(info.get_xh_version() == 2);
     CHECK(info.get_service_kind() == "llm");
+    CHECK(info.get_role() == HLIEModelRole::Chat);
+}
+
+TEST_CASE("ModelInfo infers model roles from deployment identities", "[model-info][role]") {
+    struct Case {
+        const char* filename;
+        HLIEModelRole role;
+        bool audio;
+        bool vision;
+    };
+    const Case cases[] = {
+        {"HiModel_xh2_qwen3-reranker_8b_v1.2.0.gguf", HLIEModelRole::Rerank, false, false},
+        {"HiModel_xh2_qwen3-asr_0.6b_v1.3.0.gguf", HLIEModelRole::Asr, true, false},
+        {"HiModel_xh2_qwen3-ForcedAligner_0.6b_v1.3.0.gguf", HLIEModelRole::ForcedAligner, true, false},
+        {"HiModel_xh2_glm-ocr_0.9b_v1.4.0.gguf", HLIEModelRole::Ocr, false, true},
+        {"HiModel-Whisper-medium-v1.2.0.gguf", HLIEModelRole::Asr, true, false},
+        {"HiModel_xh2_qwen3-tts-1.7b-v1.4.0.gguf", HLIEModelRole::Tts, true, false},
+    };
+
+    for (const auto& test : cases) {
+        HLIEModelInfo info;
+        REQUIRE(info.parse_identity_from_gguf_filename(test.filename) == 0);
+        CHECK(info.get_role() == test.role);
+        CHECK(info.get_capabilities().audio == test.audio);
+        CHECK(info.get_capabilities().vision == test.vision);
+    }
 }
 
 TEST_CASE("ModelInfo normalizes explicit service kinds", "[model-info]") {
     HLIEModelInfo info;
     info.set_service_kind("WhIsPeR");
     CHECK(info.get_service_kind() == "whisper");
+    CHECK(info.get_role() == HLIEModelRole::Asr);
     CHECK(info.is_llm_);
 
     info.set_service_kind("SD");
     CHECK(info.get_service_kind() == "sd");
+    CHECK(info.get_role() == HLIEModelRole::ImageGeneration);
     CHECK_FALSE(info.is_llm_);
 
     info.set_service_kind("");
     CHECK(info.get_service_kind() == "llm");
+    CHECK(info.get_role() == HLIEModelRole::Chat);
     CHECK(info.is_llm_);
 }
 
@@ -59,6 +89,7 @@ TEST_CASE("ModelInfo builds a complete SD descriptor", "[model-info]") {
     CHECK(info.get_model_type() == "sd");
     CHECK(info.get_service_kind() == "sd");
     CHECK(info.get_model_family() == "sd3");
+    CHECK(info.get_role() == HLIEModelRole::ImageGeneration);
     CHECK(info.get_vae_model() == "vae.gguf");
     CHECK(info.get_t5_model() == "t5.gguf");
     CHECK(info.get_clip_model() == "clip.gguf");

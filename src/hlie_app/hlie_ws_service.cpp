@@ -518,7 +518,7 @@ void HLIEWebSocketService::processInferenceTasks() {
                            {"error",
                             {{"type", "transcription_error"},
                              {"code", "transcription_failed"},
-                             {"message", "Whisper transcription failed"},
+                             {"message", "Audio transcription failed"},
                              {"param", nullptr}}}}
                           .dump());
             continue;

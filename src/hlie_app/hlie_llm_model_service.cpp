@@ -5,7 +5,6 @@
 #include <common.h>
 #include <server/server-context.h>
 #include <server/info_printer.h>
-#include <unordered_set>
 
 #include "hlie_app/hlie_device_service.h"
 #include "hlie_app/hlie_model_info.h"
@@ -50,53 +49,53 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
 
     device_service_ = device_service;
 
-    std::unordered_map<std::string, std::string> llm_params;
-    // 程序内特定启动参数
-    llm_params["--model"] = model_info.get_model_path();
-    llm_params["--parallel"] = std::to_string(model_info.get_batch_num());
-    llm_params["--ctx-size"] = std::to_string(model_info.get_context_size());
-    llm_params["--no-context-shift"] = "";
-    llm_params["--no-warmup"] = "";
-
-    // 第二优先级是程序入口参数
     const auto& config_service = Singleton<HLIEConfigService>::instance();
-    auto args_from_main = config_service->get_args();
-    for (const auto& [key, value] : args_from_main) {
-        if (key == "--port" || key == "--device_id" || key == "--instance_id" ||
-            key == "--json_info") { // 改为由框架控制，非llama-server参数
-            continue;
+    HLIELlmParamSet launch_params;
+    if (model_info.has_effective_llama_params()) {
+        launch_params = model_info.get_effective_llama_params();
+        LOG_INFO("Using resolved llama params: model={}, presets={}, hash={}",
+                 model_info.model_key_, model_info.get_matched_llama_presets().size(),
+                 model_info.get_effective_llama_params_hash());
+    } else {
+        // Compatibility fallback for direct SDK/service callers that bypass Workflow.
+        launch_params.set("--parallel", static_cast<int64_t>(model_info.get_batch_num()));
+        launch_params.set("--ctx-size", static_cast<int64_t>(model_info.get_context_size()));
+        launch_params.set("--no-context-shift", true);
+        launch_params.set("--no-warmup", true);
+        for (const auto& [key, value] : config_service->get_args()) {
+            if (key.rfind("--", 0) != 0 || HLIELlmParamSet::is_framework_owned(key) ||
+                key == "--port" || key == "--device_id" || key == "--instance_id" ||
+                key == "--json_info" || key == "--launch_manifest") {
+                continue;
+            }
+            launch_params.set(key, value.empty() ? HLIELlmParamValue{true} : HLIELlmParamValue{value});
         }
-        llm_params[key] = value;
-    }
-
-    // 最高优先级是配置文件
-    if (const auto config_reader = config_service->get_reader()) {
-        // 获取llama-server同款运行参数
-        const std::vector<std::string> keys = config_reader->Keys("llm_params");
-        for (const auto& key : keys) {
-            const std::string value = config_reader->Get("llm_params", key, "");
-            llm_params[key] = value;
+        if (const auto config_reader = config_service->get_reader()) {
+            for (const auto& key : config_reader->Keys("llm_params")) {
+                if (HLIELlmParamSet::is_framework_owned(key)) {
+                    LOG_WARN("Ignoring framework-owned [llm_params] option: {}", key);
+                    continue;
+                }
+                const std::string value = config_reader->Get("llm_params", key, "");
+                launch_params.set(key, value.empty() ? HLIELlmParamValue{true} : HLIELlmParamValue{value});
+            }
         }
+        LOG_WARN("LLM model initialized without resolved preset params; using compatibility fallback: {}",
+                 model_info.model_key_);
     }
+    launch_params.set("--model", model_info.get_model_path());
 
     LOG_INFO("Start to merge llama-server params");
+    std::vector<std::string> argv_storage = launch_params.to_argv();
     std::vector<char*> argv_vector;
-    argv_vector.push_back(const_cast<char*>("hlie-llm"));
-
-    for (const auto& [key, value] : llm_params) {
-        LOG_INFO("param: {} = {}", key, value);
-        argv_vector.push_back(const_cast<char*>(key.c_str()));
-        if (!value.empty()) {
-            argv_vector.push_back(const_cast<char*>(value.c_str()));
-        }
+    argv_vector.reserve(argv_storage.size());
+    for (auto& value : argv_storage) {
+        LOG_INFO("llama argv: {}", value);
+        argv_vector.push_back(value.data());
     }
-
-    // 添加终止符
     argv_vector.push_back(nullptr);
-
-    // 转换为char**数组
     char** argv = argv_vector.data();
-    const int argc = static_cast<int>(argv_vector.size() - 1); // 不包括终止符nullptr
+    const int argc = static_cast<int>(argv_storage.size());
     // 解析llama-server参数，如果有外部相同配置会覆盖上面的Sampling参数
     if (!common_params_parse(argc, argv, params_, LLAMA_EXAMPLE_SERVER)) {
         LOG_ERROR("Failed to parse llama-server params. Check [llm_params] and command-line values. "

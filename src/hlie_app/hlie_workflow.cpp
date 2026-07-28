@@ -5,7 +5,10 @@
 #include <chrono>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <server/server-http.h>
+#include <sstream>
+#include <tuple>
 #include <unordered_set>
 
 #include "INIReader.h"
@@ -17,10 +20,12 @@
 #include "hlie_app/hlie_model_service.h"
 #include "hlie_app/hlie_model_service_factory.h"
 #include "hlie_app/hlie_process_manager.h"
+#include "hlie_app/hlie_qwen_asr_stream_decoder.h"
 #include "hlie_app/hlie_replica_config.h"
 #include "hlie_app/hlie_server_http_proxy.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
+#include "hlie_base/hlie_gguf_bundle.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_rk_performance.h"
 #include "hlie_base/hlie_util.h"
@@ -402,7 +407,7 @@ namespace {
         }
     }
 
-    std::vector<HLIEModelInfo> load_model_info_files_from_directory(const std::string& directory_path) {
+    std::vector<HLIEModelInfo> load_sd_model_manifests_from_directory(const std::string& directory_path) {
         std::vector<HLIEModelInfo> model_infos;
 
         try {
@@ -425,8 +430,13 @@ namespace {
                     LOG_INFO("Parsing model info from file: {}", file_path);
 
                     if (HLIEModelInfo model_info; model_info.parse_from_file(file_path) == 0) {
+                        if (model_info.get_service_kind() != "sd") {
+                            LOG_WARN("Ignoring non-SD JSON model manifest; non-SD models must be discovered from GGUF: {}",
+                                     file_path);
+                            continue;
+                        }
                         model_infos.push_back(std::move(model_info));
-                        LOG_INFO("Successfully parsed model info from: {}", file_path);
+                        LOG_INFO("Successfully parsed SD model manifest from: {}", file_path);
                     } else {
                         LOG_ERROR("Failed to parse model info from: {}", file_path);
                     }
@@ -438,8 +448,87 @@ namespace {
             LOG_ERROR("Exception when reading directory {}: {}", directory_path, e.what());
         }
 
-        LOG_INFO("Loaded {} model info files from directory: {}", model_infos.size(), directory_path);
+        LOG_INFO("Loaded {} SD model manifest files from directory: {}", model_infos.size(), directory_path);
         return model_infos;
+    }
+
+    std::optional<std::string> build_model_directory_snapshot(const std::string& directory_path) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(directory_path, ec) || ec) {
+            LOG_WARN("Cannot snapshot model directory: path={}, error={}", directory_path, ec.message());
+            return std::nullopt;
+        }
+
+        using SnapshotEntry = std::tuple<std::string, std::uintmax_t, std::int64_t>;
+        std::vector<SnapshotEntry> entries;
+        for (std::filesystem::directory_iterator it(directory_path, ec), end; it != end && !ec; it.increment(ec)) {
+            std::error_code entry_ec;
+            if (!it->is_regular_file(entry_ec) || entry_ec) {
+                continue;
+            }
+
+            std::string extension = it->path().extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (extension != ".gguf" && extension != ".json") {
+                continue;
+            }
+
+            const auto size = it->file_size(entry_ec);
+            if (entry_ec) {
+                LOG_DEBUG("Skipping model discovery snapshot entry {}: {}", it->path().string(), entry_ec.message());
+                continue;
+            }
+            const auto write_time = it->last_write_time(entry_ec);
+            if (entry_ec) {
+                LOG_DEBUG("Skipping model discovery snapshot entry {}: {}", it->path().string(), entry_ec.message());
+                continue;
+            }
+            entries.emplace_back(it->path().filename().generic_string(), size,
+                                 static_cast<std::int64_t>(write_time.time_since_epoch().count()));
+        }
+        if (ec) {
+            LOG_WARN("Model directory snapshot stopped early: path={}, error={}", directory_path, ec.message());
+            return std::nullopt;
+        }
+
+        std::sort(entries.begin(), entries.end());
+        std::ostringstream snapshot;
+        for (const auto& [name, size, write_time] : entries) {
+            snapshot << name.size() << ':' << name << ':' << size << ':' << write_time << '\n';
+        }
+        return snapshot.str();
+    }
+
+    bool validate_discovered_gguf(const std::string& model_dir, const std::string& configured_path) {
+        if (configured_path.empty()) {
+            return true;
+        }
+
+        std::filesystem::path path(configured_path);
+        std::string extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (extension != ".gguf") {
+            return true;
+        }
+        if (path.is_relative()) {
+            path = std::filesystem::path(model_dir) / path;
+        }
+
+        HLIEGgufBundle bundle;
+        std::string error;
+        if (!bundle.open(path.string(), &error)) {
+            LOG_WARN("Ignoring incomplete or invalid GGUF during discovery: path={}, reason={}",
+                     path.string(), error);
+            return false;
+        }
+        return true;
+    }
+
+    bool is_discovered_model_complete(const std::string& model_dir, const HLIEModelInfo& model_info) {
+        return validate_discovered_gguf(model_dir, model_info.get_model_path()) &&
+               validate_discovered_gguf(model_dir, model_info.get_mm_proj_path());
     }
 
     HLIEModelInfo parse_and_build_sd_model(const json& params, const std::unique_ptr<server_res_generator_light>& res,
@@ -469,15 +558,15 @@ namespace {
         return model_info;
     }
 
-    std::string generate_meta_info(const HLIEModelInfo& model_info, const std::string& model_dir,
-                                   const std::unique_ptr<server_res_generator_light>& res) {
+    std::string generate_launch_manifest(const HLIEModelInfo& model_info, const std::string& model_dir,
+                                         const std::unique_ptr<server_res_generator_light>& res) {
         using namespace std::chrono;
         const auto now = system_clock::now();
         const auto t = system_clock::to_time_t(now);
 
         std::ostringstream oss;
         oss << std::put_time(std::localtime(&t), "%Y%m%d_%H%M%S");
-        const auto meta_info_file_name = "model_info" + oss.str() + ".hlif";
+        const auto meta_info_file_name = "model_launch_" + oss.str() + ".hlif";
         const auto meta_cache_dir = HlieUtil::join_paths(model_dir, "meta_cache");
         std::string json_info_file;
         try {
@@ -489,7 +578,7 @@ namespace {
             LOG_ERROR("MetaCache Dir created failed, exception: {}", ex.what());
             json_info_file = HlieUtil::join_paths(model_dir, meta_info_file_name);
         }
-        if (model_info.to_json_file(json_info_file) < 0) {
+        if (model_info.to_json_file(json_info_file, true) < 0) {
             LOG_ERROR("failed to write model info to json file");
             const json resp = {{"ret", 80007}, "failed to write model info to json file"};
             res->error(resp);
@@ -554,14 +643,24 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
     }
 
     const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
+    if (!initialize_llm_preset_catalogs()) {
+        return -1;
+    }
     replicas_mode_ = HLIEReplicaConfig::load().enabled();
     master_port_ = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
     std::vector<HLIEModelInfo> model_infos;
-    if (args.find("--json_info") != args.end()) { // Slave process startup from generated model info.
-        std::string json_path = args.at("--json_info");
-        if (HLIEModelInfo model_info; model_info.parse_from_file(args.at("--json_info")) == 0) {
+    const auto launch_manifest_arg = args.find("--launch_manifest") != args.end()
+        ? args.find("--launch_manifest")
+        : args.find("--json_info");
+    if (launch_manifest_arg != args.end()) { // Slave process startup from generated launch manifest.
+        const std::string json_path = launch_manifest_arg->second;
+        if (HLIEModelInfo model_info; model_info.parse_from_file(json_path) == 0) {
+            if (!resolve_llm_launch_params(model_info)) {
+                LOG_ERROR("Failed to resolve llama params from launch manifest: {}", json_path);
+                return -1;
+            }
             model_infos.emplace_back(model_info);
-            LOG_INFO("Successfully parsed model info from --json_info: {}", json_path);
+            LOG_INFO("Successfully parsed model launch manifest: {}", json_path);
             is_slave_ = true;
             register_model_instance(model_info);
             // Slave startup now honors the real service kind in json_info.
@@ -620,16 +719,22 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
             return 0;
         }
 
-        LOG_ERROR("Failed to parse model info from --json_info: {}", json_path);
+        LOG_ERROR("Failed to parse model launch manifest: {}", json_path);
         return -1;
     }
 
     // 主进程或者是负载均衡模式
-    model_infos = load_model_info_files_from_directory(model_dir);
+    model_infos = load_sd_model_manifests_from_directory(model_dir);
     HLIEModelInfo::ScanLocalModelsFromDir(model_infos, model_dir_);
+    model_infos.erase(std::remove_if(model_infos.begin(), model_infos.end(),
+                                     [this](const HLIEModelInfo& model_info) {
+                                         return !is_discovered_model_complete(model_dir_, model_info);
+                                     }),
+                      model_infos.end());
     for (auto& model_info : model_infos) {
         register_model_instance(model_info);
     }
+    initialize_model_discovery_snapshot();
 
     if (model_infos.empty()) {
         LOG_WARN("No valid model info files found in directory: {}", model_dir);
@@ -758,6 +863,10 @@ int HLIEWorkflow::initialize(const std::string& model_dir, const std::string& pr
                 }
             }
 
+            if (!resolve_llm_launch_params(default_model_info)) {
+                LOG_ERROR("failed to resolve llama params for default model: {}", default_model_info.model_key_);
+                return -1;
+            }
             if (!model_service_manager_.load_llm(model_dir, default_model_info, device_service_)) {
                 LOG_ERROR("failed to init the LLM model service");
                 return -1;
@@ -867,9 +976,11 @@ void HLIEWorkflow::run() {
 
     ensure_asr_websocket();
     start_residency_ttl_worker();
+    start_model_discovery_worker();
 }
 
 void HLIEWorkflow::stop() {
+    stop_model_discovery_worker();
     stop_residency_ttl_worker();
 
     if (asr_websocket_service_) {
@@ -949,11 +1060,18 @@ std::string HLIEWorkflow::handle_asr_stream(
 
     LOG_INFO("ASR websocket route: backend=llm, model={}, samples={}, sample_rate={}",
              model, request.pcmf32.size(), request.sample_rate);
+    bool filter_qwen_markers = is_qwen3_asr_name(model);
+    if (!filter_qwen_markers) {
+        if (const auto inst = get_model_inst(model)) {
+            filter_qwen_markers = is_qwen3_asr_name(inst->key) ||
+                                  is_qwen3_asr_name(inst->model_info.get_model_name());
+        }
+    }
     const raw_buffer wav = pcmf32_to_wav_bytes(request.pcmf32, request.sample_rate);
     const json body = {
         {"model", model},
         {"response_format", request.response_format.empty() ? "json" : request.response_format},
-        {"stream", "false"},
+        {"stream", std::string(LLAMA_TRANSCRIPTION_SDK_STREAM_ENABLED)},
     };
     json request_body = body;
     if (!request.prompt.empty()) {
@@ -992,16 +1110,33 @@ std::string HLIEWorkflow::handle_asr_stream(
 
     std::string transcript;
     if (response->is_stream()) {
+        const bool sse_transport = response->content_type.find("text/event-stream") != std::string::npos;
+        HLIEQwenAsrStreamDecoder decoder(sse_transport, callback, filter_qwen_markers);
         std::string chunk;
-        while (response->next(chunk)) {
+        while (true) {
+            const bool has_next = response->next(chunk);
             if (!chunk.empty()) {
-                transcript += chunk;
-                callback(chunk);
+                decoder.push(chunk);
             }
             chunk.clear();
+            if (!has_next) {
+                break;
+            }
+        }
+        transcript = decoder.finish();
+        if (!decoder.saw_stream_delta()) {
+            LOG_ERROR("ASR websocket streaming backend returned no transcript delta: model={}, content_type={}",
+                      model, response->content_type);
+            return "HLIECpp-FAILED-888";
+        }
+        if (decoder.final_text_mismatch()) {
+            LOG_WARN("ASR websocket Qwen stream final text differs from emitted deltas: model={}, chars={}",
+                     model, transcript.size());
         }
     } else {
-        transcript = parse_asr_text_response(response->data);
+        LOG_ERROR("ASR websocket backend ignored stream=true: model={}, content_type={}",
+                  model, response->content_type);
+        return "HLIECpp-FAILED-888";
     }
 
     if (transcript == "HLIECpp-FAILED-888") {
@@ -1065,6 +1200,8 @@ server_http_res_ptr HLIEWorkflow::handle_health(const server_http_req& req) cons
 }
 
 server_http_res_ptr HLIEWorkflow::handle_models(const server_http_req& req) {
+    wait_for_model_discovery(request_model_discovery_scan());
+
     auto res = std::make_unique<server_res_generator_light>();
     json models_json = json::array();
     const auto all_models = get_all_model_metas();
@@ -1106,7 +1243,7 @@ server_http_res_ptr HLIEWorkflow::handle_models(const server_http_req& req) {
             if (const auto it = meta.loaded_info.find("model_type"); it != meta.loaded_info.end() && it->is_string()) {
                 model_json["model_type"] = *it;
             }
-            for (const auto* field : {"service_kind", "model_family", "architecture"}) {
+            for (const auto* field : {"service_kind", "role", "model_family", "architecture", "llama_params_hash"}) {
                 if (const auto it = meta.loaded_info.find(field); it != meta.loaded_info.end() && it->is_string() && !it->get<std::string>().empty()) {
                     model_json[field] = *it;
                 }
@@ -1116,6 +1253,13 @@ server_http_res_ptr HLIEWorkflow::handle_models(const server_http_req& req) {
             }
             if (const auto it = meta.loaded_info.find("capabilities"); it != meta.loaded_info.end() && it->is_object()) {
                 model_json["capabilities"] = *it;
+            }
+            if (const auto it = meta.loaded_info.find("llama_presets"); it != meta.loaded_info.end() && it->is_array()) {
+                model_json["llama_presets"] = *it;
+            }
+            if (const auto it = meta.loaded_info.find("llama_params_summary");
+                it != meta.loaded_info.end() && it->is_object()) {
+                model_json["llama_params_summary"] = *it;
             }
         }
         models_json.push_back(std::move(model_json));
@@ -1167,8 +1311,12 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
     if (!model_name.empty()) { // Compatibility path: check whether the model exists.
         meta = get_model_meta(model_name);
         if (!meta.has_value()) {
-            res->error(format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
-            return res;
+            wait_for_model_discovery(request_model_discovery_scan());
+            meta = get_model_meta(model_name);
+            if (!meta.has_value()) {
+                res->error(format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
+                return res;
+            }
         }
 
         if (meta->status == SERVER_MODEL_STATUS_LOADED) {
@@ -1347,6 +1495,10 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             return res;
         }
         auto model_info = std::move(*model_info_opt);
+        if (!resolve_llm_launch_params(model_info)) {
+            res->error(format_error_response_ex("failed to resolve llama params", ERROR_TYPE_INVALID_REQUEST, 80007));
+            return res;
+        }
         if (model_info.model_version_.empty()) {
             res->error(format_error_response_ex("failed to parse build_version from model name", ERROR_TYPE_INVALID_REQUEST, 80007));
             return res;
@@ -1384,16 +1536,16 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             }
 
             // Subprocess instance arguments.
-            json_info_file = generate_meta_info(model_info, model_dir_, res);
+            json_info_file = generate_launch_manifest(model_info, model_dir_, res);
             if (json_info_file.empty()) {
-                rollback_model_start(model_key, "generate_meta_info_failed");
+                rollback_model_start(model_key, "generate_launch_manifest_failed");
                 return res;
             }
 
             instance_id = generate_instance_id();
             std::vector args_for_sub_process = {std::string("--instance_id"), std::to_string(instance_id),
                                                 std::string("--device_id"),   devices,
-                                                std::string("--json_info"),   json_info_file};
+                                                std::string("--launch_manifest"), json_info_file};
             const auto& args = config_services->get_args();
 
             // Copy llama-params
@@ -1443,7 +1595,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             }
 
             // Subprocess instance arguments.
-            json_info_file = generate_meta_info(model_info, model_dir_, res);
+            json_info_file = generate_launch_manifest(model_info, model_dir_, res);
             if (json_info_file.empty()) {
                 return res;
             }
@@ -1451,7 +1603,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             instance_id = generate_instance_id();
             std::vector args_for_sub_process = {std::string("--instance_id"), std::to_string(instance_id),
                                                 std::string("--device_id"),   devices,
-                                                std::string("--json_info"),   json_info_file};
+                                                std::string("--launch_manifest"), json_info_file};
             if (process_id = Singleton<HLIEProcessManager>::instance()->create_process(program_path_, args_for_sub_process,
                                                                                        {HLIEModelType::SD3}, instance_id);
                 process_id == 0 || process_id == -1) {
@@ -1543,16 +1695,16 @@ int HLIEWorkflow::start_whisper(std::optional<server_model_meta>& meta, std::uni
         }
 
         // Subprocess instance arguments.
-        std::string json_info_file = generate_meta_info(model_info, model_dir_, res);
+        std::string json_info_file = generate_launch_manifest(model_info, model_dir_, res);
         if (json_info_file.empty()) {
-            rollback_model_start(model_key, "generate_meta_info_failed");
+            rollback_model_start(model_key, "generate_launch_manifest_failed");
             return -1;
         }
 
         auto instance_id = generate_instance_id();
         std::vector args_for_sub_process = {std::string("--instance_id"), std::to_string(instance_id),
                                             std::string("--device_id"),   devices,
-                                            std::string("--json_info"),   json_info_file};
+                                            std::string("--launch_manifest"), json_info_file};
         const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
 
         // Copy llama-params
@@ -1629,16 +1781,16 @@ int HLIEWorkflow::start_cosyvoice(std::optional<server_model_meta>& meta, std::u
         }
 
         // Subprocess instance arguments.
-        std::string json_info_file = generate_meta_info(model_info, model_dir_, res);
+        std::string json_info_file = generate_launch_manifest(model_info, model_dir_, res);
         if (json_info_file.empty()) {
-            rollback_model_start(model_key, "generate_meta_info_failed");
+            rollback_model_start(model_key, "generate_launch_manifest_failed");
             return -1;
         }
 
         auto instance_id = generate_instance_id();
         std::vector args_for_sub_process = {std::string("--instance_id"), std::to_string(instance_id),
                                             std::string("--device_id"),   devices,
-                                            std::string("--json_info"),   json_info_file};
+                                            std::string("--launch_manifest"), json_info_file};
         const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
 
         // Copy llama-params
@@ -1725,9 +1877,9 @@ int HLIEWorkflow::start_qwen3_tts(std::optional<server_model_meta>& meta,
         return -1;
     }
 
-    const std::string json_info_file = generate_meta_info(model_info, model_dir_, res);
+    const std::string json_info_file = generate_launch_manifest(model_info, model_dir_, res);
     if (json_info_file.empty()) {
-        rollback_model_start(model_key, "generate_meta_info_failed");
+        rollback_model_start(model_key, "generate_launch_manifest_failed");
         return -1;
     }
 
@@ -1735,7 +1887,7 @@ int HLIEWorkflow::start_qwen3_tts(std::optional<server_model_meta>& meta,
     std::vector args_for_sub_process = {
         std::string("--instance_id"), std::to_string(instance_id),
         std::string("--device_id"), devices,
-        std::string("--json_info"), json_info_file,
+        std::string("--launch_manifest"), json_info_file,
     };
     const auto& args = Singleton<HLIEConfigService>::instance()->get_args();
     for (const auto& [key, val] : args) {
@@ -2040,12 +2192,16 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
         return attach_model_request_lease(handler(req), model_registry_, model_key, lease);
     };
 
-    const auto inst = get_model_inst(name);
+    auto inst = get_model_inst(name);
     if (!inst.has_value()) {
-        LOG_ERROR("LLM request model lookup failed: path={}, model={}, normalized_model={}",
-                  req.path, json(name).dump(), json(normalize_model_name(name)).dump());
-        res->error(format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
-        return res;
+        wait_for_model_discovery(request_model_discovery_scan());
+        inst = get_model_inst(name);
+        if (!inst.has_value()) {
+            LOG_ERROR("LLM request model lookup failed after discovery: path={}, model={}, normalized_model={}",
+                      req.path, json(name).dump(), json(normalize_model_name(name)).dump());
+            res->error(format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
     }
     const int master_port = Singleton<HLIEConfigService>::instance()->get_int("server", "port", 7901, true);
     LOG_INFO("LLM Request route info, model [{}] status [{}] port [{}]" , name, static_cast<int>(inst->meta.status), inst->meta.port);
@@ -3064,6 +3220,338 @@ bool HLIEWorkflow::evict_model(const ModelInstance& model_inst, const std::strin
     LOG_WARN("Model residency: evicted model key={}, model_name={}",
              json(model_inst.key).dump(), json(model_inst.model_info.get_model_name()).dump());
     return true;
+}
+
+bool HLIEWorkflow::initialize_llm_preset_catalogs() {
+    const auto& config = Singleton<HLIEConfigService>::instance();
+    llm_presets_enabled_ = config->get_bool("model", "llm_presets_enabled", true, true);
+    llm_preset_strict_ = config->get_bool("model", "llm_preset_strict", true, true);
+    if (!llm_presets_enabled_) {
+        LOG_INFO("LLM preset catalogs are disabled");
+        return true;
+    }
+
+    const auto resolve_catalog_path = [&](const std::string& configured_path) {
+        std::filesystem::path path(configured_path);
+        if (path.is_relative()) {
+            const std::filesystem::path config_path(config->get_config_path());
+            path = config_path.parent_path() / path;
+        }
+        return path.lexically_normal().string();
+    };
+    const auto load_catalog = [&](HLIELlmPresetCatalog& catalog, const std::string& path,
+                                  const std::string& source, const bool required) {
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec) || ec) {
+            if (required) {
+                LOG_WARN("LLM {} catalog not found, continuing without it: {}", source, path);
+            } else {
+                LOG_INFO("LLM {} catalog not found, continuing without local overrides: {}", source, path);
+            }
+            return true;
+        }
+
+        std::string error;
+        if (catalog.load_file(path, source, &error)) {
+            LOG_INFO("Loaded LLM {} catalog: path={}, version={}, rules={}",
+                     source, path, catalog.catalog_version(), catalog.rules().size());
+            return true;
+        }
+
+        if (llm_preset_strict_) {
+            LOG_ERROR("Failed to load LLM {} catalog in strict mode: path={}, error={}", source, path, error);
+            return false;
+        }
+        LOG_WARN("Ignoring invalid LLM {} catalog: path={}, error={}", source, path, error);
+        return true;
+    };
+
+    const std::string preset_path = resolve_catalog_path(config->get_string(
+        "model", "llm_preset_catalog", "model_presets.json", true));
+    const std::string override_path = resolve_catalog_path(config->get_string(
+        "model", "llm_override_catalog", "model_overrides.json", true));
+    return load_catalog(llm_preset_catalog_, preset_path, "official", true) &&
+           load_catalog(llm_override_catalog_, override_path, "local", false);
+}
+
+bool HLIEWorkflow::resolve_llm_launch_params(HLIEModelInfo& model_info) {
+    if (HLIEModelServiceFactory::service_kind(model_info) != ModelServiceKind::LLM) {
+        return true;
+    }
+    if (model_info.has_effective_llama_params()) {
+        return true;
+    }
+
+    HLIELlmParamSet base;
+    base.set("--parallel", static_cast<int64_t>(model_info.get_batch_num()));
+    base.set("--ctx-size", static_cast<int64_t>(model_info.get_context_size()));
+    base.set("--no-context-shift", true);
+    base.set("--no-warmup", true);
+
+    const std::vector<const HLIELlmPresetCatalog*> catalogs = llm_presets_enabled_
+        ? std::vector<const HLIELlmPresetCatalog*>{&llm_preset_catalog_, &llm_override_catalog_}
+        : std::vector<const HLIELlmPresetCatalog*>{};
+    auto resolution = HLIELlmPresetResolver::resolve(model_info, base, catalogs);
+
+    const auto& config = Singleton<HLIEConfigService>::instance();
+    HLIELlmParamSet cli_layer;
+    for (const auto& [key, value] : config->get_args()) {
+        if (key.rfind("--", 0) != 0 || HLIELlmParamSet::is_framework_owned(key) ||
+            key == "--device_id" || key == "--instance_id" || key == "--json_info" ||
+            key == "--launch_manifest" || key == "--port") {
+            continue;
+        }
+        if (value.empty()) {
+            cli_layer.set(key, true);
+        } else {
+            cli_layer.set(key, value);
+        }
+    }
+    if (!cli_layer.empty()) {
+        resolution.params.merge_layer(cli_layer);
+        resolution.sources.push_back("cli");
+    }
+
+    HLIELlmParamSet sys_layer;
+    if (const auto reader = config->get_reader()) {
+        for (const auto& key : reader->Keys("llm_params")) {
+            if (HLIELlmParamSet::is_framework_owned(key)) {
+                LOG_WARN("Ignoring framework-owned [llm_params] option: {}", key);
+                continue;
+            }
+            const std::string value = reader->Get("llm_params", key, "");
+            if (value.empty()) {
+                sys_layer.set(key, true);
+            } else {
+                sys_layer.set(key, value);
+            }
+        }
+    }
+    if (!sys_layer.empty()) {
+        resolution.params.merge_layer(sys_layer);
+        resolution.sources.push_back("sys_cfg");
+    }
+    resolution.params_hash = resolution.params.stable_hash();
+
+    model_info.set_effective_llama_params(std::move(resolution.params),
+                                          std::move(resolution.matched_presets),
+                                          std::move(resolution.sources),
+                                          std::move(resolution.params_hash));
+    if (!model_info.model_key_.empty()) {
+        model_registry_.update_model_info(model_info.model_key_, model_info);
+    }
+    LOG_INFO("Resolved llama params: model_key={}, role={}, presets={}, hash={}",
+             model_info.model_key_, model_info.get_role_name(),
+             model_info.get_matched_llama_presets().size(), model_info.get_effective_llama_params_hash());
+    return true;
+}
+
+void HLIEWorkflow::initialize_model_discovery_snapshot() {
+    if (is_slave_) {
+        return;
+    }
+
+    std::lock_guard lk(model_discovery_mutex_);
+    if (const auto snapshot = build_model_directory_snapshot(model_dir_)) {
+        model_discovery_snapshot_ = *snapshot;
+        model_discovery_pending_ = false;
+        LOG_INFO("Model discovery baseline initialized: directory={}", model_dir_);
+    }
+}
+
+int HLIEWorkflow::discover_new_models(const bool force) {
+    if (is_slave_ || model_dir_.empty()) {
+        return 0;
+    }
+
+    std::lock_guard lk(model_discovery_mutex_);
+    const auto observed_snapshot = build_model_directory_snapshot(model_dir_);
+    if (!observed_snapshot) {
+        return 0;
+    }
+
+    const auto& config = Singleton<HLIEConfigService>::instance();
+    const int stability_sec = std::clamp(
+        config->get_int("model", "discovery_stability_sec", 10, true), 0, 3600);
+    const auto now = std::chrono::steady_clock::now();
+
+    if (!force) {
+        if (*observed_snapshot != model_discovery_snapshot_) {
+            model_discovery_snapshot_ = *observed_snapshot;
+            model_discovery_pending_ = true;
+            model_discovery_pending_since_ = now;
+            LOG_INFO("Model directory change detected; waiting for stable files: directory={}, stability_sec={}",
+                     model_dir_, stability_sec);
+            if (stability_sec > 0) {
+                return 0;
+            }
+        } else if (!model_discovery_pending_) {
+            return 0;
+        } else if (std::chrono::duration_cast<std::chrono::seconds>(now - model_discovery_pending_since_).count() <
+                   stability_sec) {
+            return 0;
+        }
+    }
+
+    std::vector<HLIEModelInfo> model_infos = load_sd_model_manifests_from_directory(model_dir_);
+    HLIEModelInfo::ScanLocalModelsFromDir(model_infos, model_dir_);
+
+    // Do not publish anything if a downloader changed the directory while
+    // GGUF metadata was being inspected. The next stable pass will retry.
+    const auto verified_snapshot = build_model_directory_snapshot(model_dir_);
+    if (!verified_snapshot || *verified_snapshot != *observed_snapshot) {
+        if (verified_snapshot) {
+            model_discovery_snapshot_ = *verified_snapshot;
+        }
+        model_discovery_pending_ = true;
+        model_discovery_pending_since_ = std::chrono::steady_clock::now();
+        LOG_INFO("Model directory changed during discovery; deferring registration: directory={}", model_dir_);
+        return 0;
+    }
+
+    int discovered_count = 0;
+    for (auto& model_info : model_infos) {
+        if (!is_discovered_model_complete(model_dir_, model_info)) {
+            continue;
+        }
+        if (model_registry_.register_model_if_absent(model_info, model_info.get_estimated_mem())) {
+            ++discovered_count;
+        }
+    }
+
+    model_discovery_snapshot_ = *verified_snapshot;
+    model_discovery_pending_ = false;
+    if (discovered_count > 0) {
+        LOG_INFO("Model discovery registered {} new model instance(s) from {}", discovered_count, model_dir_);
+    } else {
+        LOG_INFO("Model discovery completed with no new model instances: directory={}", model_dir_);
+    }
+    return discovered_count;
+}
+
+uint64_t HLIEWorkflow::request_model_discovery_scan() {
+    if (is_slave_ ||
+        !Singleton<HLIEConfigService>::instance()->get_bool(
+            "model", "discovery_scan_on_models_request", true, true)) {
+        return 0;
+    }
+
+    const uint64_t generation = model_discovery_sync_.request();
+    {
+        std::lock_guard wait_lock(model_discovery_wait_mutex_);
+        model_discovery_requested_.store(true);
+    }
+    model_discovery_cv_.notify_all();
+    return generation;
+}
+
+bool HLIEWorkflow::wait_for_model_discovery(const uint64_t generation) {
+    if (generation == 0) {
+        return false;
+    }
+
+    const int wait_sec = std::clamp(
+        Singleton<HLIEConfigService>::instance()->get_int(
+            "model", "discovery_request_wait_sec", 15, true),
+        0, 120);
+    if (wait_sec <= 0) {
+        return false;
+    }
+
+    const bool completed = model_discovery_sync_.wait_for(generation, std::chrono::seconds(wait_sec));
+    if (!completed) {
+        LOG_WARN("Timed out waiting for model discovery: generation={}, timeout_sec={}", generation, wait_sec);
+    }
+    return completed;
+}
+
+void HLIEWorkflow::start_model_discovery_worker() {
+    if (is_slave_ || model_discovery_thread_) {
+        return;
+    }
+
+    const int interval_sec = Singleton<HLIEConfigService>::instance()->get_int(
+        "model", "discovery_scan_interval_sec", 30, true);
+    const bool scan_on_request = Singleton<HLIEConfigService>::instance()->get_bool(
+        "model", "discovery_scan_on_models_request", true, true);
+    if (interval_sec <= 0 && !scan_on_request) {
+        LOG_INFO("Model discovery worker is disabled");
+        return;
+    }
+
+    {
+        std::lock_guard wait_lock(model_discovery_wait_mutex_);
+        model_discovery_stop_.store(false);
+        model_discovery_requested_.store(false);
+    }
+    model_discovery_sync_.reset();
+    model_discovery_thread_ = std::make_unique<std::thread>(&HLIEWorkflow::model_discovery_loop, this);
+    LOG_INFO("Model discovery worker started: directory={}, interval_sec={}, scan_on_request={}",
+             model_dir_, interval_sec > 0 ? std::clamp(interval_sec, 1, 3600) : 0, scan_on_request);
+}
+
+void HLIEWorkflow::stop_model_discovery_worker() {
+    {
+        std::lock_guard wait_lock(model_discovery_wait_mutex_);
+        model_discovery_stop_.store(true);
+    }
+    model_discovery_sync_.stop();
+    model_discovery_cv_.notify_all();
+    if (!model_discovery_thread_) {
+        return;
+    }
+
+    if (model_discovery_thread_->joinable()) {
+        model_discovery_thread_->join();
+    }
+    model_discovery_thread_.reset();
+    LOG_INFO("Periodic model discovery worker stopped");
+}
+
+void HLIEWorkflow::model_discovery_loop() {
+    while (!model_discovery_stop_.load()) {
+        const int configured_interval = Singleton<HLIEConfigService>::instance()->get_int(
+            "model", "discovery_scan_interval_sec", 30, true);
+        int wait_sec = configured_interval > 0 ? std::clamp(configured_interval, 1, 3600) : 3600;
+        bool discovery_pending = false;
+        {
+            std::lock_guard discovery_lock(model_discovery_mutex_);
+            if (model_discovery_pending_) {
+                discovery_pending = true;
+                const int stability_sec = std::clamp(
+                    Singleton<HLIEConfigService>::instance()->get_int(
+                        "model", "discovery_stability_sec", 10, true),
+                    0, 3600);
+                const auto elapsed_sec = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - model_discovery_pending_since_).count();
+                const int remaining_sec = std::max(1, stability_sec - static_cast<int>(elapsed_sec));
+                wait_sec = std::min(wait_sec, remaining_sec);
+            }
+        }
+
+        std::unique_lock wait_lock(model_discovery_wait_mutex_);
+        model_discovery_cv_.wait_for(wait_lock, std::chrono::seconds(wait_sec), [this] {
+            return model_discovery_stop_.load() || model_discovery_requested_.load();
+        });
+        if (model_discovery_stop_.load()) {
+            break;
+        }
+        const bool requested = model_discovery_requested_.exchange(false);
+        const uint64_t requested_generation = model_discovery_sync_.latest_requested();
+        wait_lock.unlock();
+
+        if (configured_interval > 0 || requested || discovery_pending) {
+            discover_new_models();
+            bool pending = false;
+            {
+                std::lock_guard discovery_lock(model_discovery_mutex_);
+                pending = model_discovery_pending_;
+            }
+            if (!pending) {
+                model_discovery_sync_.complete_through(requested_generation);
+            }
+        }
+    }
 }
 
 void HLIEWorkflow::start_residency_ttl_worker() {

@@ -4,6 +4,7 @@
 #include <cctype>
 #include <filesystem>
 #include <regex>
+#include <utility>
 
 #include "hlie_app/hlie_model_family_registry.h"
 
@@ -29,6 +30,7 @@ bool is_known_service_kind(const std::string& value) {
 
 const std::regex kChipRegex(R"((\d+)\s*chips?)", std::regex::icase);
 const std::regex kDeviceRegex(R"((\d+)d)", std::regex::icase);
+const std::regex kXhRegex(R"(xh\s*(\d+))", std::regex::icase);
 const std::regex kVlResRegex(R"(vit_(\d+)(?:[_x](\d+))?)", std::regex::icase);
 const std::regex kVersionRegex(R"(v\d+\.\d+\.\d+)", std::regex::icase);
 const std::regex kParamRegex(R"((\d+(?:\.\d+)?)\s*[bBmM])", std::regex::icase);
@@ -49,6 +51,7 @@ int HLIEModelInfo::parse_identity_from_gguf_filename(const std::string& file_pat
     model_family_.clear();
     architecture_.clear();
     capabilities_ = {};
+    role_ = HLIEModelRole::Unknown;
     is_multi_model_ = false;
     mm_proj_path_.clear();
     estimated_mem_mb_ = 0;
@@ -60,6 +63,7 @@ int HLIEModelInfo::parse_identity_from_gguf_filename(const std::string& file_pat
     context_size_ = std::regex_search(name, match, kContextRegex) ? std::stoi(match[1].str()) * 1024 : 6400000;
     batch_num_ = std::regex_search(name, match, kBatchRegex) ? std::stoi(match[1].str()) : 1;
     cores_ = std::regex_search(name, match, kCoreRegex) ? std::stoi(match[1].str()) : 2;
+    xh_version_ = std::regex_search(name, match, kXhRegex) ? std::stoi(match[1].str()) : 2;
     device_num_ = estimate_device_num(name);
 
     if (const auto family = HLIEModelFamilyRegistry::detect_projector_family(name); !family.empty()) {
@@ -97,6 +101,69 @@ void HLIEModelInfo::infer_service_kind_from_name() {
     } else if (service_kind_.empty() || !is_known_service_kind(service_kind_)) {
         service_kind_ = "llm";
     }
+    infer_role_from_name();
+}
+
+std::string HLIEModelInfo::role_to_string(const HLIEModelRole role) {
+    switch (role) {
+    case HLIEModelRole::Chat: return "chat";
+    case HLIEModelRole::VisionLanguage: return "vision_language";
+    case HLIEModelRole::Ocr: return "ocr";
+    case HLIEModelRole::Asr: return "asr";
+    case HLIEModelRole::ForcedAligner: return "forced_aligner";
+    case HLIEModelRole::Embedding: return "embedding";
+    case HLIEModelRole::Rerank: return "rerank";
+    case HLIEModelRole::Tts: return "tts";
+    case HLIEModelRole::ImageGeneration: return "image_generation";
+    case HLIEModelRole::Unknown:
+    default: return "unknown";
+    }
+}
+
+HLIEModelRole HLIEModelInfo::role_from_string(const std::string& role) {
+    const std::string normalized = to_lower(role);
+    if (normalized == "chat") return HLIEModelRole::Chat;
+    if (normalized == "vision_language" || normalized == "vl") return HLIEModelRole::VisionLanguage;
+    if (normalized == "ocr") return HLIEModelRole::Ocr;
+    if (normalized == "asr") return HLIEModelRole::Asr;
+    if (normalized == "forced_aligner" || normalized == "force_aligner") return HLIEModelRole::ForcedAligner;
+    if (normalized == "embedding") return HLIEModelRole::Embedding;
+    if (normalized == "rerank" || normalized == "reranker") return HLIEModelRole::Rerank;
+    if (normalized == "tts") return HLIEModelRole::Tts;
+    if (normalized == "image_generation" || normalized == "sd") return HLIEModelRole::ImageGeneration;
+    return HLIEModelRole::Unknown;
+}
+
+void HLIEModelInfo::infer_role_from_name() {
+    const std::string name = to_lower(model_name_);
+    if (name.find("rerank") != std::string::npos) {
+        role_ = HLIEModelRole::Rerank;
+    } else if (name.find("embedding") != std::string::npos || name.find("bge") != std::string::npos ||
+               name.find("gte") != std::string::npos) {
+        role_ = HLIEModelRole::Embedding;
+    } else if (name.find("forcealigner") != std::string::npos || name.find("forcedaligner") != std::string::npos ||
+               name.find("force-aligner") != std::string::npos || name.find("forced-aligner") != std::string::npos) {
+        role_ = HLIEModelRole::ForcedAligner;
+        capabilities_.audio = true;
+    } else if (name.find("qwen3-asr") != std::string::npos || name.find("qwen3_asr") != std::string::npos ||
+               service_kind_ == "whisper") {
+        role_ = HLIEModelRole::Asr;
+        capabilities_.audio = true;
+    } else if (name.find("ocr") != std::string::npos) {
+        role_ = HLIEModelRole::Ocr;
+        capabilities_.vision = true;
+    } else if (service_kind_ == "qwen3_tts" || service_kind_ == "cosyvoice" || service_kind_ == "tts") {
+        role_ = HLIEModelRole::Tts;
+        capabilities_.audio = true;
+    } else if (service_kind_ == "sd") {
+        role_ = HLIEModelRole::ImageGeneration;
+    } else if (is_multi_model_ || capabilities_.vision) {
+        role_ = HLIEModelRole::VisionLanguage;
+    } else if (service_kind_ == "llm") {
+        role_ = HLIEModelRole::Chat;
+    } else if (role_ == HLIEModelRole::Unknown) {
+        role_ = HLIEModelRole::Chat;
+    }
 }
 
 void HLIEModelInfo::set_service_kind(const std::string& service_kind) {
@@ -105,6 +172,7 @@ void HLIEModelInfo::set_service_kind(const std::string& service_kind) {
         service_kind_ = "llm";
     }
     is_llm_ = service_kind_ != "sd";
+    infer_role_from_name();
 }
 
 std::string HLIEModelInfo::parse_mmproj_vl_spec(const std::string& name) {
@@ -138,6 +206,17 @@ bool HLIEModelInfo::is_mtp() const {
     return contains_ignore_case(model_name_, "mtp");
 }
 
+void HLIEModelInfo::set_effective_llama_params(HLIELlmParamSet params,
+                                               std::vector<std::string> matched_presets,
+                                               std::vector<std::string> sources,
+                                               std::string params_hash) {
+    effective_llama_params_ = std::move(params);
+    matched_llama_presets_ = std::move(matched_presets);
+    llama_param_sources_ = std::move(sources);
+    effective_llama_params_hash_ = params_hash.empty() ? effective_llama_params_.stable_hash() : std::move(params_hash);
+    has_effective_llama_params_ = true;
+}
+
 int HLIEModelInfo::estimate_device_num(const std::string& model_name) {
     std::smatch match;
     if (std::regex_search(model_name, match, kChipRegex)) {
@@ -158,6 +237,7 @@ void HLIEModelInfo::build_sd(const std::string& model_type, const std::string& v
     model_name_ = "sd3";
     model_key_ = model_name_;
     is_llm_ = false;
+    role_ = HLIEModelRole::ImageGeneration;
     vae_model_ = vae_model;
     t5_model_ = t5_model;
     clip_model_ = clip_model;

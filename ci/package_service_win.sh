@@ -166,8 +166,24 @@ package_service() {
     cp build/bin/Release/hlie-*.dll "$release_dir/bin/"
     cp third_party/llama.cpp_houmo/bin/*.dll "$release_dir/bin/"
     cp config/win/sys.cfg "$release_dir/config/"
+    cp config/model_presets.json "$release_dir/config/"
+    cp config/model_overrides.json "$release_dir/config/"
     cp config/config_schema.json "$release_dir/config/"
     cp config/win/memory_estimates.json "$release_dir/config/"
+
+    local required_config_files=(
+        sys.cfg
+        model_presets.json
+        model_overrides.json
+        config_schema.json
+        memory_estimates.json
+    )
+    for config_file in "${required_config_files[@]}"; do
+        if [[ ! -f "$release_dir/config/$config_file" ]]; then
+            echo "Error: required runtime config missing from package: $config_file"
+            exit 1
+        fi
+    done
 
     cp third_party/sd.cpp/bin/stable-diffusion.dll "$release_dir/bin/"
     cp third_party/whisper.cpp/bin/whisper.dll "$release_dir/bin/"

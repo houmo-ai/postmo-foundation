@@ -1,14 +1,21 @@
 #ifndef HLIE_WORKFLOW_H
 #define HLIE_WORKFLOW_H
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <server/server-models.h>
+#include <thread>
 #include <vector>
 
 
 #include "hlie_base/hlie_base.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_model_info.h"
+#include "hlie_model_discovery_sync.h"
+#include "hlie_llm_preset_resolver.h"
 #include "hlie_model_registry.h"
 #include "hlie_model_service.h"
 #include "hlie_model_service_manager.h"
@@ -115,6 +122,15 @@ private:
     void start_residency_ttl_worker();
     void stop_residency_ttl_worker();
     void residency_ttl_loop();
+    void initialize_model_discovery_snapshot();
+    int discover_new_models(bool force = false);
+    uint64_t request_model_discovery_scan();
+    bool wait_for_model_discovery(uint64_t generation);
+    void start_model_discovery_worker();
+    void stop_model_discovery_worker();
+    void model_discovery_loop();
+    bool initialize_llm_preset_catalogs();
+    bool resolve_llm_launch_params(HLIEModelInfo& model_info);
 
     static int generate_instance_id() {
         static std::atomic counter{0};
@@ -143,6 +159,22 @@ private:
 
     std::unique_ptr<std::thread> residency_ttl_thread_;
     std::atomic<bool> residency_ttl_stop_{false};
+
+    std::unique_ptr<std::thread> model_discovery_thread_;
+    std::atomic<bool> model_discovery_stop_{false};
+    std::atomic<bool> model_discovery_requested_{false};
+    HLIEModelDiscoverySync model_discovery_sync_;
+    std::condition_variable model_discovery_cv_;
+    std::mutex model_discovery_wait_mutex_;
+    std::mutex model_discovery_mutex_;
+    std::string model_discovery_snapshot_;
+    bool model_discovery_pending_{false};
+    std::chrono::steady_clock::time_point model_discovery_pending_since_{};
+
+    HLIELlmPresetCatalog llm_preset_catalog_;
+    HLIELlmPresetCatalog llm_override_catalog_;
+    bool llm_presets_enabled_{true};
+    bool llm_preset_strict_{true};
 };
 
 HLIE_NAMESPACE_END

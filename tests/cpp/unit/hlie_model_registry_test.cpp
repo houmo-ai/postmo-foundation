@@ -53,6 +53,49 @@ TEST_CASE("Registry registration captures memory through the production entry po
     CHECK(snapshot->meta.loaded_info["service_kind"] == "sd");
 }
 
+TEST_CASE("Registry updates resolved llama metadata without changing runtime state", "[model-registry][llm-preset]") {
+    HLIEModelInfo info;
+    REQUIRE(info.parse_identity_from_gguf_filename("HiModel_xh2_qwen3.5_9b_32k_b1_1chip_v1.2.0.gguf") == 0);
+    HLIEModelRegistry registry;
+    registry.register_model(info, 8192);
+    REQUIRE(registry.mark_loaded(info.model_key_, 7902));
+
+    HLIELlmParamSet params;
+    params.set("--ctx-size", int64_t{32768});
+    info.set_effective_llama_params(params, {"qwen35-9b"}, {"official"}, params.stable_hash());
+    REQUIRE(registry.update_model_info(info.model_key_, info));
+
+    const auto snapshot = registry.get_instance_snapshot(info.model_key_);
+    REQUIRE(snapshot);
+    CHECK(snapshot->meta.status == SERVER_MODEL_STATUS_LOADED);
+    CHECK(snapshot->meta.port == 7902);
+    CHECK(snapshot->meta.loaded_info["role"] == "vision_language");
+    CHECK(snapshot->meta.loaded_info["llama_presets"] == nlohmann::json::array({"qwen35-9b"}));
+    CHECK(snapshot->meta.loaded_info["llama_params_summary"]["ctx_size"] == 32768);
+}
+
+TEST_CASE("Discovery registration preserves an existing runtime instance", "[model-registry][discovery]") {
+    HLIEModelInfo original;
+    original.build_sd("sd", "vae", "t5", "clip", "clip-l", "mmdit", "0");
+    HLIEModelRegistry registry;
+    REQUIRE(registry.register_model_if_absent(original, 3072));
+    REQUIRE(registry.mark_loaded("sd3", 7902));
+    REQUIRE(registry.begin_request("sd3"));
+
+    HLIEModelInfo rediscovered;
+    rediscovered.build_sd("sd", "new-vae", "new-t5", "new-clip", "new-clip-l", "new-mmdit", "1");
+    CHECK_FALSE(registry.register_model_if_absent(rediscovered, 4096));
+
+    const auto snapshot = registry.get_instance_snapshot("sd3");
+    REQUIRE(snapshot);
+    CHECK(snapshot->meta.status == SERVER_MODEL_STATUS_LOADED);
+    CHECK(snapshot->meta.port == 7902);
+    CHECK(snapshot->active_requests == 1);
+    CHECK(snapshot->estimated_mem_mb == 3072);
+    CHECK(snapshot->model_info.get_devices() == "0");
+    registry.end_request("sd3");
+}
+
 TEST_CASE("Registry rejects ambiguous aliases while preserving exact keys", "[model-registry][routing]") {
     HLIEModelRegistry registry;
     auto first = make_instance("model-a", SERVER_MODEL_STATUS_LOADED);

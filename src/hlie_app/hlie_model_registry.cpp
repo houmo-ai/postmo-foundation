@@ -10,6 +10,26 @@
 
 HLIE_NAMESPACE_BEGIN
 
+namespace {
+
+json llama_params_summary(const HLIEModelInfo& model_info) {
+    json summary = json::object();
+    if (!model_info.has_effective_llama_params()) {
+        return summary;
+    }
+    const auto params = model_info.get_effective_llama_params().to_json();
+    for (const auto& [arg, name] : std::map<std::string, std::string>{
+             {"--ctx-size", "ctx_size"}, {"--parallel", "parallel"},
+             {"--batch-size", "batch_size"}, {"--ubatch-size", "ubatch_size"}}) {
+        if (const auto it = params.find(arg); it != params.end()) {
+            summary[name] = *it;
+        }
+    }
+    return summary;
+}
+
+} // namespace
+
 std::string HLIEModelRegistry::normalize_model_name(const std::string& name) {
     const auto first = std::find_if_not(name.begin(), name.end(), [](const unsigned char c) { return std::isspace(c); });
     const auto last = std::find_if_not(name.rbegin(), name.rend(), [](const unsigned char c) { return std::isspace(c); }).base();
@@ -62,7 +82,8 @@ const HLIEModelRegistry::ModelInstance* HLIEModelRegistry::find_instance_locked(
     return ambiguous ? nullptr : matched;
 }
 
-void HLIEModelRegistry::register_model(HLIEModelInfo& model_info, const int estimated_mem_mb) {
+HLIEModelRegistry::ModelInstance HLIEModelRegistry::build_model_instance(HLIEModelInfo& model_info,
+                                                                         const int estimated_mem_mb) {
     ModelInstance model_instance;
     const std::string model_key = HLIEModelInfo::build_model_key(model_info);
 
@@ -76,6 +97,12 @@ void HLIEModelRegistry::register_model(HLIEModelInfo& model_info, const int esti
     model_instance.meta = std::move(meta);
     model_instance.model_info = model_info;
     model_instance.estimated_mem_mb = std::max(0, estimated_mem_mb);
+    return model_instance;
+}
+
+void HLIEModelRegistry::register_model(HLIEModelInfo& model_info, const int estimated_mem_mb) {
+    auto model_instance = build_model_instance(model_info, estimated_mem_mb);
+    const std::string model_key = model_instance.key;
 
     upsert(std::move(model_instance));
 
@@ -88,7 +115,29 @@ void HLIEModelRegistry::register_model(HLIEModelInfo& model_info, const int esti
     }
 }
 
-void HLIEModelRegistry::upsert(ModelInstance model_instance) {
+bool HLIEModelRegistry::register_model_if_absent(HLIEModelInfo& model_info, const int estimated_mem_mb) {
+    auto model_instance = build_model_instance(model_info, estimated_mem_mb);
+    const std::string model_key = model_instance.key;
+    normalize_model_instance(model_instance);
+
+    {
+        std::lock_guard lk(mutex_);
+        const auto [_, inserted] = model_instances_.try_emplace(model_key, std::move(model_instance));
+        if (!inserted) {
+            return false;
+        }
+    }
+
+    const auto registered = get_instance_snapshot(model_key);
+    if (registered) {
+        LOG_INFO("Discovered new model instance: key={}, model_name={}, model_path={}, mmproj={}",
+                 json(model_key).dump(), json(registered->model_info.get_model_name()).dump(),
+                 json(registered->path).dump(), json(registered->path_mmproj).dump());
+    }
+    return true;
+}
+
+void HLIEModelRegistry::normalize_model_instance(ModelInstance& model_instance) {
     if (model_instance.key.empty()) {
         model_instance.key = HLIEModelInfo::build_model_key(model_instance.model_info);
     }
@@ -112,11 +161,21 @@ void HLIEModelRegistry::upsert(ModelInstance model_instance) {
     model_instance.meta.loaded_info["service_kind"] = model_instance.model_info.get_service_kind();
     model_instance.meta.loaded_info["model_family"] = model_instance.model_info.get_model_family();
     model_instance.meta.loaded_info["architecture"] = model_instance.model_info.get_architecture();
+    model_instance.meta.loaded_info["role"] = model_instance.model_info.get_role_name();
+    if (model_instance.model_info.has_effective_llama_params()) {
+        model_instance.meta.loaded_info["llama_presets"] = model_instance.model_info.get_matched_llama_presets();
+        model_instance.meta.loaded_info["llama_params_hash"] = model_instance.model_info.get_effective_llama_params_hash();
+        model_instance.meta.loaded_info["llama_params_summary"] = llama_params_summary(model_instance.model_info);
+    }
     model_instance.meta.loaded_info["multimodal"] = model_instance.model_info.is_multi_model_;
     const auto& capabilities = model_instance.model_info.get_capabilities();
     model_instance.meta.loaded_info["capabilities"] = {
         {"text", capabilities.text}, {"vision", capabilities.vision}, {"audio", capabilities.audio}
     };
+}
+
+void HLIEModelRegistry::upsert(ModelInstance model_instance) {
+    normalize_model_instance(model_instance);
 
     std::lock_guard lk(mutex_);
     model_instances_[model_instance.key] = std::move(model_instance);
@@ -327,6 +386,25 @@ bool HLIEModelRegistry::update_port(const std::string& model_name, const int por
     }
 
     matched->meta.port = port;
+    return true;
+}
+
+bool HLIEModelRegistry::update_model_info(const std::string& model_name, const HLIEModelInfo& model_info) {
+    std::lock_guard lk(mutex_);
+    ModelInstance* matched = find_instance_locked(model_name);
+    if (!matched) {
+        return false;
+    }
+    matched->model_info = model_info;
+    matched->model_info.model_key_ = matched->key;
+    matched->path = model_info.get_model_path();
+    matched->path_mmproj = model_info.get_mm_proj_path();
+    matched->meta.loaded_info["role"] = model_info.get_role_name();
+    if (model_info.has_effective_llama_params()) {
+        matched->meta.loaded_info["llama_presets"] = model_info.get_matched_llama_presets();
+        matched->meta.loaded_info["llama_params_hash"] = model_info.get_effective_llama_params_hash();
+        matched->meta.loaded_info["llama_params_summary"] = llama_params_summary(model_info);
+    }
     return true;
 }
 

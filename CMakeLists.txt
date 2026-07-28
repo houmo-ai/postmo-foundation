@@ -23,6 +23,16 @@ configure_file(
         ${CMAKE_BINARY_DIR}/bin/config/config_schema.json
         COPYONLY
 )
+configure_file(
+        ${CMAKE_SOURCE_DIR}/config/model_presets.json
+        ${CMAKE_BINARY_DIR}/bin/config/model_presets.json
+        COPYONLY
+)
+configure_file(
+        ${CMAKE_SOURCE_DIR}/config/model_overrides.json
+        ${CMAKE_BINARY_DIR}/bin/config/model_overrides.json
+        COPYONLY
+)
 
 option(LLAMA_USE_SYSTEM_GGML "Use system libggml" OFF)
 

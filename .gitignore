@@ -18,3 +18,4 @@ release
 src/libtorch
 *.patch
 .vs
+artifacts

@@ -45,6 +45,9 @@ public:
     };
 
     void register_model(HLIEModelInfo& model_info, int estimated_mem_mb);
+    // Discovery uses insert-only registration so a rescan cannot overwrite
+    // the runtime status of an already loaded/loading model.
+    [[nodiscard]] bool register_model_if_absent(HLIEModelInfo& model_info, int estimated_mem_mb);
     void upsert(ModelInstance model_instance);
     [[nodiscard]] bool contains(const std::string& model_key) const;
 
@@ -80,8 +83,11 @@ public:
     bool mark_unloaded(const std::string& model_name, int port = 0);
     bool update_status(const std::string& model_name, server_model_status status, int port);
     bool update_port(const std::string& model_name, int port);
+    bool update_model_info(const std::string& model_name, const HLIEModelInfo& model_info);
 
 private:
+    static ModelInstance build_model_instance(HLIEModelInfo& model_info, int estimated_mem_mb);
+    static void normalize_model_instance(ModelInstance& model_instance);
     static std::string normalize_model_name(const std::string& name);
     ModelInstance* find_instance_locked(const std::string& model_name);
     const ModelInstance* find_instance_locked(const std::string& model_name) const;

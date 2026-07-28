@@ -266,11 +266,13 @@ namespace {
 
 int HLIEAppController::run() {
     HLIE_CHECK_NULL_RETURN(workflow_, -1);
-    if (!zero_load_) {
-        workflow_->run();
-    } else {
+    if (zero_load_) {
         LOG_WARN("Service starting in Zero-Load Model.");
     }
+    // Zero-load still needs workflow-level background services such as model
+    // discovery and residency management. Individual model services are
+    // guarded inside HLIEWorkflow::run().
+    workflow_->run();
 
     HLIE_CHECK_NULL_RETURN(web_service_, -1);
     web_service_->register_routers();

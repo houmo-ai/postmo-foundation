@@ -1,9 +1,12 @@
 add_library(hlie-testable-core STATIC
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_model_family_registry.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_model_info_core.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_llm_param_set.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_llm_preset_resolver.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_model_registry.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_model_residency_manager.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_proxy_timeout.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_qwen_asr_stream_decoder.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_document_core.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_document_region_cropper.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_document_types.cpp
@@ -18,11 +21,15 @@ target_compile_features(hlie-testable-core PUBLIC cxx_std_17)
 
 add_executable(hlie-unit-tests
         unit/hlie_document_core_test.cpp
+        unit/hlie_llm_preset_resolver_test.cpp
         unit/hlie_model_family_registry_test.cpp
         unit/hlie_model_info_test.cpp
         unit/hlie_model_registry_test.cpp
         unit/hlie_model_residency_manager_test.cpp
         unit/hlie_proxy_timeout_test.cpp)
+target_sources(hlie-unit-tests PRIVATE
+        unit/hlie_model_discovery_sync_test.cpp
+        unit/hlie_qwen_asr_stream_decoder_test.cpp)
 target_link_libraries(hlie-unit-tests PRIVATE
         Catch2::Catch2WithMain
         hlie-testable-core)

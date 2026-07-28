@@ -206,9 +206,25 @@ package_service() {
     cp third_party/llama.cpp_houmo/lib/*.so* "$release_dir/lib/" || true
     cp build/bin/houmo-llm-hi-cpp-linux "$release_dir/bin/HLIECpp" || true
     cp samples/zero_shot_prompt.wav "$release_dir/samples/zero_shot_prompt.wav" || true
-    cp config/linux/sys.cfg "$release_dir/config/sys.cfg" || true
-    cp config/config_schema.json "$release_dir/config/config_schema.json" || true
-    cp config/linux/memory_estimates.json "$release_dir/config/memory_estimates.json" || true
+    cp config/linux/sys.cfg "$release_dir/config/sys.cfg"
+    cp config/model_presets.json "$release_dir/config/model_presets.json"
+    cp config/model_overrides.json "$release_dir/config/model_overrides.json"
+    cp config/config_schema.json "$release_dir/config/config_schema.json"
+    cp config/linux/memory_estimates.json "$release_dir/config/memory_estimates.json"
+
+    local required_config_files=(
+        sys.cfg
+        model_presets.json
+        model_overrides.json
+        config_schema.json
+        memory_estimates.json
+    )
+    for config_file in "${required_config_files[@]}"; do
+        if [[ ! -f "$release_dir/config/$config_file" ]]; then
+            echo "Error: required runtime config missing from package: $config_file"
+            exit 1
+        fi
+    done
 
     cp third_party/sd.cpp/lib/libstable-diffusion.so "$release_dir/lib/" || true
     cp third_party/whisper.cpp/lib/libwhisper.so "$release_dir/lib/" || true
