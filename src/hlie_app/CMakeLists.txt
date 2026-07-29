@@ -8,7 +8,8 @@ add_definitions(-DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
 
 file(GLOB SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/*.cpp")
 file(GLOB MODEL_SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/models/*.cpp")
-list(APPEND SOURCES ${MODEL_SOURCES})
+file(GLOB AUDIO_SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/audio/*.cpp")
+list(APPEND SOURCES ${MODEL_SOURCES} ${AUDIO_SOURCES})
 
 add_library(${TARGET} ${SOURCES})
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})

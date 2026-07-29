@@ -7,17 +7,24 @@ add_library(hlie-testable-core STATIC
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_model_residency_manager.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_proxy_timeout.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_qwen_asr_stream_decoder.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/audio/hlie_realtime_vad.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_ws_service.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_document_core.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_document_region_cropper.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_document_types.cpp
         support/ggml_assert_test_shim.cpp)
 target_include_directories(hlie-testable-core PUBLIC
         ${PROJECT_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/third_party/uwebsockets/include
         ${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include
         ${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include/nlohmann
         ${PROJECT_SOURCE_DIR}/third_party/spdlog/include)
 target_compile_definitions(hlie-testable-core PUBLIC HLIE_STATIC)
 target_compile_features(hlie-testable-core PUBLIC cxx_std_17)
+target_link_libraries(hlie-testable-core PUBLIC
+        hlie-base
+        ${UWEBSOCKET_LIBRARY}
+        ${UV_LIBRARY})
 
 add_executable(hlie-unit-tests
         unit/hlie_document_core_test.cpp
@@ -26,7 +33,10 @@ add_executable(hlie-unit-tests
         unit/hlie_model_info_test.cpp
         unit/hlie_model_registry_test.cpp
         unit/hlie_model_residency_manager_test.cpp
-        unit/hlie_proxy_timeout_test.cpp)
+        unit/hlie_proxy_timeout_test.cpp
+        unit/hlie_ws_limits_test.cpp
+        unit/audio/hlie_realtime_vad_test.cpp
+        unit/audio/hlie_realtime_session_test.cpp)
 target_sources(hlie-unit-tests PRIVATE
         unit/hlie_model_discovery_sync_test.cpp
         unit/hlie_qwen_asr_stream_decoder_test.cpp)

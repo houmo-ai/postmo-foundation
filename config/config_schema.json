@@ -30,6 +30,15 @@
         }
       }
     },
+    "realtime": {
+      "description": "OpenAI-compatible Realtime API settings.",
+      "keys": {
+        "max_pending_segments": {
+          "type": "integer",
+          "description": "Maximum committed audio segments waiting for Realtime ASR inference, clamped to 1-64."
+        }
+      }
+    },
     "proxy": {
       "description": "Timeouts for HTTP forwarding from the master service to model subprocesses.",
       "keys": {

@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "hlie_base/hlie_base.h"
+#include "hlie_app/audio/hlie_realtime_vad.h"
 #include "uwebsockets/WebSocket.h"
 
 struct us_listen_socket_t;
@@ -36,7 +37,7 @@ struct WhisperStreamRequest {
 
 using TranscriptCallback = std::function<void(const std::string&)>;
 using AudioHandler = std::function<std::string(const WhisperStreamRequest&, const TranscriptCallback&)>;
-using AudioSubmitter = std::function<void(WhisperStreamRequest, std::string)>;
+using AudioSubmitter = std::function<bool(WhisperStreamRequest, std::string)>;
 using EventSender = std::function<void(std::string)>;
 
 class AudioBuffer {
@@ -64,19 +65,20 @@ public:
         EventSender sender,
         std::shared_ptr<SessionConnectionState> connection);
     void setInitialContext(std::string model, std::string path);
-    void onMessage(auto* ws, std::string_view msg, uWS::OpCode op_code);
+    void onMessage(std::string_view msg, uWS::OpCode op_code);
     void close();
     void sendSessionEvent(const std::string& type) const;
 
 private:
     void handleTextMessage(std::string_view msg);
     void appendPcm16(const std::string& encoded_audio);
-    void processTurnDetection(const std::vector<float>& chunk);
-    void commit(bool automatic = false);
-    void resetTurnState();
-    [[nodiscard]] int64_t audioTimeMs() const;
+    void handleVadEvents(std::vector<RealtimeVadEvent> events);
+    void submitAudio(std::vector<float> audio, const std::string& item_id,
+                     RealtimeVadCommitReason reason, const RealtimeVadMetrics& metrics);
+    void commit();
     void sendError(const std::string& message, const std::string& code = "invalid_request_error") const;
     AudioBuffer buffer_;
+    HLIERealtimeVad vad_;
     AudioSubmitter submitter_;
     EventSender sender_;
     std::shared_ptr<SessionConnectionState> connection_;
@@ -84,14 +86,10 @@ private:
     uint64_t item_sequence_ = 0;
     bool openai_protocol_ = false;
     bool server_vad_enabled_ = true;
-    bool speech_active_ = false;
     float vad_threshold_ = 0.5f;
-    int silence_duration_ms_ = 500;
+    int silence_duration_ms_ = 2000;
     int prefix_padding_ms_ = 300;
-    int max_turn_duration_ms_ = 3000;
-    int speech_duration_ms_ = 0;
-    int silence_ms_ = 0;
-    int64_t total_audio_samples_ = 0;
+    int max_turn_duration_ms_ = 30000;
     std::string pending_item_id_;
     std::string model_;
     std::string prompt_;
@@ -120,7 +118,7 @@ private:
         std::string item_id;
     };
 
-    void enqueue(InferenceTask task);
+    bool enqueue(InferenceTask task);
     void processInferenceTasks();
     void sendEvent(const InferenceTask& task, std::string event);
 
@@ -132,6 +130,7 @@ private:
     std::mutex queue_mtx_;
     std::condition_variable queue_cv_;
     std::deque<InferenceTask> queue_;
+    size_t max_pending_inference_tasks_ = 8;
 
     struct us_listen_socket_t* listen_token_ = nullptr;
     uWS::Loop* loop_ = nullptr;

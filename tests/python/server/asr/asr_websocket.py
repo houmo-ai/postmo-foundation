@@ -18,11 +18,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import copy
 import json
 import math
 import struct
 import sys
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -36,8 +38,30 @@ DEFAULT_AUDIO_FILE = "E:/test_data/audio/long_2.wav"
 TARGET_SAMPLE_RATE = 24_000
 CHUNK_DURATION_MS = 250
 TRAILING_SILENCE_MS = 750
+DEFAULT_VAD_SILENCE_DURATION_MS = 2000
+VAD_TRAILING_MARGIN_MS = 200
 RECEIVE_TIMEOUT_SECONDS = 2.0
 FINAL_TIMEOUT_SECONDS = 1800.0
+
+
+def configure_utf8_console() -> None:
+    """Keep Chinese transcripts readable in Windows PowerShell and cmd.exe."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+            ctypes.windll.kernel32.SetConsoleCP(65001)
+        except (AttributeError, OSError):
+            pass
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, OSError):
+                pass
 
 
 def log(level: str, message: str) -> None:
@@ -45,58 +69,179 @@ def log(level: str, message: str) -> None:
     print(f"{now} | {level:<7} | {message}", flush=True)
 
 
-def read_wav_pcm(path: Path) -> tuple[np.ndarray, int]:
-    data = path.read_bytes()
-    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
-        raise ValueError(f"Unsupported audio file, expected RIFF/WAVE: {path}")
+def normalize_transcript(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text).lower()
+    return "".join(
+        character
+        for character in normalized
+        if not unicodedata.category(character).startswith(("P", "Z"))
+    )
 
+
+def character_error_rate(reference: str, hypothesis: str) -> float:
+    reference = normalize_transcript(reference)
+    hypothesis = normalize_transcript(hypothesis)
+    if not reference:
+        return 0.0 if not hypothesis else 1.0
+
+    previous = list(range(len(hypothesis) + 1))
+    for reference_index, reference_character in enumerate(reference, start=1):
+        current = [reference_index]
+        for hypothesis_index, hypothesis_character in enumerate(hypothesis, start=1):
+            substitution = previous[hypothesis_index - 1] + (
+                reference_character != hypothesis_character
+            )
+            current.append(min(
+                previous[hypothesis_index] + 1,
+                current[hypothesis_index - 1] + 1,
+                substitution,
+            ))
+        previous = current
+    return previous[-1] / len(reference)
+
+
+def effective_vad_trailing_silence_ms(
+    requested_ms: int,
+    silence_duration_ms: int,
+) -> int:
+    """Ensure a VAD smoke test sends enough silence to close its final turn."""
+    return max(requested_ms, silence_duration_ms + VAD_TRAILING_MARGIN_MS)
+
+
+def assert_vad_quality(
+    manual_transcript: str,
+    vad_transcript: str,
+    max_cer: float,
+    min_length_ratio: float,
+    max_length_ratio: float,
+) -> None:
+    manual_normalized = normalize_transcript(manual_transcript)
+    vad_normalized = normalize_transcript(vad_transcript)
+    if not manual_normalized:
+        raise AssertionError("Manual-commit baseline transcript is empty")
+
+    cer = character_error_rate(manual_transcript, vad_transcript)
+    length_ratio = len(vad_normalized) / len(manual_normalized)
+    log("INFO", f"VAD quality: CER={cer:.4f}, length_ratio={length_ratio:.4f}")
+    if cer > max_cer:
+        raise AssertionError(f"VAD CER {cer:.4f} exceeds limit {max_cer:.4f}")
+    if not min_length_ratio <= length_ratio <= max_length_ratio:
+        raise AssertionError(
+            f"VAD transcript length ratio {length_ratio:.4f} is outside "
+            f"[{min_length_ratio:.4f}, {max_length_ratio:.4f}]"
+        )
+
+
+def read_wav_pcm(path: Path) -> tuple[np.ndarray, int]:
     audio_format = None
     channels = None
     sample_rate = None
     bits_per_sample = None
-    frames = None
+    data_offset = None
+    data_size = None
 
-    offset = 12
-    while offset + 8 <= len(data):
-        chunk_id = data[offset : offset + 4]
-        chunk_size = struct.unpack_from("<I", data, offset + 4)[0]
-        chunk_start = offset + 8
-        chunk_end = chunk_start + chunk_size
-        if chunk_end > len(data):
-            raise ValueError(f"Invalid WAV chunk size in {path}")
+    with path.open("rb") as stream:
+        header = stream.read(12)
+        if len(header) != 12 or header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+            raise ValueError(f"Unsupported audio file, expected RIFF/WAVE: {path}")
 
-        if chunk_id == b"fmt ":
-            if chunk_size < 16:
-                raise ValueError("Invalid WAV fmt chunk")
-            audio_format, channels, sample_rate, _, _, bits_per_sample = struct.unpack_from(
-                "<HHIIHH", data, chunk_start
-            )
-        elif chunk_id == b"data":
-            frames = data[chunk_start:chunk_end]
+        while True:
+            chunk_header = stream.read(8)
+            if not chunk_header:
+                break
+            if len(chunk_header) != 8:
+                raise ValueError(f"Truncated WAV chunk header in {path}")
 
-        offset = chunk_end + (chunk_size % 2)
+            chunk_id = chunk_header[:4]
+            chunk_size = struct.unpack_from("<I", chunk_header, 4)[0]
+            chunk_start = stream.tell()
+            if chunk_start + chunk_size > path.stat().st_size:
+                raise ValueError(f"Invalid WAV chunk size in {path}")
 
-    if audio_format is None or channels is None or sample_rate is None or bits_per_sample is None or frames is None:
+            if chunk_id == b"fmt ":
+                fmt = stream.read(chunk_size)
+                if len(fmt) < 16:
+                    raise ValueError("Invalid WAV fmt chunk")
+                audio_format, channels, sample_rate, _, _, bits_per_sample = struct.unpack_from(
+                    "<HHIIHH", fmt, 0
+                )
+                if audio_format == 0xFFFE:
+                    if len(fmt) < 40:
+                        raise ValueError("Invalid WAVE_FORMAT_EXTENSIBLE fmt chunk")
+                    # The first two bytes of the extensible SubFormat GUID contain
+                    # the underlying WAVE_FORMAT_PCM or WAVE_FORMAT_IEEE_FLOAT tag.
+                    audio_format = struct.unpack_from("<H", fmt, 24)[0]
+            elif chunk_id == b"data":
+                data_offset = chunk_start
+                data_size = chunk_size
+                stream.seek(chunk_size, 1)
+            else:
+                stream.seek(chunk_size, 1)
+
+            if chunk_size % 2:
+                stream.seek(1, 1)
+
+    if (
+        audio_format is None
+        or channels is None
+        or sample_rate is None
+        or bits_per_sample is None
+        or data_offset is None
+        or data_size is None
+    ):
         raise ValueError(f"Missing WAV fmt/data chunk: {path}")
 
     sample_width = bits_per_sample // 8
     if audio_format == 1 and sample_width == 1:
-        samples = (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        dtype = np.dtype(np.uint8)
+        offset_value = 128.0
+        scale = 128.0
     elif audio_format == 1 and sample_width == 2:
-        samples = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+        dtype = np.dtype("<i2")
+        offset_value = 0.0
+        scale = 32768.0
     elif audio_format == 1 and sample_width == 4:
-        samples = np.frombuffer(frames, dtype="<i4").astype(np.float32) / 2147483648.0
+        dtype = np.dtype("<i4")
+        offset_value = 0.0
+        scale = 2147483648.0
     elif audio_format == 3 and sample_width == 4:
-        samples = np.frombuffer(frames, dtype="<f4").astype(np.float32)
+        dtype = np.dtype("<f4")
+        offset_value = 0.0
+        scale = 1.0
     elif audio_format == 3 and sample_width == 8:
-        samples = np.frombuffer(frames, dtype="<f8").astype(np.float32)
+        dtype = np.dtype("<f8")
+        offset_value = 0.0
+        scale = 1.0
     else:
         raise ValueError(f"Unsupported WAV format={audio_format}, sample_width={sample_width} bytes")
 
-    if channels > 1:
-        samples = samples.reshape(-1, channels).mean(axis=1)
+    if data_size % sample_width != 0:
+        raise ValueError(f"WAV data chunk does not contain complete {sample_width}-byte samples")
+    sample_count = data_size // sample_width
+    if sample_count % channels != 0:
+        raise ValueError("WAV data chunk does not contain complete channel frames")
 
-    return samples.astype(np.float32, copy=False), sample_rate
+    frame_count = sample_count // channels
+    mapped = np.memmap(path, dtype=dtype, mode="r", offset=data_offset, shape=(sample_count,))
+    samples = np.empty(frame_count, dtype=np.float32)
+    chunk_frames = 262_144
+    for frame_start in range(0, frame_count, chunk_frames):
+        frame_end = min(frame_count, frame_start + chunk_frames)
+        sample_start = frame_start * channels
+        sample_end = frame_end * channels
+        block = np.asarray(mapped[sample_start:sample_end]).astype(np.float32)
+        if offset_value:
+            block -= offset_value
+        if scale != 1.0:
+            block /= scale
+        if channels > 1:
+            samples[frame_start:frame_end] = block.reshape(-1, channels).mean(
+                axis=1, dtype=np.float32
+            )
+        else:
+            samples[frame_start:frame_end] = block
+
+    return samples, sample_rate
 
 
 def resample_linear(samples: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
@@ -390,12 +535,24 @@ async def run(args: argparse.Namespace) -> str:
         stream_error: BaseException | None = None
         try:
             try:
+                trailing_silence_ms = 0
+                if not args.manual_commit:
+                    trailing_silence_ms = effective_vad_trailing_silence_ms(
+                        args.trailing_silence_ms,
+                        args.silence_duration_ms,
+                    )
+                    if trailing_silence_ms != args.trailing_silence_ms:
+                        log(
+                            "INFO",
+                            "Raised trailing silence to "
+                            f"{trailing_silence_ms} ms so the final VAD turn can close",
+                        )
                 await stream_audio(
                     websocket,
                     samples,
                     sample_rate=args.sample_rate,
                     chunk_duration_ms=args.chunk_ms,
-                    trailing_silence_ms=0 if args.manual_commit else args.trailing_silence_ms,
+                    trailing_silence_ms=trailing_silence_ms,
                     realtime=not args.no_realtime,
                     log_every_chunks=args.log_every_chunks,
                 )
@@ -444,8 +601,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chunk-ms", type=int, default=CHUNK_DURATION_MS, help="Audio chunk duration in milliseconds")
     parser.add_argument("--trailing-silence-ms", type=int, default=TRAILING_SILENCE_MS, help="Silence sent to trigger VAD")
     parser.add_argument("--vad-threshold", type=float, default=0.5, help="OpenAI server_vad threshold")
-    parser.add_argument("--silence-duration-ms", type=int, default=500, help="OpenAI server_vad silence duration")
-    parser.add_argument("--max-turn-duration-ms", type=int, default=3000, help="HLIECpp max VAD turn duration")
+    parser.add_argument(
+        "--silence-duration-ms",
+        type=int,
+        default=DEFAULT_VAD_SILENCE_DURATION_MS,
+        help="OpenAI server_vad silence duration; 2000 ms is the stable Qwen3-ASR default",
+    )
+    parser.add_argument("--max-turn-duration-ms", type=int, default=30000, help="HLIECpp max VAD turn duration")
     parser.add_argument("--manual-commit", action="store_true", help="Disable server VAD and send input_audio_buffer.commit")
     parser.add_argument("--no-realtime", action="store_true", help="Send chunks without sleeping between them")
     parser.add_argument("--final-timeout", type=float, default=FINAL_TIMEOUT_SECONDS, help="Seconds to wait for final transcripts")
@@ -457,12 +619,48 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Require delta events, exact delta/completed equality, and no leaked Qwen ASR markers",
     )
+    parser.add_argument(
+        "--compare-manual-baseline",
+        action="store_true",
+        help="Run manual-commit and VAD modes, then enforce transcript quality thresholds",
+    )
+    parser.add_argument("--max-vad-cer", type=float, default=0.08, help="Maximum VAD CER versus manual baseline")
+    parser.add_argument("--min-vad-length-ratio", type=float, default=0.85, help="Minimum VAD/manual text length ratio")
+    parser.add_argument("--max-vad-length-ratio", type=float, default=1.15, help="Maximum VAD/manual text length ratio")
     return parser.parse_args()
 
 
+async def main(args: argparse.Namespace) -> None:
+    if not args.compare_manual_baseline:
+        await run(args)
+        return
+
+    manual_args = copy.copy(args)
+    manual_args.manual_commit = True
+    manual_args.compare_manual_baseline = False
+    log("INFO", "Running manual-commit ASR baseline")
+    manual_transcript = await run(manual_args)
+
+    vad_args = copy.copy(args)
+    vad_args.manual_commit = False
+    vad_args.compare_manual_baseline = False
+    log("INFO", "Running server VAD ASR comparison")
+    vad_transcript = await run(vad_args)
+
+    assert_vad_quality(
+        manual_transcript,
+        vad_transcript,
+        args.max_vad_cer,
+        args.min_vad_length_ratio,
+        args.max_vad_length_ratio,
+    )
+    log("SUCCESS", "VAD transcript quality matches the manual-commit baseline")
+
+
 if __name__ == "__main__":
+    configure_utf8_console()
     try:
-        asyncio.run(run(parse_args()))
+        asyncio.run(main(parse_args()))
     except KeyboardInterrupt:
         log("WARN", "Interrupted")
     except Exception as exc:
