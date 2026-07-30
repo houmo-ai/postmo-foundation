@@ -14,7 +14,13 @@
 
 HLIE_NAMESPACE_BEGIN
 
+enum class Qwen3TTSVariant {
+    CustomVoice,
+    Base,
+};
+
 struct Qwen3TTSModelConfig {
+    Qwen3TTSVariant variant = Qwen3TTSVariant::CustomVoice;
     std::string model_size;
     int32_t sample_rate = 0;
     int32_t num_code_groups = 0;
@@ -40,6 +46,11 @@ struct Qwen3TTSModelConfig {
     std::unordered_map<std::string, int32_t> codec_language_ids;
     std::unordered_map<std::string, int32_t> speaker_ids;
     std::unordered_map<std::string, std::string> speaker_dialects;
+    int32_t reference_sample_rate = 24000;
+    int32_t speaker_embedding_dim = 0;
+    int32_t reference_max_samples = 0;
+    int32_t reference_max_frames = 0;
+    int32_t reference_mel_bins = 0;
 };
 
 /** Deterministic output used to compare the C++ frontend/prefill with Python. */
@@ -68,7 +79,17 @@ struct Qwen3TTSSynthesisResult {
     bool reached_eos = false;
 };
 
-/** Qwen3-TTS CustomVoice TCIM model bundle. */
+struct Qwen3TTSReferenceDebugResult {
+    int32_t valid_frames = 0;
+    std::vector<int64_t> codec_shape;
+    std::vector<int32_t> codec_head;
+    std::vector<int64_t> speaker_embedding_shape;
+    float speaker_embedding_sum = 0.0F;
+    float speaker_embedding_abs_mean = 0.0F;
+    std::vector<float> speaker_embedding_head;
+};
+
+/** Qwen3-TTS CustomVoice/Base TCIM model bundle. */
 class HLIE_API HLIEQwen3TTSModel final : public HLIEModelBase {
 public:
     HLIEQwen3TTSModel() = default;
@@ -83,16 +104,33 @@ public:
                                      const std::string& speaker, int max_frames,
                                      Qwen3TTSCodecFramesDebugResult& result,
                                      std::string& error);
+    bool debug_generate_clone_codec_frames(
+        const std::string& text, const std::string& language,
+        const std::string& reference_text,
+        const std::vector<float>& reference_pcm, int max_frames,
+        Qwen3TTSCodecFramesDebugResult& result, std::string& error);
     bool synthesize(const std::string& text, const std::string& language,
                     const std::string& speaker, int max_frames,
                     Qwen3TTSSynthesisResult& result, std::string& error,
                     bool require_eos = false, bool do_sample = false,
                     uint32_t seed = 1024U);
+    bool synthesize_clone(const std::string& text, const std::string& language,
+                          const std::string& reference_text,
+                          const std::vector<float>& reference_pcm,
+                          int max_frames, Qwen3TTSSynthesisResult& result,
+                          std::string& error, bool require_eos = false,
+                          bool do_sample = false, uint32_t seed = 1024U);
+    bool debug_reference_audio(const std::vector<float>& reference_pcm,
+                               Qwen3TTSReferenceDebugResult& result,
+                               std::string& error);
     bool debug_decode_codec_frames(const std::vector<std::vector<int32_t>>& frames,
                                    std::vector<float>& audio, std::string& error);
 
     [[nodiscard]] bool ready() const { return ready_; }
     [[nodiscard]] const Qwen3TTSModelConfig& config() const { return config_; }
+    [[nodiscard]] bool is_base() const {
+        return config_.variant == Qwen3TTSVariant::Base;
+    }
     [[nodiscard]] int prefill_length() const { return prefill_length_; }
     [[nodiscard]] int context_length() const { return context_length_; }
     [[nodiscard]] int stateful_chunk_size() const { return stateful_chunk_size_; }
@@ -125,6 +163,31 @@ private:
                                         const std::string& speaker, int max_frames,
                                         Qwen3TTSCodecFramesDebugResult& result,
                                         bool do_sample, std::string& error);
+    bool encode_reference_audio(const std::vector<float>& pcm,
+                                std::vector<std::vector<int32_t>>& reference_codes,
+                                tcim::Tensor& speaker_embedding,
+                                std::string& error);
+    bool build_base_prompt(const std::string& text, const std::string& language,
+                           const std::string& reference_text,
+                           const std::vector<std::vector<int32_t>>& reference_codes,
+                           const tcim::Tensor& speaker_embedding,
+                           tcim::Tensor& talker_input, tcim::Tensor& tts_pad,
+                           std::string& error);
+    bool run_talker_prefill(const tcim::Tensor& talker_input,
+                            Qwen3TTSPrefillDebugResult& result,
+                            tcim::Tensor& past_hidden, bool do_sample,
+                            std::string& error);
+    bool generate_base_codec_frames_unlocked(
+        const std::string& text, const std::string& language,
+        const std::string& reference_text,
+        const std::vector<float>& reference_pcm, int max_frames,
+        Qwen3TTSCodecFramesDebugResult& result, bool do_sample,
+        std::string& error,
+        std::vector<std::vector<int32_t>>* reference_codes_output = nullptr);
+    bool decode_codec_frames_with_reference_unlocked(
+        const std::vector<std::vector<int32_t>>& reference_codes,
+        const std::vector<std::vector<int32_t>>& frames,
+        std::vector<float>& audio, std::string& error);
 
     struct StatefulDecoderState {
         std::vector<tcim::Tensor> tensors;
@@ -149,6 +212,8 @@ private:
     std::shared_ptr<tcim::Module> code_predictor_prefill_model_;
     std::shared_ptr<tcim::Module> code_predictor_decode_model_;
     std::shared_ptr<tcim::Module> stateful_decoder_model_;
+    std::shared_ptr<tcim::Module> speech_tokenizer_encoder_model_;
+    std::shared_ptr<tcim::Module> speaker_encoder_model_;
 
     std::shared_ptr<tcim::Tensor> talker_token_embedding_;
     std::shared_ptr<tcim::Tensor> talker_text_embedding_;
@@ -176,6 +241,10 @@ private:
 
     std::vector<std::string> stateful_decoder_input_names_;
     std::vector<std::string> stateful_decoder_output_names_;
+    std::vector<std::string> speech_tokenizer_encoder_input_names_;
+    std::vector<std::string> speech_tokenizer_encoder_output_names_;
+    std::vector<std::string> speaker_encoder_input_names_;
+    std::vector<std::string> speaker_encoder_output_names_;
 
     int text_projection_length_ = 0;
     int prefill_length_ = 0;
@@ -183,6 +252,9 @@ private:
     int context_length_ = 0;
     int stateful_chunk_size_ = 0;
     int stateful_kv_window_ = 0;
+    int reference_encoder_samples_ = 0;
+    int reference_encoder_frames_ = 0;
+    int speaker_encoder_mel_bins_ = 0;
     bool ready_ = false;
     std::mutex inference_mutex_;
     std::mt19937 sampling_rng_{1024U};

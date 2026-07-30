@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "half.hpp"
@@ -140,6 +141,16 @@ public:
      * @return MelFeatures128 with mel spectrogram [n_mels, n_frames]
      */
     [[nodiscard]] static MelFeatures128 ComputeMelSpectrogram128(const std::vector<float>& pcm_data);
+
+    /**
+     * @brief Compute the 24 kHz Qwen3-TTS Base speaker encoder input.
+     *
+     * The returned data is contiguous in [target_frames, 128] order and is
+     * padded or trimmed to the static speaker encoder input shape.
+     */
+    [[nodiscard]] static std::vector<TensorFP16> ComputeQwen3TTSSpeakerMel(
+        const std::vector<float>& pcm_data, int target_frames = 400,
+        int target_mels = 128);
 
     /**
      * @brief Compute FBANK features for CampPlus (16kHz)

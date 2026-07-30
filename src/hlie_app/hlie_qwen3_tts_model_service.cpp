@@ -13,6 +13,7 @@
 #include "hlie_app/hlie_device_service.h"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_app/models/hlie_qwen3_tts_model.h"
+#include "hlie_base/hlie_audio.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
@@ -67,6 +68,25 @@ std::string precise_float(const double value) {
     std::ostringstream stream;
     stream << std::setprecision(10) << value;
     return stream.str();
+}
+
+bool load_qwen3_reference_audio(const std::string& path, const int sample_rate,
+                                std::vector<float>& pcm, std::string& error) {
+    if (path.empty()) {
+        error = "prompt_wav_path must not be empty";
+        return false;
+    }
+    HLIEAudio audio;
+    if (!audio.LoadAudio(path, sample_rate)) {
+        error = "failed to load reference audio: " + path;
+        return false;
+    }
+    pcm = audio.GetPcmData();
+    if (pcm.empty()) {
+        error = "reference audio contains no samples";
+        return false;
+    }
+    return true;
 }
 
 void set_oai_error(httplib::Response& response, const std::string& message,
@@ -193,7 +213,8 @@ server_http_res_ptr Qwen3TTSModelService::handle_prefill_debug(const server_http
                                             ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
-    const std::string text = body.value("text", std::string());
+    const std::string text = body.value(
+        "input", body.value("text", std::string()));
     const std::string language = body.value("language", "Chinese");
     const std::string speaker = body.value("speaker", "vivian");
 
@@ -236,15 +257,32 @@ server_http_res_ptr Qwen3TTSModelService::handle_codec_frames_debug(const server
                                             ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
-    const std::string text = body.value("text", std::string());
+    const std::string text = body.value(
+        "input", body.value("text", std::string()));
     const std::string language = body.value("language", "Chinese");
     const std::string speaker = body.value("speaker", "vivian");
     const int max_frames = body.value("max_frames", 3);
 
     Qwen3TTSCodecFramesDebugResult result;
     std::string error;
-    if (!model_->debug_generate_codec_frames(
-            text, language, speaker, max_frames, result, error)) {
+    bool success = false;
+    if (model_->is_base()) {
+        const std::string reference_text = body.value(
+            "prompt_text", body.value("reference_text", std::string()));
+        const std::string reference_path = body.value(
+            "prompt_wav_path", body.value("reference_audio_path", std::string()));
+        std::vector<float> reference_pcm;
+        success = load_qwen3_reference_audio(
+            reference_path, model_->config().reference_sample_rate,
+            reference_pcm, error) &&
+            model_->debug_generate_clone_codec_frames(
+                text, language, reference_text, reference_pcm, max_frames,
+                result, error);
+    } else {
+        success = model_->debug_generate_codec_frames(
+            text, language, speaker, max_frames, result, error);
+    }
+    if (!success) {
         res->error(format_error_response_ex(error, ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
@@ -254,10 +292,63 @@ server_http_res_ptr Qwen3TTSModelService::handle_codec_frames_debug(const server
         {"language", language},
         {"speaker", speaker},
         {"prompt_length", result.prefill.prompt_length},
+        {"prompt_sum", result.prefill.prompt_sum},
+        {"prompt_abs_mean", result.prefill.prompt_abs_mean},
+        {"first_codec_token", result.prefill.first_codec_token},
         {"talker_tokens", result.talker_tokens},
         {"codec_frames", result.codec_frames},
         {"generated_frames", result.codec_frames.size()},
         {"reached_eos", result.reached_eos},
+    });
+    return res;
+}
+
+server_http_res_ptr Qwen3TTSModelService::handle_reference_debug(
+    const server_http_req& req) {
+    std::lock_guard lock(model_mutex_);
+    auto res = std::make_unique<server_res_generator_light>();
+    if (!model_ || !model_->ready() || get_state() != SERVER_STATE_READY) {
+        res->error(format_error_response_ex("Qwen3-TTS model is not ready",
+                                            ERROR_TYPE_UNAVAILABLE));
+        return res;
+    }
+    if (!model_->is_base()) {
+        res->error(format_error_response_ex(
+            "reference_debug requires a Qwen3-TTS Base model",
+            ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    const auto body = json::parse(req.body, nullptr, false);
+    if (body.is_discarded() || !body.is_object()) {
+        res->error(format_error_response_ex("request body must be a JSON object",
+                                            ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    const std::string path = body.value(
+        "prompt_wav_path", body.value("reference_audio_path", std::string()));
+    std::vector<float> pcm;
+    std::string error;
+    if (!load_qwen3_reference_audio(path, model_->config().reference_sample_rate,
+                                    pcm, error)) {
+        res->error(format_error_response_ex(error, ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    Qwen3TTSReferenceDebugResult result;
+    if (!model_->debug_reference_audio(pcm, result, error)) {
+        res->error(format_error_response_ex(error, ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    res->ok({
+        {"object", "qwen3_tts.reference_debug"},
+        {"sample_rate", model_->config().reference_sample_rate},
+        {"samples", pcm.size()},
+        {"valid_frames", result.valid_frames},
+        {"codec_shape", result.codec_shape},
+        {"codec_head", result.codec_head},
+        {"speaker_embedding_shape", result.speaker_embedding_shape},
+        {"speaker_embedding_sum", result.speaker_embedding_sum},
+        {"speaker_embedding_abs_mean", result.speaker_embedding_abs_mean},
+        {"speaker_embedding_head", result.speaker_embedding_head},
     });
     return res;
 }
@@ -289,8 +380,23 @@ server_http_res_ptr Qwen3TTSModelService::handle_speech_debug(const server_http_
 
     Qwen3TTSSynthesisResult result;
     std::string error;
-    if (!model_->synthesize(
-            text, language, speaker, max_frames, result, error)) {
+    bool success = false;
+    if (model_->is_base()) {
+        const std::string reference_text = body.value(
+            "prompt_text", body.value("reference_text", std::string()));
+        const std::string reference_path = body.value(
+            "prompt_wav_path", body.value("reference_audio_path", std::string()));
+        std::vector<float> reference_pcm;
+        success = load_qwen3_reference_audio(
+            reference_path, model_->config().reference_sample_rate,
+            reference_pcm, error) &&
+            model_->synthesize_clone(text, language, reference_text,
+                                     reference_pcm, max_frames, result, error);
+    } else {
+        success = model_->synthesize(
+            text, language, speaker, max_frames, result, error);
+    }
+    if (!success) {
         res->error(format_error_response_ex(error, ERROR_TYPE_INVALID_REQUEST));
         return res;
     }
@@ -308,6 +414,7 @@ server_http_res_ptr Qwen3TTSModelService::handle_speech_debug(const server_http_
         res->headers["X-Qwen3-TTS-Frames"] = std::to_string(result.codec_frames.size());
         res->headers["X-Qwen3-TTS-Samples"] = std::to_string(result.audio.size());
         res->headers["X-Qwen3-TTS-Reached-EOS"] = result.reached_eos ? "true" : "false";
+        res->headers["X-Qwen3-TTS-Variant"] = model_->is_base() ? "base" : "custom_voice";
         res->headers["X-Qwen3-TTS-Audio-Sum"] = precise_float(sum);
         res->headers["X-Qwen3-TTS-Audio-Abs-Mean"] = precise_float(
             result.audio.empty() ? 0.0 : absolute_sum / result.audio.size());
@@ -399,6 +506,11 @@ void Qwen3TTSModelService::handle_speech(
         value = body.at(name).get<std::string>();
         return true;
     };
+    const auto string_alias = [&](const char* primary, const char* secondary,
+                                  std::string& value) {
+        const char* selected = body.contains(primary) ? primary : secondary;
+        return string_option(selected, std::string(), value);
+    };
 
     std::string language;
     std::string speaker;
@@ -406,6 +518,13 @@ void Qwen3TTSModelService::handle_speech(
     if (!string_option("language", "Chinese", language) ||
         !string_option("voice", "vivian", speaker) ||
         !string_option("response_format", "wav", response_format)) {
+        return;
+    }
+    std::string reference_text;
+    std::string reference_path;
+    if (model_->is_base() &&
+        (!string_alias("prompt_text", "reference_text", reference_text) ||
+         !string_alias("prompt_wav_path", "reference_audio_path", reference_path))) {
         return;
     }
     response_format = lower_ascii(response_format);
@@ -486,7 +605,8 @@ void Qwen3TTSModelService::handle_speech(
 
     const std::string speaker_key = lower_ascii(speaker);
     const std::string language_key = lower_ascii(language);
-    if (!model_->config().speaker_ids.contains(speaker_key)) {
+    if (!model_->is_base() &&
+        !model_->config().speaker_ids.contains(speaker_key)) {
         set_oai_error(res, "unsupported Qwen3-TTS speaker: " + speaker_key,
                       ERROR_TYPE_INVALID_REQUEST);
         return;
@@ -497,12 +617,35 @@ void Qwen3TTSModelService::handle_speech(
                       ERROR_TYPE_INVALID_REQUEST);
         return;
     }
+    if (model_->is_base() && (reference_text.empty() || reference_path.empty())) {
+        set_oai_error(
+            res,
+            "Qwen3-TTS Base requires prompt_text and prompt_wav_path",
+            ERROR_TYPE_INVALID_REQUEST);
+        return;
+    }
 
     Qwen3TTSSynthesisResult result;
     std::string error;
-    if (!model_->synthesize(body.at("input").get<std::string>(), language,
-                            speaker, max_frames, result, error, true, true,
-                            sampling_seed)) {
+    bool success = false;
+    if (model_->is_base()) {
+        std::vector<float> reference_pcm;
+        if (!load_qwen3_reference_audio(
+                reference_path, model_->config().reference_sample_rate,
+                reference_pcm, error)) {
+            set_oai_error(res, error, ERROR_TYPE_INVALID_REQUEST);
+            return;
+        }
+        success = model_->synthesize_clone(
+            body.at("input").get<std::string>(), language, reference_text,
+            reference_pcm, max_frames, result, error, true, true,
+            sampling_seed);
+    } else {
+        success = model_->synthesize(
+            body.at("input").get<std::string>(), language, speaker,
+            max_frames, result, error, true, true, sampling_seed);
+    }
+    if (!success) {
         const error_type type = error.find("max_frames before EOS") != std::string::npos
             ? ERROR_TYPE_INVALID_REQUEST
             : error.find("context length") != std::string::npos
@@ -517,6 +660,7 @@ void Qwen3TTSModelService::handle_speech(
         res.set_header("X-Qwen3-TTS-Samples", std::to_string(result.audio.size()));
         res.set_header("X-Qwen3-TTS-Reached-EOS", result.reached_eos ? "true" : "false");
         res.set_header("X-Qwen3-TTS-Seed", std::to_string(sampling_seed));
+        res.set_header("X-Qwen3-TTS-Variant", model_->is_base() ? "base" : "custom_voice");
         res.set_content(std::move(wav), "audio/wav");
     } catch (const std::exception& ex) {
         set_oai_error(res, ex.what(), ERROR_TYPE_SERVER);

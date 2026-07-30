@@ -3,19 +3,156 @@
 #define _USE_MATH_DEFINES // for M_PI
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <numeric>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
 #include "ggml.h"
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
+#ifdef max
+#undef max
+#endif
+#ifdef min
+#undef min
+#endif
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/librosa.h"
 #include "kaldi-native-fbank/csrc/online-feature.h"
 
 HLIE_NAMESPACE_BEGIN
 
+namespace {
+std::vector<float> resample_torchaudio_sinc(const std::vector<float>& input,
+                                            const int source_rate,
+                                            const int target_rate) {
+    if (source_rate == target_rate) {
+        return input;
+    }
+    if (input.empty() || source_rate <= 0 || target_rate <= 0) {
+        return {};
+    }
+
+    constexpr int kLowpassFilterWidth = 6;
+    constexpr double kRolloff = 0.99;
+    const int divisor = std::gcd(source_rate, target_rate);
+    const int source = source_rate / divisor;
+    const int target = target_rate / divisor;
+    const double base_frequency =
+        static_cast<double>(std::min(source, target)) * kRolloff;
+    const int width = static_cast<int>(std::ceil(
+        static_cast<double>(kLowpassFilterWidth * source) / base_frequency));
+    const int kernel_length = 2 * width + source;
+
+    std::vector<float> kernels(
+        static_cast<size_t>(target) * static_cast<size_t>(kernel_length));
+    for (int phase = 0; phase < target; ++phase) {
+        for (int kernel_index = 0; kernel_index < kernel_length; ++kernel_index) {
+            const int sample_offset = kernel_index - width;
+            double value = -static_cast<double>(phase) / target +
+                           static_cast<double>(sample_offset) / source;
+            value *= base_frequency;
+            value = std::clamp(value, -static_cast<double>(kLowpassFilterWidth),
+                               static_cast<double>(kLowpassFilterWidth));
+            const double window = std::pow(
+                std::cos(value * M_PI / kLowpassFilterWidth / 2.0), 2.0);
+            const double radians = value * M_PI;
+            const double sinc = radians == 0.0 ? 1.0 : std::sin(radians) / radians;
+            kernels[static_cast<size_t>(phase) * kernel_length + kernel_index] =
+                static_cast<float>(sinc * window * base_frequency / source);
+        }
+    }
+
+    const size_t target_length = static_cast<size_t>(std::ceil(
+        static_cast<double>(target) * input.size() / source));
+    std::vector<float> output;
+    output.reserve(target_length);
+    const size_t convolution_steps = input.size() / static_cast<size_t>(source) + 1;
+    for (size_t step = 0; step < convolution_steps && output.size() < target_length;
+         ++step) {
+        const int64_t padded_start =
+            static_cast<int64_t>(step * static_cast<size_t>(source)) - width;
+        for (int phase = 0; phase < target && output.size() < target_length; ++phase) {
+            float sum = 0.0F;
+            const float* kernel = kernels.data() +
+                static_cast<size_t>(phase) * static_cast<size_t>(kernel_length);
+            for (int index = 0; index < kernel_length; ++index) {
+                const int64_t source_index = padded_start + index;
+                if (source_index >= 0 &&
+                    source_index < static_cast<int64_t>(input.size())) {
+                    sum += input[static_cast<size_t>(source_index)] * kernel[index];
+                }
+            }
+            output.push_back(sum);
+        }
+    }
+    return output;
+}
+}
+
 
 bool HLIEAudio::LoadAudio(const std::string& audio_path, int target_sr) {
+    if (audio_path.empty() || target_sr <= 0) {
+        LOG_ERROR("Invalid audio path or target sample rate: path={}, sample_rate={}",
+                  audio_path, target_sr);
+        return false;
+    }
 
+    ma_decoder_config decoder_config = ma_decoder_config_init(ma_format_f32, 1, 0);
+    ma_decoder decoder{};
+    const ma_result init_result =
+        ma_decoder_init_file(audio_path.c_str(), &decoder_config, &decoder);
+    if (init_result != MA_SUCCESS) {
+        LOG_ERROR("Failed to decode audio {}: {}", audio_path,
+                  ma_result_description(init_result));
+        return false;
+    }
+
+    ma_format output_format = ma_format_unknown;
+    ma_uint32 output_channels = 0;
+    ma_uint32 source_rate = 0;
+    if (ma_decoder_get_data_format(&decoder, &output_format, &output_channels,
+                                   &source_rate, nullptr, 0) != MA_SUCCESS ||
+        output_format != ma_format_f32 || output_channels != 1 || source_rate == 0) {
+        LOG_ERROR("Failed to determine decoded audio format: {}", audio_path);
+        ma_decoder_uninit(&decoder);
+        return false;
+    }
+
+    ma_uint64 frame_count = 0;
+    ma_uint64 frames_read = 0;
+    const ma_result length_result =
+        ma_decoder_get_length_in_pcm_frames(&decoder, &frame_count);
+    if (length_result != MA_SUCCESS || frame_count == 0 ||
+        frame_count > static_cast<ma_uint64>(std::numeric_limits<size_t>::max())) {
+        LOG_ERROR("Failed to determine audio length {}: {}", audio_path,
+                  ma_result_description(length_result));
+        ma_decoder_uninit(&decoder);
+        return false;
+    }
+
+    std::vector<float> samples(static_cast<size_t>(frame_count));
+    const ma_result read_result = ma_decoder_read_pcm_frames(
+        &decoder, samples.data(), frame_count, &frames_read);
+    ma_decoder_uninit(&decoder);
+    if (read_result != MA_SUCCESS || frames_read == 0) {
+        LOG_ERROR("Failed to read audio {}: {}", audio_path,
+                  ma_result_description(read_result));
+        return false;
+    }
+    samples.resize(static_cast<size_t>(frames_read));
+    pcm_data_ = resample_torchaudio_sinc(
+        samples, static_cast<int>(source_rate), target_sr);
+    if (pcm_data_.empty()) {
+        LOG_ERROR("Failed to resample audio {} from {} Hz to {} Hz", audio_path,
+                  source_rate, target_sr);
+        return false;
+    }
+    sample_rate_ = target_sr;
+    total_samples_ = static_cast<int>(pcm_data_.size());
+    audio_loaded_ = true;
     return true;
 }
 
@@ -97,6 +234,47 @@ MelFeatures128 HLIEAudio::ComputeMelSpectrogram128(const std::vector<float>& pcm
     }
 
     return mel;
+}
+
+std::vector<TensorFP16> HLIEAudio::ComputeQwen3TTSSpeakerMel(
+    const std::vector<float>& pcm_data, const int target_frames,
+    const int target_mels) {
+    if (target_frames <= 0 || target_mels <= 0) {
+        throw std::invalid_argument("Qwen3-TTS speaker mel shape must be positive");
+    }
+
+    constexpr int kSampleRate = 24000;
+    constexpr int kNfft = 1024;
+    constexpr int kHop = 256;
+    constexpr int kWin = 1024;
+    constexpr int kFmin = 0;
+    constexpr int kFmax = 12000;
+    constexpr int kPadding = (kNfft - kHop) / 2;
+
+    std::vector<float> input = pcm_data;
+    if (input.empty()) {
+        input.assign(kNfft, 0.0F);
+    }
+    input = ApplyReflectionPadding(input, kPadding);
+    const auto mel_frames = librosa::Feature::melspectrogram(
+        input, kSampleRate, kNfft, kHop, "hann", false, "reflect", 1.0F,
+        target_mels, kFmin, kFmax);
+
+    std::vector<TensorFP16> output(
+        static_cast<size_t>(target_frames) * static_cast<size_t>(target_mels),
+        TensorFP16(0.0F));
+    const int valid_frames = std::min(target_frames,
+                                      static_cast<int>(mel_frames.size()));
+    for (int frame = 0; frame < valid_frames; ++frame) {
+        const int valid_mels = std::min(target_mels,
+                                        static_cast<int>(mel_frames[frame].size()));
+        for (int mel = 0; mel < valid_mels; ++mel) {
+            const float value = std::log(std::max(mel_frames[frame][mel], 1.0e-5F));
+            output[static_cast<size_t>(frame) * static_cast<size_t>(target_mels) +
+                   static_cast<size_t>(mel)] = TensorFP16(value);
+        }
+    }
+    return output;
 }
 
 FbankFeatures HLIEAudio::ComputeFbank(const std::vector<float>& pcm_data) {

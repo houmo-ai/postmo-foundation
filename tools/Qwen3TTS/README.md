@@ -10,11 +10,17 @@ recorded in `file_info`. The three resources are `quant_embedding.bin`,
 `text_embedding.bin`, and `quant_embedding_code_predictor.bin`; the last one
 has logical shape `[num_code_groups - 1, vocab_size, hidden_size]`.
 
-Both `Qwen3-TTS-12Hz-0.6B-CustomVoice` and
-`Qwen3-TTS-12Hz-1.7B-CustomVoice` are supported. Model dimensions come from
-the selected official configuration and are checked against every embedding.
-The converter rejects a mixed deployment, such as 1.7B HMM files with a 0.6B
-configuration.
+Both the `CustomVoice` and `Base` variants are supported for the configured
+0.6B and 1.7B model sizes. Model dimensions come from the selected official
+configuration and are checked against every embedding. The converter rejects
+a mixed deployment, such as 1.7B HMM files with a 0.6B configuration.
+
+Base deployments additionally require `speaker_encoder.hmm` and
+`speech_tokenizer_encoder.hmm`. They are stored under the stable GGUF tensor
+names `qwen3_tts.speaker_encoder.hmm` and
+`qwen3_tts.speech_tokenizer_encoder.hmm`. Base bundles use
+`qwen3_tts.variant=base`; CustomVoice bundles retain
+`qwen3_tts.variant=custom_voice`.
 
 Example:
 
@@ -23,6 +29,15 @@ python tools/Qwen3TTS/convert_qwen3_tts_to_gguf.py `
   --input E:\models\Qwen3-TTS\hmm_xh2_qwen3-tts-1.7b-customvoice_w8a16_256_2k_b1_1chip_2cores_v1.4.0 `
   --config-dir E:\models\Qwen3-TTS\Qwen3-TTS-12Hz-1.7B-CustomVoice-config `
   --output E:\models\Qwen3-TTS\qwen3-tts-1.7b-customvoice.gguf
+```
+
+Base example:
+
+```powershell
+python tools/Qwen3TTS/convert_qwen3_tts_to_gguf.py `
+  --input E:\models\Qwen3-TTS\hmm_xh2_qwen3-tts-0.6b-base_w8a16h1_sefp_256_2k_b1_1chip_2cores_v1.4.0 `
+  --config-dir E:\models\Qwen3-TTS\Qwen3-TTS-12Hz-0.6B-Base-config `
+  --output E:\models\Qwen3-TTS\HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0.gguf
 ```
 
 If PTQ produced a deployment `meta.json`, pass it with `--deployment-meta`.
@@ -74,17 +89,27 @@ temporary model-specific verification routes:
 
 - `POST /hlie/v1/qwen3_tts/prefill_debug`
 - `POST /hlie/v1/qwen3_tts/codec_frames_debug`
+- `POST /hlie/v1/qwen3_tts/reference_debug` (Base reference audio frontend)
 - `POST /hlie/v1/qwen3_tts/stateful_decoder_debug`
 - `POST /hlie/v1/qwen3_tts/speech_debug`
 
 The debug speech and codec-frame routes use deterministic greedy generation for
-Python/C++ graph comparison. They decode 12-frame Stateful Decoder chunks and
-return a mono 24 kHz PCM16 WAV. See `tests/http/qwen3_tts_client.http` for load,
-inference, decoder-isolation, and unload requests.
+Python/C++ graph comparison. Base requests must provide both `prompt_text` (the
+reference transcript) and `prompt_wav_path` (a local WAV file); the aliases
+`reference_text` and `reference_audio_path` are also accepted. The native
+frontend resamples the reference to 24 kHz, runs the speech-tokenizer encoder
+and speaker encoder, and primes the Stateful Decoder with the reference codec
+before decoding clone audio. References longer than the static tokenizer
+encoder window are truncated in the same way as `demo_base.py`; the speaker
+mel frontend independently trims to the encoder's configured frame count. See
+`tests/http/qwen3_tts_client.http` for Base
+reference, clone, load, and unload requests.
 
 The synchronous pipeline is also available from the OpenAI-compatible
 `POST /v1/audio/speech` API. Select it with `"model":"qwen3_tts"` or the
-loaded model key. `input` and `voice` follow the OpenAI request surface;
+loaded model key. `input` and `voice` follow the OpenAI request surface. For
+Base voice clone, select the Base model and add `prompt_text` and
+`prompt_wav_path`; `voice` is ignored because Base has no fixed speaker map.
 `language` and `max_frames` are optional HLIE extensions. The current native
 backend supports `response_format=wav` and `speed=1.0`. Streaming behavior and
 additional encoded formats will be added separately.
@@ -96,9 +121,9 @@ the Qwen3-TTS model explicitly.
 The production route samples Talker with temperature 0.9 and top-k 50, plus
 repetition penalty, minimum EOS length, and reserved-token suppression. Talker
 cannot be fully greedy because some valid inputs, especially mixed-language
-text, can remain on a repetitive path without producing EOS. CodePredictor is
-kept greedy to avoid amplifying small NPU logit variations into audible timbre
-changes.
+text, can remain on a repetitive path without producing EOS. CustomVoice keeps
+CodePredictor greedy to reduce request-to-request timbre variation. Base follows
+the official `subtalker_dosample` generation setting stored in its GGUF bundle.
 
 Sampling uses a request-level seed. The default `seed=1024` prevents prior
 requests from advancing the random sequence used by later requests and greatly

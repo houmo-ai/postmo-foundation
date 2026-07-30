@@ -1,0 +1,208 @@
+@host = http://127.0.0.1:7901
+@modelType = qwen3_tts
+@device = 0
+@baseModelPath = D:/workspace/wtt/houmo/llm/hi.cpp/artifacts/qwen3-tts-base-v1.4.0/HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0.gguf
+@baseModel = HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0
+@customVoiceModel = HiModel_xh2_qwen3-tts-1.7b-w8a16-256-2k-b1-1chip-2cores-v1.4.0_20260720
+@referenceWav = D:/workspace/wtt/houmo/imodelzoo/data/audio/clone_1.wav
+
+### 1. Health check
+GET {{host}}/health
+
+> {%
+    client.test("service is healthy", function () {
+        client.assert(response.status === 200, "expected HTTP 200");
+    });
+%}
+
+### 2. Load Qwen3-TTS 0.6B Base GGUF
+# @timeout 600
+POST {{host}}/models/load
+Content-Type: application/json
+
+{
+  "model_type": "{{modelType}}",
+  "model_path": "{{baseModelPath}}",
+  "devices": "{{device}}"
+}
+
+> {%
+    client.test("Base model loads", function () {
+        client.assert(response.status === 200, "expected HTTP 200");
+        client.assert(response.body.code === 0, "expected code=0");
+    });
+%}
+
+### 3. Check loaded model status
+GET {{host}}/hlie/v1/status
+
+> {%
+    client.test("Base model is visible in status", function () {
+        client.assert(response.status === 200, "expected HTTP 200");
+        const serialized = JSON.stringify(response.body);
+        client.assert(serialized.includes("qwen3-tts-0.6b-base"),
+            "Base model is not loaded");
+    });
+%}
+
+### 4. Validate the reference audio frontend
+# clone_1.wav is 16 kHz. The native frontend must resample it to exactly
+# 100895 samples at 24 kHz and produce 53 codec frames.
+# @timeout 600
+POST {{host}}/hlie/v1/qwen3_tts/reference_debug
+Content-Type: application/json
+
+{
+  "prompt_wav_path": "{{referenceWav}}"
+}
+
+> {%
+    client.test("reference codec and speaker embedding are valid", function () {
+        client.assert(response.status === 200, "expected HTTP 200");
+        client.assert(response.body.samples === 100895, "resampler output mismatch");
+        client.assert(response.body.valid_frames === 53, "reference frame count mismatch");
+        client.assert(JSON.stringify(response.body.codec_shape) === "[1,53,16]",
+            "reference codec shape mismatch");
+        client.assert(JSON.stringify(response.body.speaker_embedding_shape) === "[1,1024]",
+            "speaker embedding shape mismatch");
+    });
+%}
+
+### 5. Generate deterministic Base codec frames using the input alias
+# This verifies that codec_frames_debug accepts `input`, not only `text`.
+# Short greedy sequences are intended for graph parity and may decode quietly.
+# @timeout 600
+POST {{host}}/hlie/v1/qwen3_tts/codec_frames_debug
+Content-Type: application/json
+
+{
+  "input": "后摩智能致力于突破芯片的性能与功耗瓶颈。",
+  "language": "Chinese",
+  "prompt_text": "甚至出现交易几乎停滞的情况。",
+  "prompt_wav_path": "{{referenceWav}}",
+  "max_frames": 24
+}
+
+> {%
+    client.test("Base codec debug succeeds", function () {
+        client.assert(response.status === 200, "expected HTTP 200");
+        client.assert(response.body.generated_frames === 24, "expected 24 codec frames");
+        client.assert(response.body.codec_frames.length === 24, "codec frame array mismatch");
+        client.assert(response.body.codec_frames[0].length === 16, "codec group count mismatch");
+    });
+%}
+
+### 6. Generate complete clone speech through /v1/audio/speech
+# Expected response headers include:
+# X-HLIE-TTS-Backend: qwen3_tts
+# X-Qwen3-TTS-Variant: base
+# X-Qwen3-TTS-Reached-EOS: true
+# @timeout 600
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "input": "后摩智能致力于突破芯片的性能与功耗瓶颈。",
+  "language": "Chinese",
+  "prompt_text": "甚至出现交易几乎停滞的情况。",
+  "prompt_wav_path": "{{referenceWav}}",
+  "response_format": "wav",
+  "speed": 1.0,
+  "seed": 1024,
+  "max_frames": 256
+}
+
+> {%
+    client.test("Base clone returns a completed WAV", function () {
+        client.assert(response.status === 200, "expected HTTP 200");
+        client.assert(response.headers.valueOf("Content-Type").includes("audio/wav"),
+            "expected audio/wav");
+        client.assert(response.headers.valueOf("X-HLIE-TTS-Backend") === "qwen3_tts",
+            "wrong speech backend");
+        client.assert(response.headers.valueOf("X-Qwen3-TTS-Variant") === "base",
+            "wrong Qwen3-TTS variant");
+        client.assert(response.headers.valueOf("X-Qwen3-TTS-Reached-EOS") === "true",
+            "generation did not reach EOS");
+        client.assert(Number(response.headers.valueOf("X-Qwen3-TTS-Frames")) > 0,
+            "no codec frames generated");
+        client.assert(Number(response.headers.valueOf("X-Qwen3-TTS-Samples")) > 0,
+            "no audio samples generated");
+    });
+%}
+
+### 7. Verify reference_text/reference_audio_path aliases
+# @timeout 600
+POST {{host}}/hlie/v1/qwen3_tts/codec_frames_debug
+Content-Type: application/json
+
+{
+  "text": "Voice clone alias test.",
+  "language": "English",
+  "reference_text": "This is the reference recording.",
+  "reference_audio_path": "{{referenceWav}}",
+  "max_frames": 3
+}
+
+> {%
+    client.test("reference field aliases work", function () {
+        client.assert(response.status === 200, "expected HTTP 200");
+        client.assert(response.body.generated_frames === 3, "expected 3 codec frames");
+    });
+%}
+
+### 8. Do not route an unloaded CustomVoice model to the loaded Base instance
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{customVoiceModel}}",
+  "input": "Concrete model routing regression.",
+  "voice": "vivian",
+  "language": "English",
+  "max_frames": 1
+}
+
+> {%
+    client.test("concrete model mismatch is rejected", function () {
+        client.assert(response.status === 400, "expected HTTP 400");
+        client.assert(response.body.error.message === "requested speech model is not loaded",
+            "unexpected routing error");
+    });
+%}
+
+### 9. Invalid reference paths are client errors
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "input": "Invalid reference path regression.",
+  "language": "English",
+  "prompt_text": "Reference transcript.",
+  "prompt_wav_path": "Z:/does-not-exist.wav",
+  "max_frames": 32
+}
+
+> {%
+    client.test("invalid reference is HTTP 400", function () {
+        client.assert(response.status === 400, "expected HTTP 400");
+        client.assert(response.body.error.type === "invalid_request_error",
+            "expected invalid_request_error");
+    });
+%}
+
+### 10. Unload Qwen3-TTS Base
+# @timeout 600
+POST {{host}}/models/unload
+Content-Type: application/json
+
+{
+  "model_type": "{{modelType}}"
+}
+
+> {%
+    client.test("Base model unloads", function () {
+        client.assert(response.status === 200, "expected HTTP 200");
+    });
+%}

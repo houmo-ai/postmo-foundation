@@ -12,6 +12,7 @@
 #include <unordered_set>
 
 #include "hlie_base/hlie_logger.h"
+#include "hlie_base/hlie_audio.h"
 #include "hlie_base/hlie_tcim_util.h"
 #include "hlie_base/hlie_tokenizer.h"
 #include "nlohmann/json.hpp"
@@ -23,6 +24,9 @@ constexpr std::string_view kTalkerDecode = "qwen3_tts.talker.decode.hmm";
 constexpr std::string_view kCodePredictorPrefill = "qwen3_tts.code_predictor.prefill.hmm";
 constexpr std::string_view kCodePredictorDecode = "qwen3_tts.code_predictor.decode.hmm";
 constexpr std::string_view kStatefulDecoder = "qwen3_tts.stateful_decoder.hmm";
+constexpr std::string_view kSpeechTokenizerEncoder =
+    "qwen3_tts.speech_tokenizer_encoder.hmm";
+constexpr std::string_view kSpeakerEncoder = "qwen3_tts.speaker_encoder.hmm";
 constexpr std::string_view kTalkerTokenEmbedding = "quant_embedding.bin";
 constexpr std::string_view kTalkerTextEmbedding = "text_embedding.bin";
 constexpr std::string_view kCodePredictorEmbedding = "quant_embedding_code_predictor.bin";
@@ -84,6 +88,45 @@ std::vector<float> fp16_values(const tcim::Tensor& tensor) {
     std::transform(source, source + count, values.begin(),
                    [](const TensorFP16 value) { return static_cast<float>(value); });
     return values;
+}
+
+tcim::Tensor repeat_seq(const tcim::Tensor& input, const int length) {
+    const auto& shape = input.Info().Shape();
+    if (shape.size() != 3 || shape[0] != 1 || shape[1] != 1 || length < 0) {
+        throw std::invalid_argument("invalid sequence repeat request");
+    }
+    const auto info = tcim::TensorInfo::CreateNDInfo(
+        {1, length, shape[2]}, input.Info().DataType());
+    auto output = tcim::Tensor::CreateHostTensor(info);
+    const size_t row_bytes = static_cast<size_t>(shape[2]) *
+                             input.Info().DataTypeSize();
+    for (int index = 0; index < length; ++index) {
+        std::memcpy(static_cast<uint8_t*>(output.Data()) +
+                        static_cast<size_t>(index) * row_bytes,
+                    input.Data(), row_bytes);
+    }
+    return output;
+}
+
+tcim::Tensor embedding_as_seq(const tcim::Tensor& input) {
+    const auto& shape = input.Info().Shape();
+    if (shape.size() != 2 || shape[0] != 1) {
+        throw std::invalid_argument("expected [1,H] embedding");
+    }
+    const auto info = tcim::TensorInfo::CreateNDInfo(
+        {1, 1, shape[1]}, input.Info().DataType());
+    auto output = tcim::Tensor::CreateHostTensor(info);
+    std::memcpy(output.Data(), input.Data(), input.Info().MemSize());
+    return output;
+}
+
+std::vector<int32_t> int32_values(const tcim::Tensor& tensor) {
+    const size_t count = static_cast<size_t>(tensor_numel(tensor.Info().Shape()));
+    if (tensor.Info().DataType() != tcim::DataType::INT32) {
+        throw std::invalid_argument("expected INT32 tensor");
+    }
+    const auto* source = static_cast<const int32_t*>(tensor.Data());
+    return std::vector<int32_t>(source, source + count);
 }
 
 int32_t select_top_k_token(std::vector<float>& values, const size_t offset,
@@ -214,6 +257,20 @@ bool HLIEQwen3TTSModel::load_metadata(std::string& error) {
     std::string language_json;
     std::string speaker_json;
     std::string dialect_json;
+    std::string variant;
+    if (!bundle_.get_string("qwen3_tts.variant", variant, false, nullptr)) {
+        // Bundles produced before variant metadata was introduced were all
+        // CustomVoice bundles.
+        variant = "custom_voice";
+    }
+    if (variant == "base") {
+        config_.variant = Qwen3TTSVariant::Base;
+    } else if (variant == "custom_voice") {
+        config_.variant = Qwen3TTSVariant::CustomVoice;
+    } else {
+        error = "unsupported Qwen3-TTS variant: " + variant;
+        return false;
+    }
     const bool loaded = bundle_.get_string("qwen3_tts.model_size", config_.model_size, true, &error) &&
            bundle_.get_int32("qwen3_tts.sample_rate", config_.sample_rate, true, &error) &&
            bundle_.get_int32("qwen3_tts.num_code_groups", config_.num_code_groups, true, &error) &&
@@ -238,6 +295,13 @@ bool HLIEQwen3TTSModel::load_metadata(std::string& error) {
            bundle_.get_string("qwen3_tts.spk_is_dialect", dialect_json, true, &error);
     if (!loaded) {
         return false;
+    }
+
+    if (config_.variant == Qwen3TTSVariant::Base) {
+        bundle_.get_int32("qwen3_tts.speaker_encoder.embedding_dim",
+                          config_.speaker_embedding_dim, false, nullptr);
+        bundle_.get_int32("qwen3_tts.speaker_encoder.sample_rate",
+                          config_.reference_sample_rate, false, nullptr);
     }
 
     int32_t optional_value = 0;
@@ -287,7 +351,16 @@ bool HLIEQwen3TTSModel::load_metadata(std::string& error) {
         error = std::string("invalid Qwen3-TTS language/speaker metadata: ") + ex.what();
         return false;
     }
-    return !config_.codec_language_ids.empty() && !config_.speaker_ids.empty();
+    if (config_.codec_language_ids.empty()) {
+        error = "Qwen3-TTS bundle has no codec language IDs";
+        return false;
+    }
+    if (config_.variant == Qwen3TTSVariant::CustomVoice &&
+        config_.speaker_ids.empty()) {
+        error = "CustomVoice bundle has no speaker IDs";
+        return false;
+    }
+    return true;
 }
 
 bool HLIEQwen3TTSModel::load_module(const std::string& tensor_name,
@@ -426,7 +499,12 @@ int HLIEQwen3TTSModel::load_model(const std::string& model_path) {
                                   talker_prefill_model_, talker_decode_model_, error) ||
         !load_prefill_decode_pair(std::string(kCodePredictorPrefill), std::string(kCodePredictorDecode),
                                   code_predictor_prefill_model_, code_predictor_decode_model_, error) ||
-        !load_module(std::string(kStatefulDecoder), stateful_decoder_model_, {}, error)) {
+        !load_module(std::string(kStatefulDecoder), stateful_decoder_model_, {}, error) ||
+        (config_.variant == Qwen3TTSVariant::Base &&
+         (!load_module(std::string(kSpeechTokenizerEncoder),
+                       speech_tokenizer_encoder_model_, {}, error) ||
+          !load_module(std::string(kSpeakerEncoder), speaker_encoder_model_, {},
+                       error)))) {
         LOG_ERROR("Failed to load Qwen3-TTS TCIM component: {}", error);
         return -1;
     }
@@ -454,6 +532,16 @@ int HLIEQwen3TTSModel::init() {
     code_predictor_decode_output_names_ = TcimUtil::get_module_output_names(code_predictor_decode_model_);
     stateful_decoder_input_names_ = TcimUtil::get_module_input_names(stateful_decoder_model_);
     stateful_decoder_output_names_ = TcimUtil::get_module_output_names(stateful_decoder_model_);
+    if (config_.variant == Qwen3TTSVariant::Base) {
+        speech_tokenizer_encoder_input_names_ =
+            TcimUtil::get_module_input_names(speech_tokenizer_encoder_model_);
+        speech_tokenizer_encoder_output_names_ =
+            TcimUtil::get_module_output_names(speech_tokenizer_encoder_model_);
+        speaker_encoder_input_names_ =
+            TcimUtil::get_module_input_names(speaker_encoder_model_);
+        speaker_encoder_output_names_ =
+            TcimUtil::get_module_output_names(speaker_encoder_model_);
+    }
     const auto& talker_inputs = talker_prefill_input_names_;
     const auto& talker_decode_inputs = talker_decode_input_names_;
     const auto& stateful_inputs = stateful_decoder_input_names_;
@@ -463,7 +551,12 @@ int HLIEQwen3TTSModel::init() {
         code_predictor_prefill_input_names_.size() < 5 || code_predictor_prefill_output_names_.empty() ||
         code_predictor_decode_input_names_.size() < 5 || code_predictor_decode_output_names_.empty() ||
         stateful_inputs.size() < 8 ||
-        stateful_decoder_output_names_.size() != stateful_inputs.size() - 2) {
+        stateful_decoder_output_names_.size() != stateful_inputs.size() - 2 ||
+        (config_.variant == Qwen3TTSVariant::Base &&
+         (speech_tokenizer_encoder_input_names_.size() < 2 ||
+          speech_tokenizer_encoder_output_names_.size() < 2 ||
+          speaker_encoder_input_names_.size() < 1 ||
+          speaker_encoder_output_names_.empty()))) {
         LOG_ERROR("Qwen3-TTS component I/O signature is incomplete");
         return -1;
     }
@@ -488,6 +581,46 @@ int HLIEQwen3TTSModel::init() {
     code_predictor_prefill_length_ = static_cast<int>(code_predictor_prefill_shape[1]);
     context_length_ = static_cast<int>(context_shape[2]);
     stateful_chunk_size_ = static_cast<int>(stateful_shape[1]);
+    if (config_.variant == Qwen3TTSVariant::Base) {
+        const auto reference_input_shape =
+            speech_tokenizer_encoder_model_->GetInputInfo(
+                speech_tokenizer_encoder_input_names_[0]).AsContiguous().Shape();
+        const auto reference_mask_shape =
+            speech_tokenizer_encoder_model_->GetInputInfo(
+                speech_tokenizer_encoder_input_names_[1]).AsContiguous().Shape();
+        const auto reference_output_shape =
+            speech_tokenizer_encoder_model_->GetOutputInfo(
+                speech_tokenizer_encoder_output_names_[0]).AsContiguous().Shape();
+        const auto valid_frames_shape =
+            speech_tokenizer_encoder_model_->GetOutputInfo(
+                speech_tokenizer_encoder_output_names_[1]).AsContiguous().Shape();
+        const auto speaker_input_shape = speaker_encoder_model_->GetInputInfo(
+            speaker_encoder_input_names_[0]).AsContiguous().Shape();
+        const auto speaker_output_shape = speaker_encoder_model_->GetOutputInfo(
+            speaker_encoder_output_names_[0]).AsContiguous().Shape();
+        if (reference_input_shape.size() != 2 || reference_mask_shape != reference_input_shape ||
+            reference_output_shape.size() != 3 || reference_output_shape[2] != config_.num_code_groups ||
+            valid_frames_shape.size() != 1 || speaker_input_shape.size() != 3 ||
+            speaker_output_shape.size() != 2 || speaker_output_shape[0] != 1) {
+            LOG_ERROR("Qwen3-TTS Base reference encoder shapes are invalid");
+            return -1;
+        }
+        reference_encoder_samples_ = static_cast<int>(reference_input_shape[1]);
+        reference_encoder_frames_ = static_cast<int>(reference_output_shape[1]);
+        speaker_encoder_mel_bins_ = static_cast<int>(speaker_input_shape[2]);
+        config_.reference_max_samples = reference_encoder_samples_;
+        config_.reference_max_frames = reference_encoder_frames_;
+        config_.reference_mel_bins = speaker_encoder_mel_bins_;
+        if (config_.speaker_embedding_dim <= 0) {
+            config_.speaker_embedding_dim = static_cast<int32_t>(speaker_output_shape[1]);
+        }
+        if (config_.speaker_embedding_dim != speaker_output_shape[1] ||
+            config_.speaker_embedding_dim != config_.talker_hidden_size ||
+            config_.reference_sample_rate <= 0) {
+            LOG_ERROR("Qwen3-TTS Base speaker encoder metadata does not match I/O");
+            return -1;
+        }
+    }
     const auto kv_shape = stateful_decoder_model_->GetInputInfo(
         stateful_inputs[7]).AsContiguous().Shape();
     if (kv_shape.size() < 3 || kv_shape[2] <= 0) {
@@ -591,6 +724,497 @@ bool HLIEQwen3TTSModel::project_text_ids(const std::vector<int>& ids, tcim::Tens
         return true;
     } catch (const std::exception& ex) {
         error = std::string("text projection failed: ") + ex.what();
+        return false;
+    }
+}
+
+bool HLIEQwen3TTSModel::encode_reference_audio(
+    const std::vector<float>& pcm,
+    std::vector<std::vector<int32_t>>& reference_codes,
+    tcim::Tensor& speaker_embedding, std::string& error) {
+    if (config_.variant != Qwen3TTSVariant::Base ||
+        !speech_tokenizer_encoder_model_ || !speaker_encoder_model_) {
+        error = "Qwen3-TTS reference encoders are unavailable";
+        return false;
+    }
+    if (pcm.empty()) {
+        error = "reference audio must not be empty";
+        return false;
+    }
+    try {
+        const auto audio_info = speech_tokenizer_encoder_model_->GetInputInfo(
+            speech_tokenizer_encoder_input_names_[0]).AsContiguous();
+        const auto mask_info = speech_tokenizer_encoder_model_->GetInputInfo(
+            speech_tokenizer_encoder_input_names_[1]).AsContiguous();
+        if (audio_info.DataType() != tcim::DataType::FLOAT16 ||
+            mask_info.DataType() != tcim::DataType::INT32) {
+            error = "Qwen3-TTS Base reference encoder has unexpected input types";
+            return false;
+        }
+        auto audio = tcim::Tensor::CreateHostTensor(audio_info);
+        auto mask = tcim::Tensor::CreateHostTensor(mask_info);
+        std::memset(audio.Data(), 0, audio_info.MemSize());
+        std::memset(mask.Data(), 0, mask_info.MemSize());
+        auto* audio_data = static_cast<TensorFP16*>(audio.Data());
+        auto* mask_data = static_cast<int32_t*>(mask.Data());
+        const size_t valid_samples = std::min(
+            pcm.size(), static_cast<size_t>(reference_encoder_samples_));
+        if (valid_samples < pcm.size()) {
+            LOG_WARN(
+                "Qwen3-TTS Base reference audio has {} samples; truncating the "
+                "speech-tokenizer encoder input to {} samples at {} Hz",
+                pcm.size(), valid_samples, config_.reference_sample_rate);
+        }
+        for (size_t index = 0; index < valid_samples; ++index) {
+            audio_data[index] = TensorFP16(pcm[index]);
+            mask_data[index] = 1;
+        }
+        CHECK_TCIM_STATUS(speech_tokenizer_encoder_model_->SetInput(
+            speech_tokenizer_encoder_input_names_[0], audio));
+        CHECK_TCIM_STATUS(speech_tokenizer_encoder_model_->SetInput(
+            speech_tokenizer_encoder_input_names_[1], mask));
+        CHECK_TCIM_STATUS(speech_tokenizer_encoder_model_->Run());
+        CHECK_TCIM_STATUS(speech_tokenizer_encoder_model_->Sync());
+
+        const auto codes = speech_tokenizer_encoder_model_->GetDevOutput(
+            speech_tokenizer_encoder_output_names_[0]).ToHost(true);
+        const auto valid = speech_tokenizer_encoder_model_->GetDevOutput(
+            speech_tokenizer_encoder_output_names_[1]).ToHost(true);
+        if (codes.Info().DataType() != tcim::DataType::INT32 ||
+            valid.Info().DataType() != tcim::DataType::INT32 ||
+            codes.Info().Shape().size() != 3) {
+            error = "Qwen3-TTS Base reference encoder returned unexpected outputs";
+            return false;
+        }
+        const auto valid_values = int32_values(valid);
+        const int32_t valid_frames = valid_values.empty() ? 0 : valid_values[0];
+        const auto code_shape = codes.Info().Shape();
+        if (valid_frames <= 0 || valid_frames > code_shape[1] ||
+            code_shape[2] != config_.num_code_groups) {
+            error = "Qwen3-TTS Base reference encoder returned invalid frame count";
+            return false;
+        }
+        const auto code_values = int32_values(codes);
+        reference_codes.clear();
+        reference_codes.reserve(static_cast<size_t>(valid_frames));
+        for (int32_t frame = 0; frame < valid_frames; ++frame) {
+            std::vector<int32_t> values(
+                code_values.begin() + static_cast<std::ptrdiff_t>(frame * code_shape[2]),
+                code_values.begin() + static_cast<std::ptrdiff_t>((frame + 1) * code_shape[2]));
+            for (int32_t group = 0; group < config_.num_code_groups; ++group) {
+                const int32_t limit = group == 0 ? config_.codec_vocab_size
+                                                 : config_.code_predictor_vocab_size;
+                if (values[static_cast<size_t>(group)] < 0 ||
+                    values[static_cast<size_t>(group)] >= limit) {
+                    error = "Qwen3-TTS Base reference codec token is out of range";
+                    return false;
+                }
+            }
+            reference_codes.push_back(std::move(values));
+        }
+
+        const auto speaker_info = speaker_encoder_model_->GetInputInfo(
+            speaker_encoder_input_names_[0]).AsContiguous();
+        const auto mel_shape = speaker_info.Shape();
+        if (mel_shape.size() != 3 || mel_shape[0] != 1 ||
+            mel_shape[1] <= 0 || mel_shape[2] <= 0) {
+            error = "Qwen3-TTS Base speaker encoder input shape is invalid";
+            return false;
+        }
+        const auto mel_values = HLIEAudio::ComputeQwen3TTSSpeakerMel(
+            pcm, static_cast<int>(mel_shape[1]), static_cast<int>(mel_shape[2]));
+        if (speaker_info.DataType() != tcim::DataType::FLOAT16 ||
+            mel_values.size() != static_cast<size_t>(mel_shape[1] * mel_shape[2])) {
+            error = "Qwen3-TTS Base speaker encoder input shape/type mismatch";
+            return false;
+        }
+        auto mels = tcim::Tensor::CreateHostTensor(speaker_info);
+        std::memcpy(mels.Data(), mel_values.data(), speaker_info.MemSize());
+        CHECK_TCIM_STATUS(speaker_encoder_model_->SetInput(
+            speaker_encoder_input_names_[0], mels));
+        CHECK_TCIM_STATUS(speaker_encoder_model_->Run());
+        CHECK_TCIM_STATUS(speaker_encoder_model_->Sync());
+        speaker_embedding = speaker_encoder_model_->GetDevOutput(
+            speaker_encoder_output_names_[0]).ToHost(true);
+        if (speaker_embedding.Info().DataType() != tcim::DataType::FLOAT16 ||
+            speaker_embedding.Info().Shape().size() != 2 ||
+            speaker_embedding.Info().Shape()[0] != 1 ||
+            speaker_embedding.Info().Shape()[1] != config_.speaker_embedding_dim) {
+            error = "Qwen3-TTS Base speaker encoder returned an invalid embedding";
+            return false;
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        error = std::string("Qwen3-TTS Base reference encoding failed: ") + ex.what();
+        return false;
+    }
+}
+
+bool HLIEQwen3TTSModel::debug_reference_audio(
+    const std::vector<float>& reference_pcm, Qwen3TTSReferenceDebugResult& result,
+    std::string& error) {
+    std::lock_guard lock(inference_mutex_);
+    result = {};
+    std::vector<std::vector<int32_t>> codes;
+    tcim::Tensor speaker_embedding;
+    if (!encode_reference_audio(reference_pcm, codes, speaker_embedding, error)) {
+        return false;
+    }
+    result.valid_frames = static_cast<int32_t>(codes.size());
+    result.codec_shape = {1, result.valid_frames, config_.num_code_groups};
+    for (const auto& frame : codes) {
+        result.codec_head.insert(result.codec_head.end(), frame.begin(), frame.end());
+        if (result.codec_head.size() >= 48) {
+            result.codec_head.resize(48);
+            break;
+        }
+    }
+    result.speaker_embedding_shape = speaker_embedding.Info().Shape();
+    const auto values = fp16_values(speaker_embedding);
+    result.speaker_embedding_head.assign(
+        values.begin(), values.begin() + std::min<size_t>(16, values.size()));
+    double sum = 0.0;
+    double abs_sum = 0.0;
+    for (const float value : values) {
+        sum += value;
+        abs_sum += std::abs(value);
+    }
+    result.speaker_embedding_sum = static_cast<float>(sum);
+    result.speaker_embedding_abs_mean =
+        values.empty() ? 0.0F : static_cast<float>(abs_sum / values.size());
+    return true;
+}
+
+bool HLIEQwen3TTSModel::build_base_prompt(
+    const std::string& text, const std::string& language,
+    const std::string& reference_text,
+    const std::vector<std::vector<int32_t>>& reference_codes,
+    const tcim::Tensor& speaker_embedding, tcim::Tensor& talker_input,
+    tcim::Tensor& tts_pad, std::string& error) {
+    if (text.empty() || reference_text.empty() || reference_codes.empty()) {
+        error = "Base voice clone requires non-empty text, reference_text, and reference audio";
+        return false;
+    }
+    if (speaker_embedding.Info().Shape() != std::vector<int64_t>{1, config_.speaker_embedding_dim}) {
+        error = "Base speaker embedding shape mismatch";
+        return false;
+    }
+    try {
+        const std::string assistant_text =
+            "<|im_start|>assistant\n" + text + "<|im_end|>\n<|im_start|>assistant\n";
+        const std::string reference_prompt =
+            "<|im_start|>assistant\n" + reference_text + "<|im_end|>\n";
+        const auto input_ids = tokenizer_->tokenize(assistant_text);
+        const auto reference_ids = tokenizer_->tokenize(reference_prompt);
+        if (input_ids.size() < 9 || reference_ids.size() < 5 ||
+            input_ids.size() <= 8 || reference_ids.size() <= 4) {
+            error = "Qwen3-TTS Base tokenizer produced an invalid prompt";
+            return false;
+        }
+
+        tcim::Tensor tts_special;
+        if (!project_text_ids({config_.tts_bos_token_id, config_.tts_eos_token_id,
+                               config_.tts_pad_token_id}, tts_special, error)) {
+            return false;
+        }
+        const auto tts_bos = slice_seq(tts_special, 0, 1);
+        const auto tts_eos = slice_seq(tts_special, 1, 1);
+        tts_pad = slice_seq(tts_special, 2, 1);
+
+        std::optional<int32_t> language_id;
+        const std::string language_key = lower_ascii(language.empty() ? "chinese" : language);
+        if (language_key != "auto") {
+            const auto it = config_.codec_language_ids.find(language_key);
+            if (it == config_.codec_language_ids.end()) {
+                error = "unsupported Qwen3-TTS language: " + language_key;
+                return false;
+            }
+            language_id = it->second;
+        }
+
+        std::vector<int> codec_prefix;
+        if (language_id) {
+            codec_prefix = {config_.codec_think_id, config_.codec_think_bos_id,
+                            *language_id, config_.codec_think_eos_id};
+        } else {
+            codec_prefix = {config_.codec_nothink_id, config_.codec_think_bos_id,
+                            config_.codec_think_eos_id};
+        }
+        auto codec_prefix_embedding = TcimUtil::embedding_lookup(
+            *talker_token_embedding_, codec_prefix);
+        const auto speaker_seq = embedding_as_seq(speaker_embedding);
+        const auto codec_tail_embedding = TcimUtil::embedding_lookup(
+            *talker_token_embedding_, {config_.codec_pad_id, config_.codec_bos_id});
+        const auto codec_condition = TcimUtil::concat_seq(
+            {codec_prefix_embedding, speaker_seq, codec_tail_embedding});
+
+        const std::vector<int> role_ids(input_ids.begin(), input_ids.begin() + 3);
+        tcim::Tensor role;
+        if (!project_text_ids(role_ids, role, error)) {
+            return false;
+        }
+        std::vector<int> prefix_text_ids(
+            static_cast<size_t>(codec_condition.Info().Shape()[1] - 2),
+            config_.tts_pad_token_id);
+        prefix_text_ids.push_back(config_.tts_bos_token_id);
+        tcim::Tensor prefix_text;
+        if (!project_text_ids(prefix_text_ids, prefix_text, error)) {
+            return false;
+        }
+        auto prefix = add_fp16(
+            prefix_text,
+            slice_seq(codec_condition, 0,
+                      static_cast<int>(codec_condition.Info().Shape()[1]) - 1));
+        auto prompt_prefix = TcimUtil::concat_seq({role, prefix});
+
+        const std::vector<int> target_ids(input_ids.begin() + 3,
+                                          input_ids.end() - 5);
+        const std::vector<int> ref_ids(reference_ids.begin() + 3,
+                                       reference_ids.end() - 2);
+        if (target_ids.empty() || ref_ids.empty()) {
+            error = "Base target/reference text tokenization produced an empty body";
+            return false;
+        }
+        std::vector<int> all_text_ids = ref_ids;
+        all_text_ids.insert(all_text_ids.end(), target_ids.begin(), target_ids.end());
+        tcim::Tensor text_embed;
+        if (!project_text_ids(all_text_ids, text_embed, error)) {
+            return false;
+        }
+        text_embed = TcimUtil::concat_seq({text_embed, tts_eos});
+        const auto codec_pad = TcimUtil::embedding_lookup(
+            *talker_token_embedding_,
+            std::vector<int>(static_cast<size_t>(text_embed.Info().Shape()[1]),
+                             config_.codec_pad_id));
+        auto text_condition = add_fp16(text_embed, codec_pad);
+
+        std::vector<tcim::Tensor> codec_frames;
+        codec_frames.reserve(reference_codes.size());
+        for (const auto& frame : reference_codes) {
+            if (frame.size() != static_cast<size_t>(config_.num_code_groups)) {
+                error = "Base reference codec frame width mismatch";
+                return false;
+            }
+            std::vector<tcim::Tensor> group_embeddings;
+            group_embeddings.reserve(config_.num_code_groups);
+            group_embeddings.push_back(TcimUtil::embedding_lookup(
+                *talker_token_embedding_, {frame[0]}));
+            const auto* predictor_data = static_cast<const TensorFP16*>(
+                code_predictor_embedding_->Data());
+            const int64_t predictor_vocab = config_.code_predictor_vocab_size;
+            for (int group = 1; group < config_.num_code_groups; ++group) {
+                const int32_t token = frame[static_cast<size_t>(group)];
+                const size_t offset =
+                    (static_cast<size_t>(group - 1) * static_cast<size_t>(predictor_vocab) +
+                     static_cast<size_t>(token)) *
+                    static_cast<size_t>(config_.talker_hidden_size);
+                const auto info = tcim::TensorInfo::CreateNDInfo(
+                    {1, 1, config_.talker_hidden_size}, tcim::DataType::FLOAT16);
+                auto embedding = tcim::Tensor::CreateHostTensor(info);
+                std::memcpy(embedding.Data(), predictor_data + offset,
+                            static_cast<size_t>(config_.talker_hidden_size) *
+                                sizeof(TensorFP16));
+                group_embeddings.push_back(std::move(embedding));
+            }
+            codec_frames.push_back(sum_fp16_vectors(group_embeddings));
+        }
+        auto codec_condition_frames = TcimUtil::concat_seq(codec_frames);
+        auto codec_bos = TcimUtil::embedding_lookup(
+            *talker_token_embedding_, {config_.codec_bos_id});
+        auto codec_prompt = TcimUtil::concat_seq({codec_bos, codec_condition_frames});
+        auto codec_pad_prompt = add_fp16(
+            codec_prompt, repeat_seq(tts_pad, static_cast<int>(codec_prompt.Info().Shape()[1])));
+        auto icl_prompt = TcimUtil::concat_seq({text_condition, codec_pad_prompt});
+        talker_input = TcimUtil::concat_seq({prompt_prefix, icl_prompt});
+        if (talker_input.Info().Shape()[1] >= context_length_ - 1) {
+            error = "Qwen3-TTS Base prompt exceeds Talker context length";
+            return false;
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        error = std::string("Qwen3-TTS Base prompt construction failed: ") + ex.what();
+        return false;
+    }
+}
+
+bool HLIEQwen3TTSModel::run_talker_prefill(
+    const tcim::Tensor& talker_input, Qwen3TTSPrefillDebugResult& result,
+    tcim::Tensor& past_hidden, const bool do_sample, std::string& error) {
+    result = {};
+    try {
+        const int prompt_length = static_cast<int>(talker_input.Info().Shape()[1]);
+        if (prompt_length <= 0 || prompt_length >= context_length_) {
+            error = "Qwen3-TTS Base prompt exceeds Talker context length";
+            return false;
+        }
+        const size_t prompt_elements = static_cast<size_t>(
+            TcimUtil::numel(talker_input.Info().Shape()));
+        const auto prompt_values = TcimUtil::tensor_to_float_vec(
+            talker_input.Data(), prompt_elements);
+        double prompt_sum = 0.0;
+        double prompt_abs_sum = 0.0;
+        for (const float value : prompt_values) {
+            prompt_sum += value;
+            prompt_abs_sum += std::abs(value);
+        }
+        result.prompt_sum = static_cast<float>(prompt_sum);
+        result.prompt_abs_mean = prompt_values.empty()
+            ? 0.0F
+            : static_cast<float>(prompt_abs_sum / prompt_values.size());
+        const int padded_length =
+            ((prompt_length + prefill_length_ - 1) / prefill_length_) * prefill_length_;
+        auto padded_input = talker_input;
+        if (padded_length > prompt_length) {
+            const auto padding = TcimUtil::embedding_lookup(
+                *talker_token_embedding_,
+                std::vector<int>(padded_length - prompt_length, 0));
+            padded_input = TcimUtil::concat_seq({talker_input, padding});
+        }
+        if (!reset_device_caches(talker_prefill_model_, talker_prefill_input_names_,
+                                 3, error)) {
+            return false;
+        }
+        result.prompt_length = prompt_length;
+        result.prefill_chunks = padded_length / prefill_length_;
+        for (int round = 0; round < result.prefill_chunks; ++round) {
+            const int start = round * prefill_length_;
+            const int current_length = std::min(prefill_length_, prompt_length - start);
+            auto chunk = slice_seq(padded_input, start, prefill_length_);
+            auto& valid = *talker_prefill_host_inputs_[1];
+            auto& current = *talker_prefill_host_inputs_[2];
+            const int32_t valid_value = start;
+            const int32_t current_value = current_length;
+            CHECK_TCIM_STATUS(valid.Buffer().CopyFromHost(&valid_value, sizeof(valid_value)));
+            CHECK_TCIM_STATUS(current.Buffer().CopyFromHost(&current_value, sizeof(current_value)));
+            CHECK_TCIM_STATUS(talker_prefill_model_->SetInput(
+                talker_prefill_input_names_[0], chunk));
+            CHECK_TCIM_STATUS(talker_prefill_model_->SetInput(
+                talker_prefill_input_names_[1], valid));
+            CHECK_TCIM_STATUS(talker_prefill_model_->SetInput(
+                talker_prefill_input_names_[2], current));
+            CHECK_TCIM_STATUS(talker_prefill_model_->Run());
+            CHECK_TCIM_STATUS(talker_prefill_model_->Sync());
+        }
+        const auto logits = talker_prefill_model_->GetDevOutput(
+            talker_prefill_output_names_[0]).ToHost(true);
+        past_hidden = talker_prefill_model_->GetDevOutput(
+            talker_prefill_output_names_[1]).ToHost(true);
+        result.logits_shape = logits.Info().Shape();
+        if (logits.Info().DataType() != tcim::DataType::FLOAT16 ||
+            result.logits_shape.empty()) {
+            error = "unexpected Qwen3-TTS Base Talker logits output";
+            return false;
+        }
+        result.first_codec_token = select_talker_logits(
+            logits, {}, config_.codec_eos_token_id, do_sample, sampling_rng_);
+        const int64_t vocab = result.logits_shape.back();
+        const auto values = fp16_values(logits);
+        const size_t offset = static_cast<size_t>(values.size() - vocab);
+        result.first_codec_logit = values[offset +
+            static_cast<size_t>(result.first_codec_token)];
+        result.last_logits_head.assign(
+            values.begin() + static_cast<std::ptrdiff_t>(offset),
+            values.begin() + static_cast<std::ptrdiff_t>(offset +
+                std::min<int64_t>(16, vocab)));
+        return true;
+    } catch (const std::exception& ex) {
+        error = std::string("Qwen3-TTS Base Talker prefill failed: ") + ex.what();
+        return false;
+    }
+}
+
+bool HLIEQwen3TTSModel::generate_base_codec_frames_unlocked(
+    const std::string& text, const std::string& language,
+    const std::string& reference_text,
+    const std::vector<float>& reference_pcm, const int max_frames,
+    Qwen3TTSCodecFramesDebugResult& result, const bool do_sample,
+    std::string& error,
+    std::vector<std::vector<int32_t>>* reference_codes_output) {
+    result = {};
+    if (max_frames <= 0 || max_frames >= context_length_) {
+        error = "max_frames must be between 1 and the model context length";
+        return false;
+    }
+    try {
+        std::vector<std::vector<int32_t>> reference_codes;
+        tcim::Tensor speaker_embedding;
+        if (!encode_reference_audio(reference_pcm, reference_codes,
+                                     speaker_embedding, error)) {
+            return false;
+        }
+        if (reference_codes_output) {
+            *reference_codes_output = reference_codes;
+        }
+        tcim::Tensor talker_input;
+        tcim::Tensor tts_pad;
+        if (!build_base_prompt(text, language, reference_text, reference_codes,
+                               speaker_embedding, talker_input, tts_pad, error)) {
+            return false;
+        }
+        if (talker_input.Info().Shape()[1] + max_frames >= context_length_) {
+            error = "Qwen3-TTS Base prompt plus max_frames exceeds the model context length";
+            return false;
+        }
+
+        tcim::Tensor past_hidden;
+        if (!run_talker_prefill(talker_input, result.prefill, past_hidden,
+                                do_sample, error)) {
+            return false;
+        }
+        int32_t talker_token = result.prefill.first_codec_token;
+        int32_t past_seq_length = result.prefill.prompt_length;
+        for (int frame_index = 0; frame_index < max_frames; ++frame_index) {
+            result.talker_tokens.push_back(talker_token);
+            std::vector<int32_t> predictor_tokens;
+            std::vector<tcim::Tensor> predictor_embeds;
+            if (!generate_code_predictor_frame(
+                    past_hidden, talker_token, predictor_tokens, predictor_embeds,
+                    do_sample && config_.code_predictor_sampling, error)) {
+                return false;
+            }
+            std::vector<int32_t> frame;
+            frame.reserve(config_.num_code_groups);
+            frame.push_back(talker_token);
+            frame.insert(frame.end(), predictor_tokens.begin(), predictor_tokens.end());
+            result.codec_frames.push_back(std::move(frame));
+            if (frame_index + 1 >= max_frames) {
+                break;
+            }
+
+            std::vector<tcim::Tensor> codec_hiddens;
+            codec_hiddens.reserve(1 + predictor_embeds.size());
+            codec_hiddens.push_back(TcimUtil::embedding_lookup(
+                *talker_token_embedding_, {talker_token}));
+            codec_hiddens.insert(codec_hiddens.end(), predictor_embeds.begin(),
+                                 predictor_embeds.end());
+            auto decode_input = add_fp16(sum_fp16_vectors(codec_hiddens), tts_pad);
+            CHECK_TCIM_STATUS(talker_decode_valid_length_->Buffer().CopyFromHost(
+                &past_seq_length, sizeof(past_seq_length)));
+            CHECK_TCIM_STATUS(talker_decode_model_->SetInput(
+                talker_decode_input_names_[0], decode_input));
+            CHECK_TCIM_STATUS(talker_decode_model_->SetInput(
+                talker_decode_input_names_[1], *talker_decode_valid_length_));
+            CHECK_TCIM_STATUS(talker_decode_model_->Run());
+            CHECK_TCIM_STATUS(talker_decode_model_->Sync());
+            const auto logits = talker_decode_model_->GetDevOutput(
+                talker_decode_output_names_[0]).ToHost(true);
+            past_hidden = talker_decode_model_->GetDevOutput(
+                talker_decode_output_names_[1]).ToHost(true);
+            talker_token = select_talker_logits(
+                logits, result.talker_tokens, config_.codec_eos_token_id,
+                do_sample, sampling_rng_);
+            ++past_seq_length;
+            if (talker_token == config_.codec_eos_token_id) {
+                result.reached_eos = true;
+                break;
+            }
+        }
+        if (talker_token == config_.codec_eos_token_id) {
+            result.reached_eos = true;
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        error = std::string("Qwen3-TTS Base codec generation failed: ") + ex.what();
         return false;
     }
 }
@@ -882,6 +1506,21 @@ bool HLIEQwen3TTSModel::debug_generate_codec_frames(
         text, language, speaker, max_frames, result, false, error);
 }
 
+bool HLIEQwen3TTSModel::debug_generate_clone_codec_frames(
+    const std::string& text, const std::string& language,
+    const std::string& reference_text, const std::vector<float>& reference_pcm,
+    const int max_frames, Qwen3TTSCodecFramesDebugResult& result,
+    std::string& error) {
+    std::lock_guard lock(inference_mutex_);
+    if (config_.variant != Qwen3TTSVariant::Base) {
+        error = "Qwen3-TTS model is not a Base variant";
+        return false;
+    }
+    return generate_base_codec_frames_unlocked(
+        text, language, reference_text, reference_pcm, max_frames,
+        result, false, error);
+}
+
 bool HLIEQwen3TTSModel::generate_codec_frames_unlocked(
     const std::string& text, const std::string& language, const std::string& speaker,
     const int max_frames, Qwen3TTSCodecFramesDebugResult& result, const bool do_sample,
@@ -1141,6 +1780,96 @@ bool HLIEQwen3TTSModel::synthesize(
     LOG_INFO("Qwen3-TTS synthesized {} codec frames into {} samples (eos={})",
              result.codec_frames.size(), result.audio.size(), result.reached_eos);
     return true;
+}
+
+bool HLIEQwen3TTSModel::decode_codec_frames_with_reference_unlocked(
+    const std::vector<std::vector<int32_t>>& reference_codes,
+    const std::vector<std::vector<int32_t>>& frames, std::vector<float>& audio,
+    std::string& error) {
+    audio.clear();
+    if (reference_codes.empty() || frames.empty()) {
+        error = "Base Stateful Decoder requires reference and generated codec frames";
+        return false;
+    }
+    StatefulDecoderState state;
+    if (!create_stateful_decoder_state(state, error)) {
+        return false;
+    }
+    try {
+        for (size_t begin = 0; begin < reference_codes.size();
+             begin += static_cast<size_t>(stateful_chunk_size_)) {
+            const size_t end = std::min(
+                reference_codes.size(),
+                begin + static_cast<size_t>(stateful_chunk_size_));
+            std::vector<std::vector<int32_t>> chunk(
+                reference_codes.begin() + static_cast<std::ptrdiff_t>(begin),
+                reference_codes.begin() + static_cast<std::ptrdiff_t>(end));
+            if (chunk.size() < static_cast<size_t>(stateful_chunk_size_)) {
+                if (chunk.empty()) {
+                    break;
+                }
+                const auto pad_frame = chunk.back();
+                while (chunk.size() < static_cast<size_t>(stateful_chunk_size_)) {
+                    chunk.push_back(pad_frame);
+                }
+            }
+            std::vector<float> discarded;
+            if (!decode_stateful_chunk(chunk, false, state, discarded, error)) {
+                return false;
+            }
+        }
+
+        for (size_t begin = 0; begin < frames.size();
+             begin += static_cast<size_t>(stateful_chunk_size_)) {
+            const size_t end = std::min(
+                frames.size(), begin + static_cast<size_t>(stateful_chunk_size_));
+            std::vector<std::vector<int32_t>> chunk(
+                frames.begin() + static_cast<std::ptrdiff_t>(begin),
+                frames.begin() + static_cast<std::ptrdiff_t>(end));
+            const bool is_final = end == frames.size();
+            std::vector<float> chunk_audio;
+            if (!decode_stateful_chunk(chunk, is_final, state, chunk_audio, error)) {
+                return false;
+            }
+            audio.insert(audio.end(), chunk_audio.begin(), chunk_audio.end());
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        error = std::string("Qwen3-TTS Base Stateful Decoder failed: ") + ex.what();
+        return false;
+    }
+}
+
+bool HLIEQwen3TTSModel::synthesize_clone(
+    const std::string& text, const std::string& language,
+    const std::string& reference_text, const std::vector<float>& reference_pcm,
+    const int max_frames, Qwen3TTSSynthesisResult& result, std::string& error,
+    const bool require_eos, const bool do_sample, const uint32_t seed) {
+    std::lock_guard lock(inference_mutex_);
+    result = {};
+    if (config_.variant != Qwen3TTSVariant::Base) {
+        error = "Qwen3-TTS model is not a Base variant";
+        return false;
+    }
+    if (do_sample) {
+        sampling_rng_.seed(seed);
+    }
+    Qwen3TTSCodecFramesDebugResult generated;
+    std::vector<std::vector<int32_t>> reference_codes;
+    if (!generate_base_codec_frames_unlocked(
+            text, language, reference_text, reference_pcm, max_frames,
+            generated, do_sample, error, &reference_codes)) {
+        return false;
+    }
+    result.codec_frames = std::move(generated.codec_frames);
+    result.reached_eos = generated.reached_eos;
+    if (require_eos && !result.reached_eos) {
+        error = "Qwen3-TTS Base generation reached max_frames before EOS";
+        return false;
+    }
+
+    return decode_codec_frames_with_reference_unlocked(
+        reference_codes, result.codec_frames, result.audio, error);
 }
 
 bool HLIEQwen3TTSModel::decode_codec_frames_unlocked(

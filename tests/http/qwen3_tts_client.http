@@ -3,6 +3,9 @@
 @device = 0
 @modelPath = E:/models/HiModel_xh2_qwen3-tts-1.7b-w8a16-256-2k-b1-1chip-2cores-v1.4.0_20260720.gguf
 @model = HiModel_xh2_qwen3-tts-1.7b-w8a16-256-2k-b1-1chip-2cores-v1.4.0_20260720
+@baseModelPath = E:/models/HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0.gguf
+@baseModel = HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0
+@referenceWav = D:/workspace/wtt/houmo/imodelzoo/data/audio/clone_1.wav
 
 ### 1. Check available devices before loading
 GET {{host}}/hlie/v1/devices
@@ -142,7 +145,101 @@ Content-Type: application/json
 GET {{host}}/hlie/v1/status
 Content-Type: application/json
 
-### 13. Dynamically unload Qwen3-TTS
+### 13. Unload CustomVoice before switching variants
+# @timeout 600
+POST {{host}}/models/unload
+Content-Type: application/json
+
+{
+  "model_type": "{{modelType}}"
+}
+
+### 14. Load the Base voice-clone GGUF
+# @timeout 600
+POST {{host}}/models/load
+Content-Type: application/json
+
+{
+  "model_type": "{{modelType}}",
+  "model_path": "{{baseModelPath}}",
+  "devices": "{{device}}"
+}
+
+### 15. Reject a different registered Qwen3-TTS model while Base is loaded
+# Expected: 400 requested speech model is not loaded. The router must not run
+# the currently loaded Base service for this concrete CustomVoice model ID.
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{model}}",
+  "input": "Qwen3-TTS concrete model routing regression.",
+  "voice": "vivian",
+  "language": "English",
+  "max_frames": 1
+}
+
+### 16. Base voice-clone reference frontend debug
+# Base GGUFs do not contain a speaker map.  The reference audio is encoded by
+# the speech-tokenizer encoder and speaker encoder on every request.
+# @timeout 600
+POST {{host}}/hlie/v1/qwen3_tts/reference_debug
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "prompt_wav_path": "{{referenceWav}}"
+}
+
+### 17. Base voice-clone Talker/code debug
+# prompt_text/prompt_wav_path are the preferred names; reference_text and
+# reference_audio_path are accepted aliases for clients that already use them.
+# @timeout 600
+POST {{host}}/hlie/v1/qwen3_tts/codec_frames_debug
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "input": "This is a Base voice clone test.",
+  "language": "English",
+  "prompt_text": "This is the reference recording.",
+  "prompt_wav_path": "{{referenceWav}}",
+  "max_frames": 24
+}
+
+### 18. Base voice-clone speech through the OpenAI-compatible API
+# Base mode requires model + prompt_text + prompt_wav_path.  It uses seeded
+# sampling and returns a normal 24 kHz WAV response.
+# @timeout 600
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "input": "This is a Base voice clone test.",
+  "language": "English",
+  "prompt_text": "This is the reference recording.",
+  "prompt_wav_path": "{{referenceWav}}",
+  "response_format": "wav",
+  "seed": 1024,
+  "max_frames": 256
+}
+
+### 19. Reject an invalid Base reference path as a client error
+# Expected: HTTP 400 invalid_request_error, not a server error.
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "input": "Invalid reference path regression.",
+  "language": "English",
+  "prompt_text": "Reference transcript.",
+  "prompt_wav_path": "Z:/does-not-exist.wav",
+  "max_frames": 32
+}
+
+### 20. Dynamically unload Qwen3-TTS
 # @timeout 600
 POST {{host}}/models/unload
 Content-Type: application/json

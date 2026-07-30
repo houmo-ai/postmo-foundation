@@ -31,6 +31,7 @@ public:
     int get_state() override;
     server_http_res_ptr handle_prefill_debug(const server_http_req& req);
     server_http_res_ptr handle_codec_frames_debug(const server_http_req& req);
+    server_http_res_ptr handle_reference_debug(const server_http_req& req);
     server_http_res_ptr handle_speech_debug(const server_http_req& req);
     server_http_res_ptr handle_stateful_decoder_debug(const server_http_req& req);
     void handle_speech(const httplib::Request& req, httplib::Response& res);

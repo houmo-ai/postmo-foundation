@@ -2443,25 +2443,42 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
 
                         if (!requested_model.empty()) {
                             std::string requested_type;
+                            std::string requested_key;
                             if (const auto instance = get_model_inst(requested_model)) {
                                 requested_type = normalize_model_name(
                                     instance->model_info.get_service_kind());
+                                requested_key = normalize_model_name(instance->key);
                             }
                             const std::string normalized = normalize_model_name(requested_model);
-                            if (requested_type == HLIEModelType::COSYVOICE ||
-                                requested_type == HLIEModelType::TTS ||
+                            const std::string loaded_cosy_key = cosy_service
+                                ? normalize_model_name(cosy_service->get_model_key())
+                                : std::string();
+                            const std::string loaded_qwen_key = qwen_service
+                                ? normalize_model_name(qwen_service->get_model_key())
+                                : std::string();
+                            const bool cosy_alias =
                                 normalized == HLIEModelType::COSYVOICE ||
-                                normalized == HLIEModelType::TTS ||
-                                (cosy_service && normalized == normalize_model_name(
-                                    cosy_service->get_model_key()))) {
+                                normalized == HLIEModelType::TTS;
+                            const bool qwen_alias =
+                                normalized == HLIEModelType::QWEN3_TTS ||
+                                normalized == "qwen3-tts";
+                            const bool cosy_model_match = !loaded_cosy_key.empty() &&
+                                (normalized == loaded_cosy_key ||
+                                 requested_key == loaded_cosy_key);
+                            const bool qwen_model_match = !loaded_qwen_key.empty() &&
+                                (normalized == loaded_qwen_key ||
+                                 requested_key == loaded_qwen_key);
+                            if (cosy_alias || cosy_model_match) {
                                 backend = SpeechBackend::COSYVOICE;
-                            } else if (requested_type == HLIEModelType::QWEN3_TTS ||
-                                       normalized == HLIEModelType::QWEN3_TTS ||
-                                       normalized == "qwen3-tts" ||
-                                       (qwen_service && normalized == normalize_model_name(
-                                           qwen_service->get_model_key()))) {
+                            } else if (qwen_alias || qwen_model_match) {
                                 backend = SpeechBackend::QWEN3_TTS;
                             } else {
+                                LOG_WARN(
+                                    "Speech request rejected because requested model is not the "
+                                    "loaded speech instance: requested={}, requested_type={}, "
+                                    "loaded_cosy={}, loaded_qwen={}",
+                                    requested_model, requested_type, loaded_cosy_key,
+                                    loaded_qwen_key);
                                 fail("requested speech model is not loaded",
                                      ERROR_TYPE_INVALID_REQUEST);
                                 return;
@@ -2650,6 +2667,15 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 POST,
                 [route_qwen3_tts](const server_http_req& req) -> server_http_res_ptr {
                     return route_qwen3_tts(req, &Qwen3TTSModelService::handle_codec_frames_debug);
+                },
+                true,
+                HLIEModelType::QWEN3_TTS
+            },
+            {
+                {"/hlie/v1/qwen3_tts/reference_debug"},
+                POST,
+                [route_qwen3_tts](const server_http_req& req) -> server_http_res_ptr {
+                    return route_qwen3_tts(req, &Qwen3TTSModelService::handle_reference_debug);
                 },
                 true,
                 HLIEModelType::QWEN3_TTS

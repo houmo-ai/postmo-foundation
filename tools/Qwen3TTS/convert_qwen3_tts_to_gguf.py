@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a Qwen3-TTS CustomVoice HMM deployment into one GGUF bundle."""
+"""Convert a Qwen3-TTS HMM deployment into one GGUF bundle."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ if str(TOOLS_DIR) not in sys.path:
 from gguf_bundle import GGUFBundleWriter, import_gguf  # noqa: E402
 
 
-HMM_COMPONENTS = {
+COMMON_HMM_COMPONENTS = {
     "qwen3_tts.text_projection.hmm": "text_projection.hmm",
     "qwen3_tts.talker.prefill.hmm": "talker_prefill.hmm",
     "qwen3_tts.talker.decode.hmm": "talker_decode.hmm",
@@ -29,6 +29,15 @@ HMM_COMPONENTS = {
     "qwen3_tts.code_predictor.decode.hmm": "code_predictor_decode.hmm",
     "qwen3_tts.speech_tokenizer.hmm": "speech_tokenizer.hmm",
     "qwen3_tts.stateful_decoder.hmm": "stateful_decoder.hmm",
+}
+
+VARIANT_HMM_COMPONENTS = {
+    "custom_voice": {},
+    "base": {
+        "qwen3_tts.speech_tokenizer_encoder.hmm":
+            "speech_tokenizer_encoder.hmm",
+        "qwen3_tts.speaker_encoder.hmm": "speaker_encoder.hmm",
+    },
 }
 
 CONFIG_FILES = (
@@ -57,10 +66,14 @@ def require_files(root: Path, relative_names: tuple[str, ...]) -> None:
         )
 
 
-def resolve_hmm_files(model_dir: Path) -> dict[str, Path]:
+def resolve_hmm_files(model_dir: Path, variant: str) -> dict[str, Path]:
     resolved: dict[str, Path] = {}
     hmm_files = list(model_dir.glob("*.hmm"))
-    for bundle_name, suffix in HMM_COMPONENTS.items():
+    components = {
+        **COMMON_HMM_COMPONENTS,
+        **VARIANT_HMM_COMPONENTS[variant],
+    }
+    for bundle_name, suffix in components.items():
         matches = [path for path in hmm_files if path.name.endswith(suffix)]
         if len(matches) != 1:
             names = ", ".join(path.name for path in matches) or "none"
@@ -131,11 +144,15 @@ def build_vocabulary(config_dir: Path) -> tuple[list[str], list[str]]:
     return vocab, merges
 
 
-def validate_config(config: dict[str, Any]) -> dict[str, Any]:
+def validate_config(config: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     if config.get("model_type") != "qwen3_tts":
         raise ValueError("config.json is not a qwen3_tts configuration")
-    if config.get("tts_model_type") != "custom_voice":
-        raise ValueError("Only Qwen3-TTS CustomVoice is supported by this converter")
+    variant = config.get("tts_model_type")
+    if not isinstance(variant, str) or variant not in VARIANT_HMM_COMPONENTS:
+        raise ValueError(
+            "Unsupported Qwen3-TTS variant "
+            f"{variant!r}; expected 'custom_voice' or 'base'"
+        )
     if config.get("tts_model_size") not in {"0b6", "1b7"}:
         raise ValueError(
             "Unsupported Qwen3-TTS model size "
@@ -163,7 +180,27 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("talker_config is missing: " + ", ".join(missing))
     if talker["num_code_groups"] != 16:
         raise ValueError("Expected num_code_groups=16")
-    return talker
+    for key in ("spk_id", "spk_is_dialect", "codec_language_id"):
+        if not isinstance(talker[key], dict):
+            raise ValueError(f"talker_config.{key} must be an object")
+    if variant == "custom_voice" and not talker["spk_id"]:
+        raise ValueError("CustomVoice requires a non-empty talker_config.spk_id")
+    if variant == "base":
+        speaker_encoder = config.get("speaker_encoder_config")
+        if not isinstance(speaker_encoder, dict):
+            raise ValueError("Base config is missing speaker_encoder_config")
+        for key in ("enc_dim", "sample_rate"):
+            value = speaker_encoder.get(key)
+            if not isinstance(value, int) or value <= 0:
+                raise ValueError(
+                    f"speaker_encoder_config.{key} must be a positive integer"
+                )
+        if speaker_encoder["enc_dim"] != talker["hidden_size"]:
+            raise ValueError(
+                "speaker encoder dimension must match Talker hidden size: "
+                f"{speaker_encoder['enc_dim']} != {talker['hidden_size']}"
+            )
+    return variant, talker
 
 
 def validate_deployment_size(
@@ -176,6 +213,26 @@ def validate_deployment_size(
         raise ValueError(
             f"HMM filenames identify a {conflicting_tag} deployment, but "
             f"config.json identifies {expected_tag}"
+        )
+
+
+def validate_deployment_variant(
+    hmm_files: dict[str, Path], configured_variant: str
+) -> None:
+    names = [path.name.lower() for path in hmm_files.values()]
+    if configured_variant == "base" and any(
+        "customvoice" in name or "custom_voice" in name for name in names
+    ):
+        raise ValueError(
+            "HMM filenames identify a CustomVoice deployment, but config.json "
+            "identifies Base"
+        )
+    if configured_variant == "custom_voice" and any(
+        "-base_" in name or "_base_" in name for name in names
+    ):
+        raise ValueError(
+            "HMM filenames identify a Base deployment, but config.json "
+            "identifies CustomVoice"
         )
 
 
@@ -277,16 +334,24 @@ def convert(
         ),
     )
     require_files(config_dir, CONFIG_FILES)
-    hmm_files = resolve_hmm_files(model_dir)
-
     config = load_json(config_dir / "config.json")
-    talker = validate_config(config)
+    variant, talker = validate_config(config)
+    hmm_files = resolve_hmm_files(model_dir, variant)
     validate_deployment_size(hmm_files, config["tts_model_size"])
+    validate_deployment_variant(hmm_files, variant)
     generation = load_json(config_dir / "generation_config.json")
     speech_tokenizer_config = load_json(config_dir / "speech_tokenizer/config.json")
     sample_rate = find_sampling_rate(speech_tokenizer_config)
     if sample_rate <= 0:
         raise ValueError("speech tokenizer config does not define sampling_rate")
+    if (
+        variant == "base"
+        and config["speaker_encoder_config"]["sample_rate"] != sample_rate
+    ):
+        raise ValueError(
+            "speaker encoder and speech tokenizer sample rates differ: "
+            f"{config['speaker_encoder_config']['sample_rate']} != {sample_rate}"
+        )
     decode_padding_shapes = load_json(weight_dir / "decode_padding_shapes.json")
     deployment_meta: dict[str, Any] = {}
     if deployment_meta_path is not None:
@@ -327,7 +392,7 @@ def convert(
         )
 
     def add_metadata(writer: Any) -> None:
-        writer.add_string("qwen3_tts.variant", "custom_voice")
+        writer.add_string("qwen3_tts.variant", variant)
         writer.add_string("qwen3_tts.model_size", config["tts_model_size"])
         writer.add_int32("qwen3_tts.sample_rate", sample_rate)
         writer.add_int32("qwen3_tts.num_code_groups", talker["num_code_groups"])
@@ -337,9 +402,15 @@ def convert(
         writer.add_int32(
             "qwen3_tts.stateful.initial_output_skip_frames", initial_skip_frames
         )
-        # CustomVoice defaults to Talker sampling plus greedy acoustic codebooks
-        # for improved request-to-request timbre stability.
-        writer.add_int32("qwen3_tts.sampling.code_predictor", 0)
+        # CustomVoice keeps acoustic codebooks greedy for timbre stability.
+        # Base follows its official voice-clone generation configuration.
+        code_predictor_sampling = (
+            variant == "base" and generation.get("subtalker_dosample") is True
+        )
+        writer.add_int32(
+            "qwen3_tts.sampling.code_predictor",
+            int(code_predictor_sampling),
+        )
         writer.add_int32("qwen3_tts.talker.hidden_size", talker["hidden_size"])
         writer.add_int32("qwen3_tts.text.hidden_size", talker["text_hidden_size"])
         writer.add_int32("qwen3_tts.text.vocab_size", talker["text_vocab_size"])
@@ -376,6 +447,16 @@ def convert(
             "qwen3_tts.spk_is_dialect",
             json.dumps(talker["spk_is_dialect"], ensure_ascii=False),
         )
+        if variant == "base":
+            speaker_encoder = config["speaker_encoder_config"]
+            writer.add_int32(
+                "qwen3_tts.speaker_encoder.embedding_dim",
+                speaker_encoder["enc_dim"],
+            )
+            writer.add_int32(
+                "qwen3_tts.speaker_encoder.sample_rate",
+                speaker_encoder["sample_rate"],
+            )
         writer.add_string(
             "qwen3_tts.generation_config",
             json.dumps(generation, ensure_ascii=False),
@@ -390,8 +471,12 @@ def convert(
         writer.add_array("merges", merges)
 
     display_size = {"0b6": "0.6B", "1b7": "1.7B"}[config["tts_model_size"]]
+    display_variant = {
+        "custom_voice": "CustomVoice",
+        "base": "Base",
+    }[variant]
     packer.write(
-        f"Qwen3-TTS-12Hz-{display_size}-CustomVoice",
+        f"Qwen3-TTS-12Hz-{display_size}-{display_variant}",
         "qwen3_tts",
         add_metadata,
     )
@@ -399,7 +484,7 @@ def convert(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Convert Qwen3-TTS CustomVoice HMM/PT files into GGUF"
+        description="Convert Qwen3-TTS CustomVoice or Base HMM/PT files into GGUF"
     )
     parser.add_argument("-i", "--input", required=True, type=Path)
     parser.add_argument("-c", "--config-dir", required=True, type=Path)
