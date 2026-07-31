@@ -201,6 +201,34 @@ Content-Type: application/json
   "n_tokens": 5
 }
 
+
+### audio transcription
+POST http://127.0.0.1:7901/v1/audio/transcriptions
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="jfk.wav"
+
+< E:/test_data/audio/long.wav
+
+--WebAppBoundary
+Content-Disposition: form-data; name="model"
+
+HiModel_xh2_whisper-large-v3-turbo_1chip_2cores_v1.4.0_20260721
+
+--WebAppBoundary
+Content-Disposition: form-data; name="temperature"
+
+0.0
+
+--WebAppBoundary
+Content-Disposition: form-data; name="temperature_inc"
+
+0.2
+
+--WebAppBoundary--
+
+
 ### audio transcription
 POST http://127.0.0.1:7901/v1/audio/transcriptions
 Content-Type: multipart/form-data; boundary=WebAppBoundary

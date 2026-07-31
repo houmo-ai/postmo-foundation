@@ -29,7 +29,7 @@ xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2
 xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh2_2.1.1_linux_${ARCH}.tar.gz"
 
 xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.3.0_linux_${ARCH}.tar.gz"
-xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.1.0_linux_${ARCH}.tar.gz"
+xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.2.0_linux_${ARCH}.tar.gz"
 
 uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-linux_${ARCH}.tar.gz"
 libsamplerate_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/libsamplerate-linux_${ARCH}.tar.gz"
