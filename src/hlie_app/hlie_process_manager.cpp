@@ -16,6 +16,21 @@
 HLIE_NAMESPACE_BEGIN
 
 namespace {
+    std::vector<int> parse_process_device_ids(const std::vector<std::string>& args) {
+        for (size_t i = 0; i + 1 < args.size(); ++i) {
+            if (args[i] != "--device_id") {
+                continue;
+            }
+
+            std::vector<int> device_ids;
+            if (HlieUtil::parse_device(args[i + 1], device_ids) == 0) {
+                return device_ids;
+            }
+            break;
+        }
+        return {};
+    }
+
 #ifdef _WIN32
     constexpr DWORD INVALID_PID = 0;
 
@@ -167,6 +182,7 @@ ProcessID HLIEProcessManager::create_process(const std::string& exe_path,
     info.process_id = pi.dwProcessId;
     info.params = cmd_line;
     info.model_names = model_names;
+    info.device_ids = parse_process_device_ids(args);
     info.instance_id = instance_id;
     info.start_time = time(nullptr);
     info.is_running = true;
@@ -204,6 +220,7 @@ ProcessID HLIEProcessManager::create_process(const std::string& exe_path,
         info.uuid = HlieUtil::uuid();
         info.process_id = pid;
         info.model_names = model_names;
+        info.device_ids = parse_process_device_ids(args);
         info.instance_id = instance_id;
         info.start_time = time(nullptr);
         info.is_running = true;

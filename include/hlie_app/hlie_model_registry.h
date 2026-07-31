@@ -57,6 +57,7 @@ public:
     // Compatibility-only mutable lookup. New callers should use the snapshot API.
     [[nodiscard]] std::optional<std::reference_wrapper<ModelInstance>> get_instance(const std::string& model_name);
     [[nodiscard]] std::optional<ModelInstance> get_instance_snapshot(const std::string& model_name) const;
+    [[nodiscard]] std::optional<ModelInstance> get_exact_instance_snapshot(const HLIEModelInfo& model_info) const;
     [[nodiscard]] std::vector<server_model_meta> get_all_metas() const;
     [[nodiscard]] std::vector<ModelInstance> get_all_instances() const;
 
@@ -78,12 +79,14 @@ public:
 
     // Atomic state updates for Workflow and status callbacks.
     // 原子状态更新：避免外部拿到引用后分散修改 status/port/load_time。
+    bool try_begin_loading(const std::string& model_name);
     bool mark_loading(const std::string& model_name);
     bool mark_loaded(const std::string& model_name, int port);
     bool mark_unloaded(const std::string& model_name, int port = 0);
     bool update_status(const std::string& model_name, server_model_status status, int port);
     bool update_port(const std::string& model_name, int port);
     bool update_model_info(const std::string& model_name, const HLIEModelInfo& model_info);
+    bool update_runtime_devices(const std::string& model_name, const std::vector<int>& device_ids);
 
 private:
     static ModelInstance build_model_instance(HLIEModelInfo& model_info, int estimated_mem_mb);

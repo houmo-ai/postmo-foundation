@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "hlie_base/hlie_logger.h"
+#include "hlie_base/hlie_util.h"
 #include "json.hpp"
 
 HLIE_NAMESPACE_BEGIN
@@ -162,6 +163,14 @@ void HLIEModelRegistry::normalize_model_instance(ModelInstance& model_instance) 
     model_instance.meta.loaded_info["model_family"] = model_instance.model_info.get_model_family();
     model_instance.meta.loaded_info["architecture"] = model_instance.model_info.get_architecture();
     model_instance.meta.loaded_info["role"] = model_instance.model_info.get_role_name();
+    std::vector<int> device_ids;
+    if (!model_instance.model_info.get_devices().empty() &&
+        HlieUtil::parse_device(model_instance.model_info.get_devices(), device_ids) == 0 &&
+        !device_ids.empty()) {
+        model_instance.meta.loaded_info["device_ids"] = device_ids;
+    } else {
+        model_instance.meta.loaded_info.erase("device_ids");
+    }
     if (model_instance.model_info.has_effective_llama_params()) {
         model_instance.meta.loaded_info["llama_presets"] = model_instance.model_info.get_matched_llama_presets();
         model_instance.meta.loaded_info["llama_params_hash"] = model_instance.model_info.get_effective_llama_params_hash();
@@ -211,6 +220,14 @@ std::optional<HLIEModelRegistry::ModelInstance> HLIEModelRegistry::get_instance_
         return std::nullopt;
     }
     return *matched;
+}
+
+std::optional<HLIEModelRegistry::ModelInstance> HLIEModelRegistry::get_exact_instance_snapshot(
+    const HLIEModelInfo& model_info) const {
+    const std::string model_key = HLIEModelInfo::build_model_key(model_info);
+    std::lock_guard lk(mutex_);
+    const auto it = model_instances_.find(model_key);
+    return it == model_instances_.end() ? std::nullopt : std::optional<ModelInstance>{it->second};
 }
 
 std::vector<server_model_meta> HLIEModelRegistry::get_all_metas() const {
@@ -316,6 +333,20 @@ void HLIEModelRegistry::abort_eviction(const std::string& model_name) {
     LOG_WARN("Model eviction aborted: key={}", json(matched->key).dump());
 }
 
+bool HLIEModelRegistry::try_begin_loading(const std::string& model_name) {
+    std::lock_guard lk(mutex_);
+    ModelInstance* matched = find_instance_locked(model_name);
+    if (!matched || matched->meta.status == SERVER_MODEL_STATUS_LOADING ||
+        matched->meta.status == SERVER_MODEL_STATUS_LOADED ||
+        matched->meta.status == SERVER_MODEL_STATUS_SLEEPING) {
+        return false;
+    }
+
+    matched->meta.status = SERVER_MODEL_STATUS_LOADING;
+    matched->evictable = false;
+    return true;
+}
+
 bool HLIEModelRegistry::mark_loading(const std::string& model_name) {
     std::lock_guard lk(mutex_);
     ModelInstance* matched = find_instance_locked(model_name);
@@ -400,10 +431,36 @@ bool HLIEModelRegistry::update_model_info(const std::string& model_name, const H
     matched->path = model_info.get_model_path();
     matched->path_mmproj = model_info.get_mm_proj_path();
     matched->meta.loaded_info["role"] = model_info.get_role_name();
+    std::vector<int> device_ids;
+    if (!model_info.get_devices().empty() &&
+        HlieUtil::parse_device(model_info.get_devices(), device_ids) == 0 &&
+        !device_ids.empty()) {
+        matched->meta.loaded_info["device_ids"] = device_ids;
+    } else {
+        matched->meta.loaded_info.erase("device_ids");
+    }
     if (model_info.has_effective_llama_params()) {
         matched->meta.loaded_info["llama_presets"] = model_info.get_matched_llama_presets();
         matched->meta.loaded_info["llama_params_hash"] = model_info.get_effective_llama_params_hash();
         matched->meta.loaded_info["llama_params_summary"] = llama_params_summary(model_info);
+    }
+    return true;
+}
+
+bool HLIEModelRegistry::update_runtime_devices(const std::string& model_name,
+                                               const std::vector<int>& device_ids) {
+    std::lock_guard lk(mutex_);
+    ModelInstance* matched = find_instance_locked(model_name);
+    if (!matched) {
+        return false;
+    }
+
+    if (device_ids.empty()) {
+        matched->meta.loaded_info.erase("device_ids");
+        matched->model_info.set_devices({});
+    } else {
+        matched->meta.loaded_info["device_ids"] = device_ids;
+        matched->model_info.set_devices(HlieUtil::join_devices(device_ids));
     }
     return true;
 }

@@ -1,5 +1,7 @@
 #include "hlie_base/hlie_util.h"
 
+#include <algorithm>
+#include <cctype>
 #include <regex>
 #include <sstream>
 
@@ -120,6 +122,54 @@ bool HlieUtil::is_relative_path(const std::string& path) {
 
     // 其他情况都是相对路径
     return true;
+}
+
+bool HlieUtil::paths_refer_to_same_file(const std::string& lhs, const std::string& rhs,
+                                        const std::string& base_dir) {
+    if (lhs.empty() || rhs.empty()) {
+        return lhs.empty() && rhs.empty();
+    }
+
+    const auto normalize = [&base_dir](const std::string& value) {
+        fs::path path(value);
+        if (path.is_relative() && !base_dir.empty()) {
+            path = fs::path(base_dir) / path;
+        }
+
+        std::error_code ec;
+        auto normalized = fs::weakly_canonical(path, ec);
+        if (ec) {
+            ec.clear();
+            normalized = fs::absolute(path, ec);
+            if (ec) {
+                normalized = path;
+            }
+        }
+        return normalized.lexically_normal();
+    };
+
+    const auto lhs_path = normalize(lhs);
+    const auto rhs_path = normalize(rhs);
+    std::error_code ec;
+    if (fs::exists(lhs_path, ec) && !ec) {
+        ec.clear();
+        if (fs::exists(rhs_path, ec) && !ec) {
+            ec.clear();
+            if (fs::equivalent(lhs_path, rhs_path, ec) && !ec) {
+                return true;
+            }
+        }
+    }
+
+    auto lhs_normalized = lhs_path.generic_string();
+    auto rhs_normalized = rhs_path.generic_string();
+#ifdef _WIN32
+    std::transform(lhs_normalized.begin(), lhs_normalized.end(), lhs_normalized.begin(),
+                   [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(rhs_normalized.begin(), rhs_normalized.end(), rhs_normalized.begin(),
+                   [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+#endif
+    return lhs_normalized == rhs_normalized;
 }
 
 /**

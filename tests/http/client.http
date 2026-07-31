@@ -116,6 +116,14 @@ Content-Type: application/json
   }
 }
 
+### explicitly refresh model discovery after downloading model files
+POST http://localhost:7901/hlie/v1/models/refresh
+Content-Type: application/json
+
+{
+  "wait": true
+}
+
 
 ### start WHISPER
 POST http://localhost:7901/hlie/v1/start
@@ -133,6 +141,22 @@ Content-Type: application/json
 {
   "model_type": "cosyvoice",
   "model": "HiModel_xh2_cosyvoice3_0.5b_1chip_2cores_v1.1.0-20260409"
+}
+
+### unload by model identity (preferred; works across service kinds/processes)
+POST http://localhost:7901/hlie/v1/unload_model
+Content-Type: application/json
+
+{
+  "model_id": "HiModel_xh2_qwen3-asr_0.6b_b1_1chip_2cores_v1.3.0_20260522"
+}
+
+### legacy unload by service type (kept for compatibility)
+POST http://localhost:7901/hlie/v1/unload_model
+Content-Type: application/json
+
+{
+  "model_type": "whisper"
 }
 
 ### try legacy TTS route (no model means CosyVoice)

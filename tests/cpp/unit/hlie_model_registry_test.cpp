@@ -1,7 +1,10 @@
 #include "hlie_app/hlie_model_registry.h"
+#include "hlie_base/hlie_util.h"
 
 #include <catch_amalgamated.hpp>
 
+#include <atomic>
+#include <filesystem>
 #include <thread>
 #include <vector>
 
@@ -53,6 +56,27 @@ TEST_CASE("Registry registration captures memory through the production entry po
     CHECK(snapshot->meta.loaded_info["service_kind"] == "sd");
 }
 
+TEST_CASE("Registry exposes configured model device ids", "[model-registry][devices]") {
+    HLIEModelInfo info;
+    REQUIRE(info.parse_identity_from_gguf_filename(
+        "HiModel_xh2_qwen3_1b_2k_b1_2chips_v1.0.0.gguf") == 0);
+    info.set_devices("0,1");
+
+    HLIEModelRegistry registry;
+    registry.register_model(info, 8192);
+
+    const auto snapshot = registry.get_instance_snapshot(info.model_key_);
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->meta.loaded_info.contains("device_ids"));
+    CHECK(snapshot->meta.loaded_info["device_ids"] == nlohmann::json::array({0, 1}));
+
+    REQUIRE(registry.update_runtime_devices(info.model_key_, {2}));
+    const auto runtime_snapshot = registry.get_instance_snapshot(info.model_key_);
+    REQUIRE(runtime_snapshot);
+    CHECK(runtime_snapshot->meta.loaded_info["device_ids"] == nlohmann::json::array({2}));
+    CHECK(runtime_snapshot->model_info.get_devices() == "2");
+}
+
 TEST_CASE("Registry updates resolved llama metadata without changing runtime state", "[model-registry][llm-preset]") {
     HLIEModelInfo info;
     REQUIRE(info.parse_identity_from_gguf_filename("HiModel_xh2_qwen3.5_9b_32k_b1_1chip_v1.2.0.gguf") == 0);
@@ -94,6 +118,69 @@ TEST_CASE("Discovery registration preserves an existing runtime instance", "[mod
     CHECK(snapshot->estimated_mem_mb == 3072);
     CHECK(snapshot->model_info.get_devices() == "0");
     registry.end_request("sd3");
+}
+
+TEST_CASE("Exact multimodal variants are reused without overwriting runtime state",
+          "[model-registry][routing][multimodal]") {
+    const std::string model_file =
+        "HiModel_xh2_qwen3.5_2b_256_256k_b1_1chip_2cores_v1.3.0_20260429.gguf";
+
+    HLIEModelInfo vit448;
+    REQUIRE(vit448.parse_identity_from_gguf_filename(model_file) == 0);
+    vit448.mm_proj_path_ =
+        "mmproj_xh2_qwen3.5_2b_2cores_vit_448x448_v1.3.0_20260429.gguf";
+    vit448.vl_spec_ = HLIEModelInfo::parse_mmproj_vl_spec(vit448.mm_proj_path_);
+    vit448.is_multi_model_ = true;
+    vit448.model_key_ = HLIEModelInfo::build_model_key(vit448);
+
+    HLIEModelInfo vit896;
+    REQUIRE(vit896.parse_identity_from_gguf_filename(model_file) == 0);
+    vit896.mm_proj_path_ =
+        "mmproj_xh2_qwen3.5_2b_2cores_vit_896x896_v1.3.0_20260429.gguf";
+    vit896.vl_spec_ = HLIEModelInfo::parse_mmproj_vl_spec(vit896.mm_proj_path_);
+    vit896.is_multi_model_ = true;
+    vit896.model_key_ = HLIEModelInfo::build_model_key(vit896);
+
+    REQUIRE(vit448.model_key_ != vit896.model_key_);
+    HLIEModelRegistry registry;
+    REQUIRE(registry.register_model_if_absent(vit448, 1900));
+    REQUIRE(registry.register_model_if_absent(vit896, 2300));
+
+    CHECK_FALSE(registry.get_instance_snapshot(vit448.get_model_name()));
+    REQUIRE(registry.mark_loaded(vit448.model_key_, 7901));
+
+    HLIEModelInfo repeated_vit448 = vit448;
+    const std::string requested_start_key = HLIEModelInfo::build_model_key(repeated_vit448);
+    CHECK(requested_start_key == vit448.model_key_);
+    const auto exact_start_target = registry.get_exact_instance_snapshot(repeated_vit448);
+    REQUIRE(exact_start_target);
+    CHECK(exact_start_target->key == vit448.model_key_);
+    CHECK(exact_start_target->path_mmproj.find("vit_448x448") != std::string::npos);
+    CHECK_FALSE(registry.register_model_if_absent(repeated_vit448, 9999));
+
+    const auto reused = registry.get_instance_snapshot(vit448.model_key_);
+    REQUIRE(reused);
+    CHECK(reused->meta.status == SERVER_MODEL_STATUS_LOADED);
+    CHECK(reused->meta.port == 7901);
+    CHECK(reused->estimated_mem_mb == 1900);
+    CHECK(reused->path_mmproj.find("vit_448x448") != std::string::npos);
+
+    const auto other_variant = registry.get_instance_snapshot(vit896.model_key_);
+    REQUIRE(other_variant);
+    CHECK(other_variant->meta.status == SERVER_MODEL_STATUS_UNLOADED);
+    CHECK(other_variant->estimated_mem_mb == 2300);
+}
+
+TEST_CASE("Model path comparison normalizes equivalent request paths", "[model-routing][paths]") {
+    const auto base_dir = std::filesystem::current_path().string();
+    CHECK(HlieUtil::paths_refer_to_same_file(
+        "models/main.gguf", "models/./main.gguf", base_dir));
+    CHECK(HlieUtil::paths_refer_to_same_file(
+        "models/mmproj.gguf", "./models/mmproj.gguf", base_dir));
+    CHECK_FALSE(HlieUtil::paths_refer_to_same_file(
+        "models/main.gguf", "other/main.gguf", base_dir));
+    CHECK(HlieUtil::paths_refer_to_same_file({}, {}, base_dir));
+    CHECK_FALSE(HlieUtil::paths_refer_to_same_file({}, "models/main.gguf", base_dir));
 }
 
 TEST_CASE("Registry rejects ambiguous aliases while preserving exact keys", "[model-registry][routing]") {
@@ -178,6 +265,33 @@ TEST_CASE("Registry request accounting is thread-safe", "[model-registry][concur
     REQUIRE(snapshot);
     CHECK(snapshot->active_requests == 0);
     CHECK(snapshot->hit_count == thread_count * requests_per_thread);
+}
+
+TEST_CASE("Registry grants only one concurrent model loading claim", "[model-registry][concurrency][loading]") {
+    HLIEModelRegistry registry;
+    registry.upsert(make_instance("model-a"));
+
+    constexpr int thread_count = 16;
+    std::atomic<int> successful_claims{0};
+    std::vector<std::thread> workers;
+    for (int thread = 0; thread < thread_count; ++thread) {
+        workers.emplace_back([&] {
+            if (registry.try_begin_loading("model-a")) {
+                successful_claims.fetch_add(1);
+            }
+        });
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+
+    CHECK(successful_claims.load() == 1);
+    const auto snapshot = registry.get_instance_snapshot("model-a");
+    REQUIRE(snapshot);
+    CHECK(snapshot->meta.status == SERVER_MODEL_STATUS_LOADING);
+    CHECK_FALSE(registry.try_begin_loading("model-a"));
+    REQUIRE(registry.mark_loaded("model-a", 7901));
+    CHECK_FALSE(registry.try_begin_loading("model-a"));
 }
 
 TEST_CASE("Registry prepares an isolated device snapshot", "[model-registry]") {

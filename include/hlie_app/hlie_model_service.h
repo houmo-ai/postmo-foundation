@@ -50,6 +50,8 @@ public:
 
     virtual int get_state() = 0;
 
+    [[nodiscard]] std::vector<int> get_devices() const { return devices_; }
+
 protected:
     std::string model_path_;
     std::atomic<int> state_;

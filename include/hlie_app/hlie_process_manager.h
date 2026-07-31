@@ -39,6 +39,7 @@ public:
         ProcessID process_id;
         std::string uuid;
         std::vector<std::string> model_names;
+        std::vector<int> device_ids;
         int instance_id;
         std::string params;
         time_t start_time;

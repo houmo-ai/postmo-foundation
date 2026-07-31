@@ -212,7 +212,11 @@
         },
         "discovery_scan_on_models_request": {
           "type": "boolean",
-          "description": "Wake the background discovery worker when listing models or resolving an unknown requested model."
+          "description": "Allow unknown model lookups to wake the background discovery worker; GET /v1/models never triggers discovery."
+        },
+        "discovery_request_cooldown_sec": {
+          "type": "integer",
+          "description": "Minimum seconds between on-demand discovery requests; concurrent requests are coalesced."
         },
         "discovery_request_wait_sec": {
           "type": "integer",

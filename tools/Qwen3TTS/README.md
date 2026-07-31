@@ -78,9 +78,15 @@ voice-clone clients are not redirected to Qwen3-TTS. For example:
 }
 ```
 
-Send the object to `POST /models/load` (or `/hlie/v1/start`). Unload it with
-`POST /models/unload` (or `/hlie/v1/unload_model`) and
-`{"model_type":"qwen3_tts"}`.
+Send the object to `POST /models/load` (or `/hlie/v1/start`). Prefer unloading
+by model identity with `POST /models/unload` (or `/hlie/v1/unload_model`):
+
+```json
+{"model_id":"qwen3-tts-1.7b-customvoice-w8a16-256-2k-b1-1chip-2cores-v1.4.0"}
+```
+
+The legacy `{"model_type":"qwen3_tts"}` form remains supported when the
+caller does not have a model id.
 
 ## Native inference debugging
 

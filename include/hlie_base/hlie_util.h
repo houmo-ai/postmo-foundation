@@ -33,6 +33,9 @@ public:
 
     static bool is_relative_path(const std::string& path);
 
+    static bool paths_refer_to_same_file(const std::string& lhs, const std::string& rhs,
+                                         const std::string& base_dir = {});
+
     static std::string extract_filename(const std::string& path);
 
     static bool has_model_params(const std::string& str);

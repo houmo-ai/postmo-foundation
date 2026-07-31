@@ -108,6 +108,8 @@ private:
 
     server_http_res_ptr handle_unload_model(const server_http_req& req);
 
+    server_http_res_ptr handle_model_discovery_refresh(const server_http_req& req);
+
     void ensure_asr_websocket();
     std::string handle_asr_stream(const WhisperStreamRequest& request, const std::function<void(const std::string&)>& callback);
 
@@ -124,7 +126,7 @@ private:
     void residency_ttl_loop();
     void initialize_model_discovery_snapshot();
     int discover_new_models(bool force = false);
-    uint64_t request_model_discovery_scan();
+    uint64_t request_model_discovery_scan(bool force = false);
     bool wait_for_model_discovery(uint64_t generation);
     void start_model_discovery_worker();
     void stop_model_discovery_worker();
@@ -170,6 +172,7 @@ private:
     std::string model_discovery_snapshot_;
     bool model_discovery_pending_{false};
     std::chrono::steady_clock::time_point model_discovery_pending_since_{};
+    std::chrono::steady_clock::time_point model_discovery_last_request_{};
 
     HLIELlmPresetCatalog llm_preset_catalog_;
     HLIELlmPresetCatalog llm_override_catalog_;
