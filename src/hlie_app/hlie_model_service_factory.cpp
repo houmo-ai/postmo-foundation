@@ -1,7 +1,7 @@
 #include "hlie_app/hlie_model_service_factory.h"
 
 #include "hlie_app/hlie_cosyvoice_model_service.h"
-#include "hlie_app/hlie_document_pipeline_service.h"
+#include "hlie_app/document/hlie_document_pipeline_service.h"
 #include "hlie_app/hlie_llm_model_service.h"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_app/hlie_model_service.h"

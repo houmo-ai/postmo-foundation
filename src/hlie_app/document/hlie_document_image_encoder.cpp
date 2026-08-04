@@ -1,4 +1,4 @@
-#include "hlie_app/hlie_document_image_encoder.h"
+#include "hlie_app/document/hlie_document_image_encoder.h"
 
 #include <cstdlib>
 #include <stdexcept>

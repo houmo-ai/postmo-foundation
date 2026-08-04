@@ -13,6 +13,7 @@
 
 #include "hlie_base/hlie_base.h"
 #include "hlie_base/hlie_common_define.h"
+#include "hlie_app/util/hlie_background_task_group.h"
 #include "hlie_model_info.h"
 #include "hlie_model_discovery_sync.h"
 #include "hlie_llm_preset_resolver.h"
@@ -80,7 +81,8 @@ private:
 
     server_http_res_ptr handle_models(const server_http_req& req);
 
-    server_http_res_ptr start_service(const server_http_req& req);
+    server_http_res_ptr start_service(const server_http_req& req,
+                                      const std::string& preclaimed_model_key = {});
 
     int start_whisper(std::optional<server_model_meta>& meta, std::unique_ptr<server_res_generator_light>& res, const server_http_req& req,
                        const std::string& model_name, const std::string& model_path, const std::string& devices);
@@ -178,6 +180,10 @@ private:
     HLIELlmPresetCatalog llm_override_catalog_;
     bool llm_presets_enabled_{true};
     bool llm_preset_strict_{true};
+
+    // Declared last so its destructor joins callbacks before other workflow state
+    // is destroyed.
+    BackgroundTaskGroup auto_load_tasks_;
 };
 
 HLIE_NAMESPACE_END

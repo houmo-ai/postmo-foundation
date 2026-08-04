@@ -12,10 +12,11 @@
 #include <unordered_set>
 
 #include "INIReader.h"
-#include "hlie_app/hlie_document_input_adapter.h"
-#include "hlie_app/hlie_document_pipeline_service.h"
+#include "hlie_app/document/hlie_document_input_adapter.h"
+#include "hlie_app/document/hlie_document_pipeline_service.h"
 #include "hlie_app/hlie_infer_service.h"
 #include "hlie_app/hlie_llm_model_service.h"
+#include "hlie_app/util/hlie_model_load_waiter.h"
 #include "hlie_app/hlie_model_residency_manager.h"
 #include "hlie_app/hlie_model_service.h"
 #include "hlie_app/hlie_model_service_factory.h"
@@ -59,6 +60,34 @@ HLIE_NAMESPACE_BEGIN
 #define CHECK_SERVICE(service) CHECK_MODEL_READY_IMPL(service, false)
 
 namespace {
+    template <typename Callback>
+    class ScopeExit {
+    public:
+        explicit ScopeExit(Callback callback) : callback_(std::move(callback)) {}
+        ~ScopeExit() noexcept {
+            if (active_) {
+                try {
+                    callback_();
+                } catch (...) {
+                }
+            }
+        }
+
+        ScopeExit(const ScopeExit&) = delete;
+        ScopeExit& operator=(const ScopeExit&) = delete;
+
+        void release() noexcept { active_ = false; }
+
+    private:
+        Callback callback_;
+        bool active_{true};
+    };
+
+    template <typename Callback>
+    ScopeExit<Callback> make_scope_exit(Callback callback) {
+        return ScopeExit<Callback>(std::move(callback));
+    }
+
     std::string normalize_model_name(const std::string& name) {
         const auto first = std::find_if_not(name.begin(), name.end(), [](const unsigned char c) { return std::isspace(c); });
         const auto last = std::find_if_not(name.rbegin(), name.rend(), [](const unsigned char c) { return std::isspace(c); }).base();
@@ -985,6 +1014,7 @@ void HLIEWorkflow::run() {
 }
 
 void HLIEWorkflow::stop() {
+    auto_load_tasks_.stop_and_join();
     stop_model_discovery_worker();
     stop_residency_ttl_worker();
 
@@ -1374,7 +1404,21 @@ server_http_res_ptr HLIEWorkflow::handle_model_discovery_refresh(const server_ht
     return res;
 }
 
-server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
+server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req,
+                                                const std::string& preclaimed_model_key) {
+    bool preclaim_rollback_pending = !preclaimed_model_key.empty();
+    auto preclaim_rollback = make_scope_exit([this, &preclaimed_model_key, &preclaim_rollback_pending] {
+        if (preclaim_rollback_pending) {
+            rollback_model_start(preclaimed_model_key, "auto_load_start_failed");
+        }
+    });
+    const auto rollback_start = [this, &preclaimed_model_key, &preclaim_rollback_pending](
+                                    const std::string& model_key, const std::string& reason) {
+        if (preclaim_rollback_pending && model_key == preclaimed_model_key) {
+            preclaim_rollback_pending = false;
+        }
+        rollback_model_start(model_key, reason);
+    };
     const auto& config_services = Singleton<HLIEConfigService>::instance();
     auto res = std::make_unique<server_res_generator_light>();
     if (replicas_mode_) {
@@ -1686,11 +1730,12 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         }
 
         const std::string model_key = resolved_model_inst->key;
+        const bool owns_preclaim = !preclaimed_model_key.empty() && preclaimed_model_key == model_key;
         if (resolved_model_inst->meta.status == SERVER_MODEL_STATUS_LOADED) {
             res->error(format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        if (resolved_model_inst->meta.status == SERVER_MODEL_STATUS_LOADING) {
+        if (resolved_model_inst->meta.status == SERVER_MODEL_STATUS_LOADING && !owns_preclaim) {
             res->error(format_error_response("model is already loading", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
@@ -1698,7 +1743,11 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             res->error(format_error_response("model is sleeping and cannot be started again", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        if (!model_registry_.try_begin_loading(model_key)) {
+        if (owns_preclaim && resolved_model_inst->meta.status != SERVER_MODEL_STATUS_LOADING) {
+            res->error(format_error_response("preclaimed model is no longer loading", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (!owns_preclaim && !model_registry_.try_begin_loading(model_key)) {
             const auto latest = get_model_inst(model_key);
             const std::string message = latest && latest->meta.status == SERVER_MODEL_STATUS_LOADED
                 ? "model is already loaded"
@@ -1709,24 +1758,24 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
 
         auto model_info_opt = model_registry_.prepare_model_info_with_devices(model_key, devices);
         if (!model_info_opt) {
-            rollback_model_start(model_key, "prepare_model_info_failed");
+            rollback_start(model_key, "prepare_model_info_failed");
             res->error(format_error_response("model and model_path not found", ERROR_TYPE_NOT_FOUND));
             return res;
         }
         auto model_info = std::move(*model_info_opt);
         if (!resolve_llm_launch_params(model_info)) {
-            rollback_model_start(model_key, "resolve_llm_launch_params_failed");
+            rollback_start(model_key, "resolve_llm_launch_params_failed");
             res->error(format_error_response_ex("failed to resolve llama params", ERROR_TYPE_INVALID_REQUEST, 80007));
             return res;
         }
         if (model_info.model_version_.empty()) {
-            rollback_model_start(model_key, "model_version_missing");
+            rollback_start(model_key, "model_version_missing");
             res->error(format_error_response_ex("failed to parse build_version from model name", ERROR_TYPE_INVALID_REQUEST, 80007));
             return res;
         }
 
         if (!HlieUtil::version_ge(model_info.model_version_, "v1.0.0")) {
-            rollback_model_start(model_key, "model_version_unsupported");
+            rollback_start(model_key, "model_version_unsupported");
             res->error(format_error_response_ex("build_version must be >= v1.0.0", ERROR_TYPE_INVALID_REQUEST, 80007));
             return res;
         }
@@ -1735,7 +1784,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             if (!model_service_manager_.start_llm(model_dir_, model_info, device_service_)) {
                 LOG_ERROR("failed to init the LLM model service");
                 res->error(format_error_response_ex("failed to init the LLM model service", ERROR_TYPE_SERVER, 80001));
-                rollback_model_start(model_key, "llm_init_failed");
+                rollback_start(model_key, "llm_init_failed");
                 return res;
             }
             if (DocumentPipelineService::supports_document_layout(model_dir_, model_info) &&
@@ -1743,7 +1792,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
                 LOG_ERROR("failed to init the document pipeline service");
                 res->error(format_error_response_ex("failed to init the document pipeline service", ERROR_TYPE_SERVER, 80001));
                 model_service_manager_.stop_and_reset_llm();
-                rollback_model_start(model_key, "document_pipeline_init_failed");
+                rollback_start(model_key, "document_pipeline_init_failed");
                 return res;
             }
 
@@ -1752,14 +1801,14 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             if (port_ != master_port_) {
                 LOG_ERROR("slave cannot start new slave");
                 res->error(format_error_response_ex("slave cannot start new slave", ERROR_TYPE_SERVER, 80001));
-                rollback_model_start(model_key, "slave_cannot_start_new_slave");
+                rollback_start(model_key, "slave_cannot_start_new_slave");
                 return res;
             }
 
             // Subprocess instance arguments.
             json_info_file = generate_launch_manifest(model_info, model_dir_, res);
             if (json_info_file.empty()) {
-                rollback_model_start(model_key, "generate_launch_manifest_failed");
+                rollback_start(model_key, "generate_launch_manifest_failed");
                 return res;
             }
 
@@ -1780,7 +1829,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             if (process_id == 0 || process_id == static_cast<ProcessID>(-1)) {
                 LOG_ERROR("Failed to start process for instance_id[{}]", instance_id);
                 res->error(format_error_response_ex("failed to start model subprocess", ERROR_TYPE_SERVER, 80001));
-                rollback_model_start(model_key, "create_process_failed");
+                rollback_start(model_key, "create_process_failed");
                 return res;
             } else {
                 LOG_INFO("Started process PID[{}] instance_id[{}]", process_id, instance_id);
@@ -1803,7 +1852,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
             if (!model_service_manager_.start_sd(model_dir_, model_info, device_service_)) {
                 LOG_ERROR("failed to init the SD model service");
                 res->error(format_error_response_ex("failed to init the SD model service", ERROR_TYPE_SERVER, 80001));
-                rollback_model_start(HLIEModelType::SD3, "sd_init_failed");
+                rollback_start(HLIEModelType::SD3, "sd_init_failed");
                 return res;
             }
 
@@ -1859,6 +1908,7 @@ server_http_res_ptr HLIEWorkflow::start_service(const server_http_req& req) {
         {"json_info_file", json_info_file},
     };
 
+    preclaim_rollback.release();
     res->ok(resp);
     return res;
 }
@@ -2376,9 +2426,11 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
     auto res = std::make_unique<server_res_generator_light>();
     json body = json::object();
     std::string name = req.get_param("model");
-    if (name.empty() && !req.body.empty()) {
+    if (!req.body.empty()) {
         body = json::parse(req.body);
-        name = json_value(body, "model", std::string());
+        if (name.empty()) {
+            name = json_value(body, "model", std::string());
+        }
     }
     LOG_INFO("Routing LLM request: path={}, model={}, model_length={}, fields={}, files={}",
              req.path, json(name).dump(), name.size(), body.is_object() ? body.size() : 0, req.files.size());
@@ -2436,39 +2488,91 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
         return handle_local_llm_or_document(model_key, lease);
     }
 
+    constexpr auto model_load_timeout = std::chrono::minutes(5);
+    const auto model_load_deadline = std::chrono::steady_clock::now() + model_load_timeout;
     const bool auto_load = Singleton<HLIEConfigService>::instance()->get_bool("model", "auto_load", true, true);
     // If the model is unloaded, try to auto-load it.
     if (inst->meta.status == SERVER_MODEL_STATUS_UNLOADED) {
-        if (auto_load) {
-            if (method != "POST") {
-                res->error(format_error_response(
-                    "model is not loaded; load it before using this GET endpoint", ERROR_TYPE_INVALID_REQUEST));
-                return res;
-            }
-            std::lock_guard lk(slave_mutex_);
-            model_registry_.mark_loading(inst->key);
-            auto rest_res = start_service(req);
-            if (rest_res.get()->status != 200) {
-                // 加载失败
-                return rest_res;
-            }
-        } else {
+        if (!auto_load) {
             res->error(format_error_response("model not loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
+        }
+
+        if (method != "POST") {
+            res->error(format_error_response(
+                "model is not loaded; load it before using this GET endpoint", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        // The registry grants exactly one request the right to start this model.
+        // Loading runs in a managed background task so the initiating HTTP request
+        // observes the same deadline and cancellation behavior as other waiters.
+        if (model_registry_.try_begin_loading(inst->key)) {
+            json start_body = {{"model", name}, {"model_type", LLM}};
+            for (const auto* field : {"model_path", "devices", "params"}) {
+                if (body.contains(field)) {
+                    start_body[field] = body.at(field);
+                }
+            }
+
+            const std::string model_key = inst->key;
+            const std::string request_path = req.path;
+            const std::string serialized_start_body = start_body.dump();
+            const bool launched = auto_load_tasks_.launch(
+                [this, model_key, request_path, serialized_start_body] {
+                    const std::function<bool()> never_stop = [] { return false; };
+                    const server_http_req start_req{
+                        {}, {}, request_path, {}, serialized_start_body, {}, never_stop};
+                    try {
+                        const auto start_res = start_service(start_req, model_key);
+                        if (start_res->status != 200) {
+                            LOG_ERROR("Automatic model start failed: key={}, status={}, response={}",
+                                      json(model_key).dump(), start_res->status, json(start_res->data).dump());
+                        }
+                    } catch (const std::exception& error) {
+                        LOG_ERROR("Automatic model start threw: key={}, error={}",
+                                  json(model_key).dump(), json(error.what()).dump());
+                    } catch (...) {
+                        LOG_ERROR("Automatic model start threw an unknown exception: key={}", json(model_key).dump());
+                    }
+                });
+            if (!launched) {
+                rollback_model_start(model_key, "auto_load_task_launch_failed");
+                res->error(format_error_response_ex(
+                    "failed to schedule model loading", ERROR_TYPE_UNAVAILABLE, 80004));
+                return res;
+            }
         }
     }
 
     auto inst1 = get_model_inst(name);
     if (inst1 && inst1->meta.status == SERVER_MODEL_STATUS_LOADING) {
         std::unique_lock<std::mutex> lk(slave_mutex_);
-        slave_cv_.wait(lk, [this, &name]() {
+        const auto wait_result = wait_for_model_load(slave_cv_, lk, [this, &name]() {
             const auto inst_inner = get_model_inst(name);
-            if (inst_inner) {
-                return inst_inner->meta.status != SERVER_MODEL_STATUS_LOADING;
-            }
+            return inst_inner ? std::optional(inst_inner->meta.status) : std::nullopt;
+        }, model_load_deadline, req.should_stop);
 
-            return false;
-        });
+        if (wait_result == ModelLoadWaitResult::TIMED_OUT) {
+            LOG_WARN("Timed out waiting for model load: model={}, timeout_sec={}",
+                     json(name).dump(),
+                     std::chrono::duration_cast<std::chrono::seconds>(model_load_timeout).count());
+            res->error(format_error_response_ex(
+                "timed out waiting for model to load", ERROR_TYPE_UNAVAILABLE, 80004));
+            return res;
+        }
+        if (wait_result == ModelLoadWaitResult::CANCELLED) {
+            LOG_INFO("Stopped waiting for model load after client cancellation: model={}", json(name).dump());
+            auto error = format_error_response("request cancelled while waiting for model to load",
+                                               ERROR_TYPE_UNAVAILABLE);
+            error["code"] = 499;
+            res->error(error);
+            return res;
+        }
+        if (wait_result == ModelLoadWaitResult::MISSING) {
+            res->error(format_error_response("model not found while loading", ERROR_TYPE_NOT_FOUND));
+            return res;
+        }
         inst1 = get_model_inst(name);
     }
 

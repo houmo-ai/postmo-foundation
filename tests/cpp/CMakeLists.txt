@@ -1,17 +1,20 @@
 add_library(hlie-testable-core STATIC
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/util/hlie_background_task_group.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_model_family_registry.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_model_info_core.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_llm_param_set.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_llm_preset_resolver.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/util/hlie_model_load_waiter.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_model_registry.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_model_residency_manager.cpp
-        ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_proxy_timeout.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/util/hlie_proxy_timeout.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_qwen_asr_stream_decoder.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/audio/hlie_realtime_vad.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_ws_service.cpp
-        ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_document_core.cpp
-        ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_document_region_cropper.cpp
-        ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_document_types.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/document/hlie_document_core.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/document/hlie_document_region_cropper.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/document/hlie_document_types.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/util/hlie_hal_path_resolver.cpp
         support/ggml_assert_test_shim.cpp)
 target_include_directories(hlie-testable-core PUBLIC
         ${PROJECT_SOURCE_DIR}/include
@@ -27,8 +30,11 @@ target_link_libraries(hlie-testable-core PUBLIC
         ${UV_LIBRARY})
 
 add_executable(hlie-unit-tests
+        unit/hlie_background_task_group_test.cpp
         unit/hlie_document_core_test.cpp
+        unit/hlie_hal_path_resolver_test.cpp
         unit/hlie_llm_preset_resolver_test.cpp
+        unit/hlie_model_load_waiter_test.cpp
         unit/hlie_model_family_registry_test.cpp
         unit/hlie_model_info_test.cpp
         unit/hlie_model_registry_test.cpp

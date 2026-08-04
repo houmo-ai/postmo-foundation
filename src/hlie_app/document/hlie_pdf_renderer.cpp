@@ -1,4 +1,4 @@
-#include "hlie_app/hlie_pdf_renderer.h"
+#include "hlie_app/document/hlie_pdf_renderer.h"
 
 #include <algorithm>
 #include <cmath>

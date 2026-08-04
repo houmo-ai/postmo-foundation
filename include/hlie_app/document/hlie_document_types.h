@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "hlie_app/hlie_pdf_renderer.h"
+#include "hlie_app/document/hlie_pdf_renderer.h"
 #include "hlie_base/hlie_base.h"
 #include "json.hpp"
 

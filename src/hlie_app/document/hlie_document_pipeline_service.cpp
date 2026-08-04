@@ -1,4 +1,4 @@
-#include "hlie_app/hlie_document_pipeline_service.h"
+#include "hlie_app/document/hlie_document_pipeline_service.h"
 
 #include <algorithm>
 #include <cctype>
@@ -7,15 +7,15 @@
 #include <utility>
 
 #include "gguf.h"
-#include "hlie_app/hlie_document_core.h"
-#include "hlie_app/hlie_document_image_encoder.h"
-#include "hlie_app/hlie_document_input_adapter.h"
-#include "hlie_app/hlie_document_layout_engine.h"
-#include "hlie_app/hlie_document_region_cropper.h"
-#include "hlie_app/hlie_document_types.h"
+#include "hlie_app/document/hlie_document_core.h"
+#include "hlie_app/document/hlie_document_image_encoder.h"
+#include "hlie_app/document/hlie_document_input_adapter.h"
+#include "hlie_app/document/hlie_document_layout_engine.h"
+#include "hlie_app/document/hlie_document_region_cropper.h"
+#include "hlie_app/document/hlie_document_types.h"
 #include "hlie_app/hlie_llm_model_service.h"
 #include "hlie_app/hlie_model_info.h"
-#include "hlie_app/hlie_pdf_renderer.h"
+#include "hlie_app/document/hlie_pdf_renderer.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_logger.h"

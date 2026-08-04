@@ -1,4 +1,4 @@
-#include "hlie_app/hlie_proxy_timeout.h"
+#include "hlie_app/util/hlie_proxy_timeout.h"
 
 #include <algorithm>
 

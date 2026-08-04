@@ -1,4 +1,4 @@
-#include "hlie_app/hlie_document_core.h"
+#include "hlie_app/document/hlie_document_core.h"
 
 #include <algorithm>
 #include <cctype>

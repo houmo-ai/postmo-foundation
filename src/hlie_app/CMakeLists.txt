@@ -7,9 +7,11 @@ add_definitions(-DHLIE_SHARED_LIB_BUILDING)
 add_definitions(-DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
 
 file(GLOB SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/*.cpp")
+file(GLOB UTIL_SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/util/*.cpp")
+file(GLOB DOCUMENT_SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/document/*.cpp")
 file(GLOB MODEL_SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/models/*.cpp")
 file(GLOB AUDIO_SOURCES "${PROJECT_SOURCE_DIR}/src/hlie_app/audio/*.cpp")
-list(APPEND SOURCES ${MODEL_SOURCES} ${AUDIO_SOURCES})
+list(APPEND SOURCES ${UTIL_SOURCES} ${DOCUMENT_SOURCES} ${MODEL_SOURCES} ${AUDIO_SOURCES})
 
 add_library(${TARGET} ${SOURCES})
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})

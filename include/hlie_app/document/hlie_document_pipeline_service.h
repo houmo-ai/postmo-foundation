@@ -7,7 +7,7 @@
 
 #include <server/server-http.h>
 
-#include "hlie_app/hlie_document_layout_engine.h"
+#include "hlie_app/document/hlie_document_layout_engine.h"
 #include "hlie_app/hlie_model_service.h"
 
 HLIE_NAMESPACE_BEGIN

@@ -1,7 +1,7 @@
 #ifndef HLIE_DOCUMENT_REGION_CROPPER_H
 #define HLIE_DOCUMENT_REGION_CROPPER_H
 
-#include "hlie_app/hlie_document_types.h"
+#include "hlie_app/document/hlie_document_types.h"
 
 HLIE_NAMESPACE_BEGIN
 

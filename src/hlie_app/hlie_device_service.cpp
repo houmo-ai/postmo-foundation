@@ -1,4 +1,5 @@
 #include "hlie_app/hlie_device_service.h"
+#include "hlie_app/util/hlie_hal_path_resolver.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -83,41 +84,6 @@ namespace {
                 LOG_INFO("discovered Houmo driver installation: {}", path);
                 base_paths.push_back(path);
             }
-        }
-    }
-#else
-    void append_unique_path(std::vector<std::filesystem::path>& paths, const std::filesystem::path& path) {
-        if (std::find(paths.begin(), paths.end(), path) == paths.end()) {
-            paths.push_back(path);
-        }
-    }
-
-    void append_installed_sdk_hal_paths(std::vector<std::filesystem::path>& hal_paths) {
-        constexpr auto SDK_SUFFIX = "-sdk";
-        constexpr auto SDK_SUFFIX_LENGTH = std::char_traits<char>::length(SDK_SUFFIX);
-        const std::filesystem::path install_root = "/usr/local";
-        std::vector<std::filesystem::path> discovered;
-        std::error_code error;
-
-        for (const auto& entry : std::filesystem::directory_iterator(install_root, error)) {
-            if (error) {
-                break;
-            }
-            if (!entry.is_directory(error) || error) {
-                error.clear();
-                continue;
-            }
-
-            const auto directory_name = entry.path().filename().string();
-            if (directory_name.size() >= SDK_SUFFIX_LENGTH &&
-                directory_name.compare(directory_name.size() - SDK_SUFFIX_LENGTH, SDK_SUFFIX_LENGTH, SDK_SUFFIX) == 0) {
-                discovered.push_back(entry.path() / "hal" / "lib");
-            }
-        }
-
-        std::sort(discovered.begin(), discovered.end());
-        for (const auto& path : discovered) {
-            append_unique_path(hal_paths, path);
         }
     }
 #endif
@@ -250,15 +216,16 @@ namespace {
                 LOG_ERROR("custom HAL candidate exists but failed to load: {}, error {}", path.string(), dlerror());
             }
 
-            std::vector<std::filesystem::path> hal_paths;
+            std::vector<std::filesystem::path> hal_search_paths;
+            hal_paths::append_sdk_environment_paths(hal_search_paths, std::getenv("HOUMO_SDK_PATH"));
+
             const char* env_paths[] = {
-                std::getenv("HOUMO_SDK_PATH"),
                 std::getenv("HOUMO_DRV_PATH"),
                 std::getenv("TCIM_RUNTIME_PATH"),
             };
             for (const char* env_path : env_paths) {
                 if (env_path && *env_path) {
-                    append_unique_path(hal_paths, env_path);
+                    hal_paths::append_unique(hal_search_paths, env_path);
                 }
             }
 
@@ -268,13 +235,13 @@ namespace {
                 "/usr/local/houmo-drv/hal/lib",
             };
             for (const auto& path : standard_hal_paths) {
-                append_unique_path(hal_paths, path);
+                hal_paths::append_unique(hal_search_paths, path);
             }
-            append_installed_sdk_hal_paths(hal_paths);
-            append_unique_path(hal_paths, ".");
+            hal_paths::append_installed_sdk_paths(hal_search_paths);
+            hal_paths::append_unique(hal_search_paths, ".");
 
             if (!handle) {
-                for (const auto& hal_path : hal_paths) {
+                for (const auto& hal_path : hal_search_paths) {
                     const auto path = hal_path / library_name();
                     handle = dlopen(path.string().c_str(), RTLD_LAZY | RTLD_LOCAL);
                     if (handle) {

@@ -2,7 +2,7 @@
 #define HLIE_REQUEST_PROXY_H
 
 #include "hlie_base/hlie_base.h"
-#include "hlie_app/hlie_proxy_timeout.h"
+#include "hlie_app/util/hlie_proxy_timeout.h"
 #include "server/server-http.h"
 
 

@@ -3,7 +3,7 @@
 
 #include <string>
 
-#include "hlie_app/hlie_document_types.h"
+#include "hlie_app/document/hlie_document_types.h"
 
 HLIE_NAMESPACE_BEGIN
 

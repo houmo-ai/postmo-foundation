@@ -1,4 +1,4 @@
-#include "hlie_app/hlie_document_region_cropper.h"
+#include "hlie_app/document/hlie_document_region_cropper.h"
 
 #include <algorithm>
 #include <cmath>

@@ -1,5 +1,5 @@
-#include "hlie_app/hlie_document_core.h"
-#include "hlie_app/hlie_document_region_cropper.h"
+#include "hlie_app/document/hlie_document_core.h"
+#include "hlie_app/document/hlie_document_region_cropper.h"
 
 #include <catch_amalgamated.hpp>
 

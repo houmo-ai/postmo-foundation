@@ -265,7 +265,7 @@ Content-Disposition: form-data; name="file"; filename="jfk.wav"
 --WebAppBoundary
 Content-Disposition: form-data; name="model"
 
-HiModel_xh2_qwen3-asr_0.6b_b1_1chip_2cores_v1.3.0_20260522
+HiModel_xh2_qwen3-asr-1.7b_2k_1chip_2cores_v1.4.0_20260721
 
 --WebAppBoundary
 Content-Disposition: form-data; name="temperature"
