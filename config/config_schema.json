@@ -140,15 +140,23 @@
         },
         "retention_days": {
           "type": "integer",
-          "description": "Number of calendar-day log directories retained, including today."
+          "description": "Number of calendar-day log directories retained, including today. Zero enables count-based rotation without date directories."
         },
         "max_files": {
           "type": "integer",
-          "description": "Legacy maximum number of rotated log files."
+          "description": "Maximum parts per logger per day in date mode, or per logger globally when retention_days is zero. Zero means unlimited."
         },
-        "max_file_size_mb": {
+        "max_file_size": {
+          "type": "string",
+          "description": "Maximum size of each application and TCIM log part using an integer K/M/G binary unit, for example 512K or 10M. Valid range: 64K to 1G."
+        },
+        "compress_rotated_files": {
+          "type": "boolean",
+          "description": "Compress closed rotated log parts to individual .log.gz files in a background worker."
+        },
+        "compression_level": {
           "type": "integer",
-          "description": "Maximum size of each application and TCIM log part in MiB."
+          "description": "Gzip compression level from 1 (fastest) to 9."
         },
         "location": {
           "type": "string",

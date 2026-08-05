@@ -15,6 +15,7 @@ add_library(hlie-testable-core STATIC
         ${PROJECT_SOURCE_DIR}/src/hlie_app/document/hlie_document_region_cropper.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/document/hlie_document_types.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/util/hlie_hal_path_resolver.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/util/hlie_http_log_sanitizer.cpp
         support/ggml_assert_test_shim.cpp)
 target_include_directories(hlie-testable-core PUBLIC
         ${PROJECT_SOURCE_DIR}/include
@@ -33,6 +34,8 @@ add_executable(hlie-unit-tests
         unit/hlie_background_task_group_test.cpp
         unit/hlie_document_core_test.cpp
         unit/hlie_hal_path_resolver_test.cpp
+        unit/hlie_logger_test.cpp
+        unit/hlie_http_log_sanitizer_test.cpp
         unit/hlie_llm_preset_resolver_test.cpp
         unit/hlie_model_load_waiter_test.cpp
         unit/hlie_model_family_registry_test.cpp
@@ -48,7 +51,8 @@ target_sources(hlie-unit-tests PRIVATE
         unit/hlie_qwen_asr_stream_decoder_test.cpp)
 target_link_libraries(hlie-unit-tests PRIVATE
         Catch2::Catch2WithMain
-        hlie-testable-core)
+        hlie-testable-core
+        ZLIB::ZLIBSTATIC)
 target_compile_features(hlie-unit-tests PRIVATE cxx_std_17)
 
 add_test(NAME hlie.unit COMMAND hlie-unit-tests --reporter console)

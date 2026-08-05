@@ -31,29 +31,39 @@ _/    _/  _/_/_/_/  _/_/_/  _/_/_/_/    _/_/_/  _/_/_/    _/_/_/
 
 namespace {
     constexpr int DEFAULT_LOG_RETENTION_DAYS = 7;
-    constexpr int DEFAULT_LOG_FILE_SIZE_MB = 10;
+    constexpr int DEFAULT_LOG_MAX_FILES = 5;
+    constexpr std::uintmax_t DEFAULT_LOG_FILE_SIZE_BYTES = 10U * 1024U * 1024U;
+    constexpr std::uintmax_t MIN_LOG_FILE_SIZE_BYTES = 64U * 1024U;
+    constexpr std::uintmax_t MAX_LOG_FILE_SIZE_BYTES = 1024U * 1024U * 1024U;
+    constexpr bool DEFAULT_LOG_COMPRESS_ROTATED_FILES = true;
+    constexpr int DEFAULT_LOG_COMPRESSION_LEVEL = 1;
 
-    struct ManagedLogConfig {
-        int retention_days = DEFAULT_LOG_RETENTION_DAYS;
-        int max_file_size_mb = DEFAULT_LOG_FILE_SIZE_MB;
-
-        std::uintmax_t max_file_size_bytes() const {
-            return static_cast<std::uintmax_t>(max_file_size_mb) * 1024U * 1024U;
-        }
-    };
-
-    ManagedLogConfig load_managed_log_config(const HLIEConfigService* config_services) {
-        ManagedLogConfig config;
-        const auto legacy_max_files = config_services->get_int("log", "max_files", DEFAULT_LOG_RETENTION_DAYS);
-        config.retention_days = config_services->get_int("log", "retention_days", legacy_max_files);
-        config.max_file_size_mb = config_services->get_int("log", "max_file_size_mb", DEFAULT_LOG_FILE_SIZE_MB);
-        if (config.retention_days <= 0) {
+    HLIEManagedLogConfig load_managed_log_config(const HLIEConfigService* config_services) {
+        HLIEManagedLogConfig config;
+        config.retention_days = config_services->get_int("log", "retention_days", DEFAULT_LOG_RETENTION_DAYS);
+        config.max_files = config_services->get_int("log", "max_files", DEFAULT_LOG_MAX_FILES);
+        const auto max_file_size = config_services->get_string("log", "max_file_size", "10M");
+        config.compress_rotated_files = config_services->get_bool(
+            "log", "compress_rotated_files", DEFAULT_LOG_COMPRESS_ROTATED_FILES);
+        config.compression_level = config_services->get_int("log", "compression_level", DEFAULT_LOG_COMPRESSION_LEVEL);
+        if (config.retention_days < 0) {
             LOG_WARN("log.retention_days={} is invalid; use default {}", config.retention_days, DEFAULT_LOG_RETENTION_DAYS);
             config.retention_days = DEFAULT_LOG_RETENTION_DAYS;
         }
-        if (config.max_file_size_mb <= 0) {
-            LOG_WARN("log.max_file_size_mb={} is invalid; use default {}", config.max_file_size_mb, DEFAULT_LOG_FILE_SIZE_MB);
-            config.max_file_size_mb = DEFAULT_LOG_FILE_SIZE_MB;
+        if (config.max_files < 0) {
+            LOG_WARN("log.max_files={} is invalid; disable file-count limit", config.max_files);
+            config.max_files = 0;
+        }
+        if (!HLIELogger::parse_file_size(max_file_size, config.max_file_size_bytes) ||
+            config.max_file_size_bytes < MIN_LOG_FILE_SIZE_BYTES ||
+            config.max_file_size_bytes > MAX_LOG_FILE_SIZE_BYTES) {
+            LOG_WARN("log.max_file_size='{}' is invalid or outside [64K, 1G]; use default 10M", max_file_size);
+            config.max_file_size_bytes = DEFAULT_LOG_FILE_SIZE_BYTES;
+        }
+        if (config.compression_level < 1 || config.compression_level > 9) {
+            LOG_WARN("log.compression_level={} is invalid; use default {}", config.compression_level,
+                     DEFAULT_LOG_COMPRESSION_LEVEL);
+            config.compression_level = DEFAULT_LOG_COMPRESSION_LEVEL;
         }
         return config;
     }
@@ -328,7 +338,7 @@ int HLIEWinAppController::initialize() {
     const auto bootstrap_logger = HLIELogger::create_managed_logger(program_dir + "\\boot_log",
                                                                     "service_boot-" + instance_id + ".log",
                                                                     HLIE_BOOT, "debug",
-                                                                    static_cast<std::uintmax_t>(DEFAULT_LOG_FILE_SIZE_MB) * 1024U * 1024U,
+                                                                    DEFAULT_LOG_FILE_SIZE_BYTES,
                                                                     DEFAULT_LOG_RETENTION_DAYS);
     HLIE_CHECK_NULL_RETURN(bootstrap_logger, -6);
     bootstrap_logger->info("HLIEWinAppController initialize: instance_id={}, pid={}, program_path={}, program_dir={}",
@@ -362,27 +372,26 @@ int HLIEWinAppController::initialize() {
 
     const auto managed_log_config = load_managed_log_config(config_services);
     const auto boot_logger = HLIELogger::create_managed_logger(log_location, "service_boot-" + instance_id + ".log",
-                                                               HLIE_BOOT, "debug", managed_log_config.max_file_size_bytes(),
-                                                               managed_log_config.retention_days);
+                                                               HLIE_BOOT, "debug", managed_log_config);
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
 
     const auto datetime = HlieUtil::get_datetime_str();
     HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(config_services->get_int("log", "tcim_level", 2)));
-    const auto tcim_log_file = HlieUtil::join_paths(HLIELogger::current_date_directory(log_location).string(),
+    const auto tcim_fallback_directory = managed_log_config.retention_days == 0
+                                             ? std::filesystem::path(log_location)
+                                             : HLIELogger::current_date_directory(log_location);
+    const auto tcim_log_file = HlieUtil::join_paths(tcim_fallback_directory.string(),
                                                     "tcim-" + datetime + "-" + instance_id + ".log");
     HlieUtil::set_env("TCIM_LOG_FILE", tcim_log_file);
     boot_logger->info("TCIM_LOG_FILE={}", tcim_log_file);
-    if (!HLIELogger::register_tcim_log_handler(log_location, "tcim-" + instance_id + ".log",
-                                               managed_log_config.max_file_size_bytes(),
-                                               managed_log_config.retention_days)) {
+    if (!HLIELogger::register_tcim_log_handler(log_location, "tcim-" + instance_id + ".log", managed_log_config)) {
         boot_logger->warn("TCIM managed log handler registration failed; use TCIM_LOG_FILE fallback");
     }
 
     const std::string log_file_name = "hlie-llm-" + instance_id + ".log";
     const auto log_level = config_services->get_string("log", "level", "debug");
     const auto logger = HLIELogger::init_managed_default_logger(log_location, log_file_name, "HLIE", log_level,
-                                                                managed_log_config.max_file_size_bytes(),
-                                                                managed_log_config.retention_days);
+                                                                managed_log_config);
     HLIE_CHECK_NULL_RETURN(logger, -1);
     spdlog::set_default_logger(logger);
 
@@ -394,8 +403,7 @@ int HLIEWinAppController::initialize() {
     }
 
     const auto access_logger = HLIELogger::create_managed_logger(log_location, "access-" + instance_id + ".log",
-                                                                 HLIE_ACCESS, "debug", managed_log_config.max_file_size_bytes(),
-                                                                 managed_log_config.retention_days);
+                                                                 HLIE_ACCESS, "debug", managed_log_config);
     HLIE_CHECK_NULL_RETURN(access_logger, -6);
 
     spdlog::flush_every(std::chrono::seconds(10));
@@ -444,7 +452,7 @@ int HLIELinuxAppController::initialize() {
 
     const auto bootstrap_logger = HLIELogger::create_managed_logger("./logs", "service_boot-" + instance_id + ".log",
                                                                     HLIE_BOOT, "debug",
-                                                                    static_cast<std::uintmax_t>(DEFAULT_LOG_FILE_SIZE_MB) * 1024U * 1024U,
+                                                                    DEFAULT_LOG_FILE_SIZE_BYTES,
                                                                     DEFAULT_LOG_RETENTION_DAYS);
     HLIE_CHECK_NULL_RETURN(bootstrap_logger, -6);
 
@@ -460,35 +468,33 @@ int HLIELinuxAppController::initialize() {
     const std::string log_location = config_services->get_string("log", "location", "/var/log/HLIECpp");
     const auto managed_log_config = load_managed_log_config(config_services);
     const auto boot_logger = HLIELogger::create_managed_logger(log_location, "service_boot-" + instance_id + ".log",
-                                                               HLIE_BOOT, "debug", managed_log_config.max_file_size_bytes(),
-                                                               managed_log_config.retention_days);
+                                                               HLIE_BOOT, "debug", managed_log_config);
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
 
     const auto datetime = HlieUtil::get_datetime_str();
     HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(config_services->get_int("log", "tcim_level", 2)));
-    const auto tcim_log_file = HlieUtil::join_paths(HLIELogger::current_date_directory(log_location).string(),
+    const auto tcim_fallback_directory = managed_log_config.retention_days == 0
+                                             ? std::filesystem::path(log_location)
+                                             : HLIELogger::current_date_directory(log_location);
+    const auto tcim_log_file = HlieUtil::join_paths(tcim_fallback_directory.string(),
                                                     "tcim-" + datetime + "-" + instance_id + ".log");
     HlieUtil::set_env("TCIM_LOG_FILE", tcim_log_file);
     boot_logger->info("TCIM_LOG_FILE={}", tcim_log_file);
-    if (!HLIELogger::register_tcim_log_handler(log_location, "tcim-" + instance_id + ".log",
-                                               managed_log_config.max_file_size_bytes(),
-                                               managed_log_config.retention_days)) {
+    if (!HLIELogger::register_tcim_log_handler(log_location, "tcim-" + instance_id + ".log", managed_log_config)) {
         boot_logger->warn("TCIM managed log handler registration failed; use TCIM_LOG_FILE fallback");
     }
 
     const std::string log_file_name = "hlie-llm-" + instance_id + ".log";
     const auto log_level = config_services->get_string("log", "level", "debug");
     const auto logger = HLIELogger::init_managed_default_logger(log_location, log_file_name, "HLIE", log_level,
-                                                                managed_log_config.max_file_size_bytes(),
-                                                                managed_log_config.retention_days);
+                                                                managed_log_config);
     HLIE_CHECK_NULL_RETURN(logger, -1);
     spdlog::set_default_logger(logger);
 
     LOG_INFO(HLIECpp);
 
     const auto access_logger = HLIELogger::create_managed_logger(log_location, "access-" + instance_id + ".log",
-                                                                 HLIE_ACCESS, "debug", managed_log_config.max_file_size_bytes(),
-                                                                 managed_log_config.retention_days);
+                                                                 HLIE_ACCESS, "debug", managed_log_config);
     HLIE_CHECK_NULL_RETURN(access_logger, -6);
 
     spdlog::flush_every(std::chrono::seconds(10));

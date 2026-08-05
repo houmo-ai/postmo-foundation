@@ -2,8 +2,6 @@
 
 #include <cstdlib>
 #include <cerrno>
-#include <algorithm>
-#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -19,6 +17,7 @@
 #include <server/server-http.h>
 
 #include "hlie_app/hlie_workflow.h"
+#include "hlie_app/util/hlie_http_log_sanitizer.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
 #include "hlie_base/hlie_exception.h"
@@ -30,78 +29,6 @@
 HLIE_NAMESPACE_BEGIN
 
 namespace {
-    std::string process_body(const std::string& body);
-
-    std::string to_lower_copy(std::string value) {
-        std::transform(value.begin(), value.end(), value.begin(),
-                       [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return value;
-    }
-
-    bool is_binary_content_type(const std::string& content_type) {
-        const std::string lowered = to_lower_copy(content_type);
-        return lowered.rfind("audio/", 0) == 0 || lowered.rfind("image/", 0) == 0 ||
-            lowered.rfind("video/", 0) == 0 || lowered.find("application/octet-stream") != std::string::npos ||
-            lowered.find("application/pdf") != std::string::npos || lowered.find("application/zip") != std::string::npos;
-    }
-
-    bool is_wav_body(const std::string& body) {
-        return body.size() >= 12 && body.compare(0, 4, "RIFF") == 0 && body.compare(8, 4, "WAVE") == 0;
-    }
-
-    std::string process_response_body(const httplib::Response& res) {
-        const std::string content_type = res.get_header_value("Content-Type");
-        if (is_binary_content_type(content_type) || is_wav_body(res.body)) {
-            const std::string type = content_type.empty() && is_wav_body(res.body) ? "audio/wav" : content_type;
-            return "<binary response: content_type=" + type + ", size=" + std::to_string(res.body.size()) + " bytes>";
-        }
-        return process_body(res.body);
-    }
-
-    std::string process_body(const std::string& body) {
-        try {
-            if (body.empty()) {
-                return body;
-            }
-            auto body_json = nlohmann::json::parse(body);
-            // request
-            if (body_json.contains("messages") && body_json["messages"].is_array() && !body_json["messages"].empty()) {
-                for (auto& message : body_json["messages"]) {
-                    if (message.contains("content") && message["content"].is_array() && !message["content"].empty()) {
-                        for (auto& content_item : message["content"]) {
-                            if (content_item.contains("type") && content_item["type"] == "image_url" &&
-                                content_item.contains("image_url") && content_item["image_url"].contains("url")) {
-                                std::string b64_json_data = content_item["image_url"]["url"];
-                                LOG_TRACE("Request b64_json: {}", b64_json_data);
-                                if (b64_json_data.length() > 100) {
-                                    content_item["image_url"]["url"] =
-                                        b64_json_data.substr(0, 100) + "..., length=" + std::to_string(b64_json_data.length());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            // response
-            if (body_json.contains("data") && body_json["data"].is_array() && !body_json["data"].empty()) {
-                for (auto& item : body_json["data"]) {
-                    if (item.contains("b64_json")) {
-                        std::string b64_json_data = item["b64_json"];
-                        LOG_TRACE("Response b64_json: {}", b64_json_data);
-                        if (b64_json_data.length() > 100) {
-                            item["b64_json"] = b64_json_data.substr(0, 100) + "..., length=" + std::to_string(b64_json_data.length());
-                        }
-                    }
-                }
-            }
-
-            return body_json.dump();
-        } catch (const json::exception& e) {
-            LOG_WARN("Failed to parse body as JSON: {}", e.what());
-            return body;
-        }
-    }
-
     void log_server_request(const httplib::Request& req, const httplib::Response& res) {
         // skip GH copilot requests when using default port
         if (req.path == "/v1/health" || req.path == "/health") {
@@ -112,10 +39,29 @@ namespace {
         const auto access_logger = HLIELogger::get_logger(HLIE_ACCESS);
         HLIE_CHECK_NULL(access_logger);
         access_logger->info("{} - - \"{} {}\" {} [RequestID={}]", req.remote_addr, req.method, req.path, res.status, request_id);
-        access_logger->flush();
 
-        LOG_INFO("Request[{}]: {} {} {} {} \n{}", request_id, req.method, req.path, req.remote_addr, res.status, process_body(req.body));
-        LOG_INFO("Response[{}]: {}", request_id, process_response_body(res));
+        // Static UI assets are fully represented by the compact access log.
+        if ((req.method == "GET" || req.method == "HEAD") && http_log::is_static_asset_path(req.path)) {
+            return;
+        }
+
+        const std::string request_content_type = req.get_header_value("Content-Type");
+        const std::string response_content_type = res.get_header_value("Content-Type");
+        LOG_INFO("HTTP[{}]: {} {} {} {} request_size={} response_size={}",
+                 request_id, req.method, req.path, req.remote_addr, res.status, req.body.size(), res.body.size());
+
+        // Body processing can parse JSON, so keep it behind the runtime debug-level check.
+        const auto main_logger = HLIELogger::get_logger();
+        if (main_logger && main_logger->should_log(spdlog::level::debug)) {
+            if (!req.body.empty()) {
+                main_logger->debug("RequestBody[{}]: {}", request_id,
+                                   http_log::summarize_body(req.body, request_content_type, http_log::BodyDirection::request));
+            }
+            if (!res.body.empty()) {
+                main_logger->debug("ResponseBody[{}]: {}", request_id,
+                                   http_log::summarize_body(res.body, response_content_type, http_log::BodyDirection::response));
+            }
+        }
     }
 
     void res_error(httplib::Response& res, const json& error_data) {
@@ -397,6 +343,7 @@ namespace {
 
         static const std::unordered_set<std::string> bool_keys = {
             "log.open_console_window",
+            "log.compress_rotated_files",
             "model.auto_load",
             "model.enable_sd3",
             "model.llm_lazy_mode",
@@ -404,9 +351,9 @@ namespace {
             "replica.memory_saving",
         };
         static const std::unordered_set<std::string> int_keys = {
-            "log.max_file_size_mb",
             "log.max_files",
             "log.retention_days",
+            "log.compression_level",
             "log.tcim_level",
             "balancer.heartbeat_interval_ms",
             "replica.count",

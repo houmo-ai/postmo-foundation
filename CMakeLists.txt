@@ -122,6 +122,16 @@ include(CTest)
 # before production targets so target resolution is deterministic.
 add_subdirectory(third_party/cpp-httplib)
 
+# Keep gzip support self-contained and reproducible on Windows and Linux. zlib
+# is vendored at a fixed release and linked statically into hlie-base, so no
+# zlib DLL/shared-library is required on deployment hosts (Ubuntu 20.04+).
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "Build zlib shared library" FORCE)
+set(ZLIB_BUILD_STATIC ON CACHE BOOL "Build zlib static library" FORCE)
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "Build zlib tests" FORCE)
+set(ZLIB_INSTALL OFF CACHE BOOL "Install zlib" FORCE)
+add_subdirectory(third_party/zlib EXCLUDE_FROM_ALL)
+set_target_properties(zlibstatic PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 if (NOT HLIE_TESTS_ONLY)
     add_subdirectory(src)
 endif ()

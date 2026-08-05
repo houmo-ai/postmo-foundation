@@ -52,6 +52,19 @@ constexpr auto HLIE_ACCESS = "HLIE-ACCESS";
 
 HLIE_NAMESPACE_BEGIN
 
+/**
+ * Managed log rotation policy. retention_days > 0 uses YYYY-MM-DD directories;
+ * retention_days == 0 uses flat, count-based rotation with dates in filenames.
+ * max_files == 0 disables the per-logger part-count limit.
+ */
+struct HLIE_API HLIEManagedLogConfig {
+    std::uintmax_t max_file_size_bytes = 10U * 1024U * 1024U;
+    int retention_days = 7;
+    int max_files = 0;
+    bool compress_rotated_files = false;
+    int compression_level = 1;
+};
+
 class HLIE_API HLIELogger {
 public:
     /**
@@ -89,12 +102,24 @@ public:
                                                                        std::uintmax_t max_file_size_bytes,
                                                                        int retention_days = 7);
 
+    static std::shared_ptr<spdlog::logger> init_managed_default_logger(const std::string& log_root,
+                                                                       const std::string& log_file_name,
+                                                                       const std::string& module_name,
+                                                                       const std::string& level,
+                                                                       const HLIEManagedLogConfig& config);
+
     static std::shared_ptr<spdlog::logger> create_managed_logger(const std::string& log_root,
                                                                  const std::string& log_file_name,
                                                                  const std::string& module_name,
                                                                  const std::string& level,
                                                                  std::uintmax_t max_file_size_bytes,
                                                                  int retention_days = 7);
+
+    static std::shared_ptr<spdlog::logger> create_managed_logger(const std::string& log_root,
+                                                                 const std::string& log_file_name,
+                                                                 const std::string& module_name,
+                                                                 const std::string& level,
+                                                                 const HLIEManagedLogConfig& config);
 
     /** Create a console-only logger for messages emitted before sys.cfg is available. */
     static std::shared_ptr<spdlog::logger> create_console_logger(const std::string& module_name,
@@ -106,11 +131,21 @@ public:
                                           std::uintmax_t max_file_size_bytes,
                                           int retention_days = 7);
 
+    static bool register_tcim_log_handler(const std::string& log_root,
+                                          const std::string& log_file_name,
+                                          const HLIEManagedLogConfig& config);
+
     /** Return log_root/YYYY-MM-DD for the current local date and create it if needed. */
     static std::filesystem::path current_date_directory(const std::string& log_root);
 
     /** Delete expired managed YYYY-MM-DD directories. Unmarked directories are never removed. */
     static void cleanup_old_log_directories(const std::string& log_root, int retention_days);
+
+    /** Wait until already queued background log compression work has completed (primarily for tests/tools). */
+    static void wait_for_compression();
+
+    /** Parse an integer K/M/G size (binary units) with overflow checking. */
+    static bool parse_file_size(const std::string& value, std::uintmax_t& bytes);
 
     /**
      * Get the logger with module-name which you created with
