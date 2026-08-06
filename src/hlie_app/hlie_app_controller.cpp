@@ -4,6 +4,7 @@
 #include <unordered_map>
 
 #include "hlie_app/hlie_model_info.h"
+#include "hlie_app/hlie_config_bundle_validator.h"
 #include "hlie_app/hlie_process_manager.h"
 #include "hlie_app/hlie_replica_config.h"
 #include "hlie_app/hlie_web_service.h"
@@ -14,8 +15,16 @@
 #include "hlie_base/hlie_util.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
 #include <map>
 #include <vector>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 HLIE_NAMESPACE_BEGIN
 
@@ -37,6 +46,108 @@ namespace {
     constexpr std::uintmax_t MAX_LOG_FILE_SIZE_BYTES = 1024U * 1024U * 1024U;
     constexpr bool DEFAULT_LOG_COMPRESS_ROTATED_FILES = true;
     constexpr int DEFAULT_LOG_COMPRESSION_LEVEL = 1;
+
+    struct BootstrapLoggerContext {
+        std::shared_ptr<spdlog::logger> logger;
+        std::filesystem::path root;
+        bool temporary = false;
+    };
+
+    std::uint64_t current_process_id() {
+#ifdef _WIN32
+        return static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+        return static_cast<std::uint64_t>(getpid());
+#endif
+    }
+
+    bool is_standalone_config_mode(const std::unordered_map<std::string, std::string>& args) {
+#ifdef _WIN32
+        return std::getenv("HLIECPP_STANDALONE_MODE") != nullptr;
+#else
+        return args.find("--config") != args.end();
+#endif
+    }
+
+    bool is_sensitive_option(const std::string& key) {
+        std::string lowered = key;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](const unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+        return lowered.find("api-key") != std::string::npos || lowered.find("token") != std::string::npos ||
+            lowered.find("password") != std::string::npos || lowered.find("secret") != std::string::npos;
+    }
+
+    std::string loggable_argument_value(const std::string& key, const std::string& value) {
+        return is_sensitive_option(key) ? "<redacted>" : value;
+    }
+
+    BootstrapLoggerContext create_bootstrap_logger(const std::filesystem::path& platform_default_root,
+                                                    const std::string& instance_id,
+                                                    const bool standalone) {
+        BootstrapLoggerContext context;
+        context.root = platform_default_root;
+        context.temporary = standalone;
+        if (standalone) {
+            std::error_code error;
+            const auto temporary_root = std::filesystem::temp_directory_path(error);
+            if (!error) {
+                context.root = temporary_root / "HLIECpp" / "boot_logs";
+            } else {
+                std::cerr << "Cannot resolve temporary directory for standalone bootstrap logs: " << error.message() << std::endl;
+                context.root.clear();
+            }
+        }
+
+        const std::string file_name = "service_boot-" + std::to_string(current_process_id()) + "-" + instance_id + ".log";
+        if (!context.root.empty()) {
+            try {
+                context.logger = HLIELogger::create_managed_logger(context.root.string(), file_name, HLIE_BOOT, "debug",
+                                                                   DEFAULT_LOG_FILE_SIZE_BYTES, standalone ? 2 : DEFAULT_LOG_RETENTION_DAYS);
+            } catch (const std::exception& exception) {
+                std::cerr << "Cannot create bootstrap file logger at " << context.root.string()
+                          << ": " << exception.what() << std::endl;
+            }
+        }
+        if (!context.logger) {
+            context.logger = HLIELogger::create_console_logger(HLIE_BOOT, "debug");
+            context.root.clear();
+        }
+        return context;
+    }
+
+    bool finalize_and_validate_config_bundle(HLIEConfigService* config_service,
+                                             const std::shared_ptr<spdlog::logger>& bootstrap_logger) {
+        config_service->finalize_config_bundle(
+            config_service->get_string("model", "llm_preset_catalog", "model_presets.json", true),
+            config_service->get_string("model", "llm_override_catalog", "model_overrides.json", true));
+        const auto validation = HLIEConfigBundleValidator::validate(*config_service);
+        for (const auto& note : validation.notes) {
+            bootstrap_logger->info("Config bundle: {}", note);
+        }
+        for (const auto& warning : validation.warnings) {
+            bootstrap_logger->warn("Config bundle: {}", warning);
+        }
+        if (!validation.valid) {
+            bootstrap_logger->error("Config bundle validation failed: {}", validation.error);
+            return false;
+        }
+        return true;
+    }
+
+    void log_config_bundle(const std::shared_ptr<spdlog::logger>& logger,
+                           const HLIEConfigBundle& bundle,
+                           const BootstrapLoggerContext& bootstrap) {
+        logger->info("Startup mode: {}", bundle.explicit_override ? "explicit-config" : "platform-default");
+        logger->info("Config bundle root: {}", bundle.root.string());
+        logger->info("Config bundle sys_config: {}", bundle.sys_config.string());
+        logger->info("Config bundle config_schema: {}", bundle.config_schema.string());
+        logger->info("Config bundle memory_estimates: {}", bundle.memory_estimates.string());
+        logger->info("Config bundle model_presets: {}", bundle.model_presets.string());
+        logger->info("Config bundle model_overrides: {}", bundle.model_overrides.string());
+        logger->info("Bootstrap logging: mode={}, root={}", bootstrap.temporary ? "temporary" : "platform-default",
+                     bootstrap.root.empty() ? "console" : bootstrap.root.string());
+    }
 
     HLIEManagedLogConfig load_managed_log_config(const HLIEConfigService* config_services) {
         HLIEManagedLogConfig config;
@@ -335,20 +446,27 @@ int HLIEWinAppController::initialize() {
         instance_id = args.at("--instance_id");
     }
 
-    const auto bootstrap_logger = HLIELogger::create_managed_logger(program_dir + "\\boot_log",
-                                                                    "service_boot-" + instance_id + ".log",
-                                                                    HLIE_BOOT, "debug",
-                                                                    DEFAULT_LOG_FILE_SIZE_BYTES,
-                                                                    DEFAULT_LOG_RETENTION_DAYS);
+    const bool standalone_mode = is_standalone_config_mode(args);
+    const auto bootstrap = create_bootstrap_logger(program_dir + "\\boot_log", instance_id, standalone_mode);
+    const auto& bootstrap_logger = bootstrap.logger;
     HLIE_CHECK_NULL_RETURN(bootstrap_logger, -6);
-    bootstrap_logger->info("HLIEWinAppController initialize: instance_id={}, pid={}, program_path={}, program_dir={}",
-                           instance_id, GetCurrentProcessId(), program_path, program_dir);
+    bootstrap_logger->info("HLIEWinAppController initialize: mode={}, instance_id={}, pid={}, program_path={}, program_dir={}",
+                           standalone_mode ? "standalone" : "service", instance_id, GetCurrentProcessId(), program_path, program_dir);
     for (const auto& [key, val] : args) {
-        bootstrap_logger->info("program arg: {}={}", key, val);
+        bootstrap_logger->info("program arg: {}={}", key, loggable_argument_value(key, val));
     }
 
-    if (const auto config_path = program_dir + "..\\config\\sys.cfg"; config_services->parse(config_path) < 0) {
-        bootstrap_logger->error("sys_config parsed failed: {}", config_path);
+    std::string config_error;
+    if (!config_services->prepare_config_bundle(program_dir + "..\\config\\sys.cfg", &config_error)) {
+        bootstrap_logger->error("Cannot resolve configuration directory: {}", config_error);
+        return -5;
+    }
+    const auto config_path = config_services->get_config_bundle().sys_config;
+    if (config_services->parse(config_path.string()) < 0) {
+        bootstrap_logger->error("sys_config parsed failed: {}", config_path.string());
+        return -5;
+    }
+    if (!finalize_and_validate_config_bundle(config_services, bootstrap_logger)) {
         return -5;
     }
     bootstrap_logger->info("sys_config parsed successfully: {}", config_services->get_config_path());
@@ -394,12 +512,13 @@ int HLIEWinAppController::initialize() {
                                                                 managed_log_config);
     HLIE_CHECK_NULL_RETURN(logger, -1);
     spdlog::set_default_logger(logger);
+    log_config_bundle(logger, config_services->get_config_bundle(), bootstrap);
 
     LOG_INFO(HLIECpp);
     LOG_INFO("HLIEWinAppController initialized logger: instance_id={}, pid={}, log_file={}, boot_log_file={}",
              instance_id, GetCurrentProcessId(), log_file_name, "service_boot-" + instance_id + ".log");
     for (const auto& [key, val] : args) {
-        LOG_INFO("program arg: {}={}", key, val);
+        LOG_INFO("program arg: {}={}", key, loggable_argument_value(key, val));
     }
 
     const auto access_logger = HLIELogger::create_managed_logger(log_location, "access-" + instance_id + ".log",
@@ -450,19 +569,36 @@ int HLIELinuxAppController::initialize() {
         instance_id = args.at("--instance_id");
     }
 
-    const auto bootstrap_logger = HLIELogger::create_managed_logger("./logs", "service_boot-" + instance_id + ".log",
-                                                                    HLIE_BOOT, "debug",
-                                                                    DEFAULT_LOG_FILE_SIZE_BYTES,
-                                                                    DEFAULT_LOG_RETENTION_DAYS);
+    const bool standalone_mode = is_standalone_config_mode(args);
+    const auto bootstrap = create_bootstrap_logger("./logs", instance_id, standalone_mode);
+    const auto& bootstrap_logger = bootstrap.logger;
     HLIE_CHECK_NULL_RETURN(bootstrap_logger, -6);
+    bootstrap_logger->info("HLIELinuxAppController initialize: mode={}, instance_id={}, pid={}",
+                           standalone_mode ? "standalone" : "service", instance_id, current_process_id());
+    for (const auto& [key, val] : args) {
+        bootstrap_logger->info("program arg: {}={}", key, loggable_argument_value(key, val));
+    }
 
-    if (const std::string config_path = "./config/sys.cfg"; config_services->parse(config_path) < 0) {
+    std::string config_error;
+    if (!config_services->prepare_config_bundle("./config/sys.cfg", &config_error)) {
+        bootstrap_logger->error("Cannot resolve configuration directory: {}", config_error);
+        return -5;
+    }
+    const auto config_path = config_services->get_config_bundle().sys_config;
+    if (config_services->parse(config_path.string()) < 0) {
+        if (args.find("--config") != args.end()) {
+            bootstrap_logger->error("Explicit sys_config parsed failed: {}", config_path.string());
+            return -5;
+        }
         if (config_services->get_string("model", "cur_model").empty()) {
             LOG_ERROR("sys_config parsed failed and no env[HLIE__MODEL__CUR_MODEL]");
             return -5;
         }
 
         LOG_WARN("sys_config parsed failed and will use env[HLIE__MODEL__CUR_MODEL] to continue");
+    }
+    if (!finalize_and_validate_config_bundle(config_services, bootstrap_logger)) {
+        return -5;
     }
 
     const std::string log_location = config_services->get_string("log", "location", "/var/log/HLIECpp");
@@ -490,6 +626,7 @@ int HLIELinuxAppController::initialize() {
                                                                 managed_log_config);
     HLIE_CHECK_NULL_RETURN(logger, -1);
     spdlog::set_default_logger(logger);
+    log_config_bundle(logger, config_services->get_config_bundle(), bootstrap);
 
     LOG_INFO(HLIECpp);
 

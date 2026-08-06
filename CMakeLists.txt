@@ -33,6 +33,11 @@ configure_file(
         ${CMAKE_BINARY_DIR}/bin/config/model_overrides.json
         COPYONLY
 )
+configure_file(
+        ${CMAKE_SOURCE_DIR}/config/memory_estimates.json
+        ${CMAKE_BINARY_DIR}/bin/config/memory_estimates.json
+        COPYONLY
+)
 
 option(LLAMA_USE_SYSTEM_GGML "Use system libggml" OFF)
 
@@ -111,6 +116,7 @@ endif()
 option(BUILD_TESTING "Build automated tests" OFF)
 option(HLIE_BUILD_TESTS "Compatibility alias for BUILD_TESTING" OFF)
 option(HLIE_TESTS_ONLY "Configure test targets without proprietary inference dependencies" OFF)
+option(HLIE_BUILD_TCIM_HARDWARE_TESTS "Build direct TCIM hardware lifecycle tests" OFF)
 
 if (HLIE_BUILD_TESTS OR HLIE_TESTS_ONLY)
     set(BUILD_TESTING ON CACHE BOOL "Build automated tests" FORCE)

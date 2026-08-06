@@ -210,7 +210,7 @@ package_service() {
     cp config/model_presets.json "$release_dir/config/model_presets.json"
     cp config/model_overrides.json "$release_dir/config/model_overrides.json"
     cp config/config_schema.json "$release_dir/config/config_schema.json"
-    cp config/linux/memory_estimates.json "$release_dir/config/memory_estimates.json"
+    cp config/memory_estimates.json "$release_dir/config/memory_estimates.json"
 
     local required_config_files=(
         sys.cfg

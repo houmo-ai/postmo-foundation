@@ -81,7 +81,12 @@ namespace {
     }
 
     std::filesystem::path memory_estimates_path() {
-        const auto config_path = Singleton<HLIEConfigService>::instance()->get_config_path();
+        const auto& config_service = Singleton<HLIEConfigService>::instance();
+        const auto bundle_path = config_service->get_config_bundle().memory_estimates;
+        if (!bundle_path.empty()) {
+            return bundle_path;
+        }
+        const auto config_path = config_service->get_config_path();
         if (config_path.empty()) {
             return "memory_estimates.json";
         }

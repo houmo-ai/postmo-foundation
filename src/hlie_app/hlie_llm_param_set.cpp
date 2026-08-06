@@ -4,7 +4,7 @@
 #include <array>
 #include <iomanip>
 #include <sstream>
-#include <unordered_set>
+#include <string_view>
 
 HLIE_NAMESPACE_BEGIN
 
@@ -34,11 +34,11 @@ std::string scalar_to_string(const HLIELlmParamValue& value) {
 } // namespace
 
 bool HLIELlmParamSet::is_framework_owned(const std::string& key) {
-    static const std::unordered_set<std::string> owned{
-        "--model", "--mmproj", "--host", "--port", "--device_id", "--instance_id",
+    static constexpr std::array<std::string_view, 11> owned{
+        "--model", "--mmproj", "--host", "--port", "--device_id", "--instance_id", "--config",
         "--json_info", "--launch_manifest", "--api-key", "--log-file",
     };
-    return owned.find(key) != owned.end();
+    return std::find(owned.begin(), owned.end(), key) != owned.end();
 }
 
 bool HLIELlmParamSet::from_json(const nlohmann::json& value, HLIELlmParamSet& result,

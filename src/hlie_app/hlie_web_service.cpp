@@ -204,6 +204,10 @@ namespace {
     }
 
     std::filesystem::path config_schema_path(const std::string& config_path) {
+        const auto bundle_path = Singleton<HLIEConfigService>::instance()->get_config_bundle().config_schema;
+        if (!bundle_path.empty()) {
+            return bundle_path;
+        }
         if (config_path.empty()) {
             return CONFIG_SCHEMA_FILENAME;
         }

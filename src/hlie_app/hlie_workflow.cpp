@@ -3638,7 +3638,11 @@ bool HLIEWorkflow::initialize_llm_preset_catalogs() {
         return true;
     }
 
-    const auto resolve_catalog_path = [&](const std::string& configured_path) {
+    const auto bundle = config->get_config_bundle();
+    const auto resolve_catalog_path = [&](const std::string& configured_path, const std::filesystem::path& bundle_path) {
+        if (!bundle_path.empty()) {
+            return bundle_path.string();
+        }
         std::filesystem::path path(configured_path);
         if (path.is_relative()) {
             const std::filesystem::path config_path(config->get_config_path());
@@ -3674,9 +3678,9 @@ bool HLIEWorkflow::initialize_llm_preset_catalogs() {
     };
 
     const std::string preset_path = resolve_catalog_path(config->get_string(
-        "model", "llm_preset_catalog", "model_presets.json", true));
+        "model", "llm_preset_catalog", "model_presets.json", true), bundle.model_presets);
     const std::string override_path = resolve_catalog_path(config->get_string(
-        "model", "llm_override_catalog", "model_overrides.json", true));
+        "model", "llm_override_catalog", "model_overrides.json", true), bundle.model_overrides);
     return load_catalog(llm_preset_catalog_, preset_path, "official", true) &&
            load_catalog(llm_override_catalog_, override_path, "local", false);
 }

@@ -249,6 +249,9 @@ int main(const int argc, char** argv) {
     std::setlocale(LC_NUMERIC, "C");
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
+    const auto& config_service = hm_HLIE::Singleton<hm_HLIE::HLIEConfigService>::instance();
+    // Capture and normalize --config before switching to the executable directory.
+    config_service->set_args(argc, argv);
     InitializeWindowsRuntimeContext();
     _putenv("TCIM_LOG_TAGS=all");
     _putenv("TCIM_BACKEND=Xh1HdiBackend");
@@ -256,10 +259,8 @@ int main(const int argc, char** argv) {
 
     minidump::Initialize();
 
-    const auto& config_service = hm_HLIE::Singleton<hm_HLIE::HLIEConfigService>::instance();
-    config_service->set_args(argc, argv);
-
-    if (std::getenv("HLIECPP_WIN_D") || config_service->get_args().find("--instance_id") != config_service->get_args().end()) {
+    if (std::getenv("HLIECPP_WIN_D") ||
+        config_service->get_args().find("--instance_id") != config_service->get_args().end()) {
         printf("========HLIECpp Instance & COPY Mode======== \n");
         return run();
     }
@@ -269,6 +270,12 @@ int main(const int argc, char** argv) {
     if (!StartServiceCtrlDispatcher(ServiceTable)) {
         // 此处处理错误（如记录日志）
         const DWORD err = GetLastError();
+        if (err == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT &&
+            config_service->get_args().find("--config") != config_service->get_args().end()) {
+            SetEnvironmentVariableA("HLIECPP_STANDALONE_MODE", "1");
+            printf("========HLIECpp Standalone Config Mode======== \n");
+            return run();
+        }
         std::cerr << "HLIECpp WIN32 Service StartServiceCtrlDispatcher failed, ErrCode: " << err;
 
         return 8;

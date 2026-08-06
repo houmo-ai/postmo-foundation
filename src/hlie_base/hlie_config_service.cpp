@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -135,7 +136,31 @@ namespace {
         // 检查是否有下一个参数，且下一个参数不是选项
         return (current_index + 1 < max_length) && (argv[current_index + 1] != nullptr) && !is_option(argv[current_index + 1]);
     }
+
+    void set_error(std::string* error, const std::string& message) {
+        if (error) {
+            *error = message;
+        }
+    }
+
+    bool is_sensitive_option(const std::string& key) {
+        std::string lowered = key;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](const unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+        return lowered.find("api-key") != std::string::npos || lowered.find("token") != std::string::npos ||
+            lowered.find("password") != std::string::npos || lowered.find("secret") != std::string::npos;
+    }
 } // namespace
+
+std::filesystem::path HLIEConfigBundle::resolve_asset(const std::string& configured_path,
+                                                      const std::string& default_name) const {
+    std::filesystem::path path(configured_path.empty() ? default_name : configured_path);
+    if (path.is_relative()) {
+        path = root / path;
+    }
+    return path.lexically_normal();
+}
 
 int HLIEConfigService::parse(const std::string& config_path) {
     std::lock_guard lock(mutex_);
@@ -467,21 +492,92 @@ bool HLIEConfigService::get_bool(const std::string& section, const std::string& 
 
 void HLIEConfigService::set_args(const int argc, char** argv) {
     args_.clear();
-    for (int i = 0; i < argc; ++i) {
-        if (const auto opt = argv[i]; is_option(opt)) {
-            if (next_is_value(argv, i, argc)) {
-                args_[opt] = argv[i + 1];
+    for (int i = 1; i < argc; ++i) {
+        if (const auto raw_opt = argv[i]; is_option(raw_opt)) {
+            const std::string option(raw_opt);
+            const auto equals = option.find('=');
+            const std::string key = equals == std::string::npos ? option : option.substr(0, equals);
+            if (equals != std::string::npos) {
+                args_[key] = option.substr(equals + 1);
+            } else if (next_is_value(argv, i, argc)) {
+                args_[key] = argv[i + 1];
                 i++;
             } else {
-                args_[opt] = "";
+                args_[key] = "";
             }
-            std::cout << "program arg:" << opt << " " << args_[opt] << std::endl;
+            std::cout << "program arg:" << key << " " << (is_sensitive_option(key) ? "<redacted>" : args_[key]) << std::endl;
+        }
+    }
+
+    if (auto config = args_.find("--config"); config != args_.end() && !config->second.empty()) {
+        std::error_code error;
+        const auto absolute = std::filesystem::absolute(config->second, error);
+        if (!error) {
+            config->second = absolute.lexically_normal().string();
         }
     }
 }
 
 const std::unordered_map<std::string, std::string>& HLIEConfigService::get_args() const {
     return args_;
+}
+
+bool HLIEConfigService::prepare_config_bundle(const std::filesystem::path& default_config_path,
+                                              std::string* error) {
+    std::lock_guard lock(mutex_);
+    HLIEConfigBundle bundle;
+    config_bundle_ = {};
+    const auto config = args_.find("--config");
+    if (config == args_.end()) {
+        bundle.sys_config = default_config_path.lexically_normal();
+        bundle.root = bundle.sys_config.parent_path();
+        bundle.config_schema = bundle.root / "config_schema.json";
+        bundle.memory_estimates = bundle.root / "memory_estimates.json";
+        bundle.model_presets = bundle.root / "model_presets.json";
+        bundle.model_overrides = bundle.root / "model_overrides.json";
+        config_bundle_ = std::move(bundle);
+        set_error(error, "");
+        return true;
+    }
+    if (config->second.empty()) {
+        set_error(error, "--config requires a configuration directory");
+        return false;
+    }
+
+    bundle.explicit_override = true;
+    bundle.root = std::filesystem::path(config->second).lexically_normal();
+    std::error_code filesystem_error;
+    if (!std::filesystem::is_directory(bundle.root, filesystem_error) || filesystem_error) {
+        set_error(error, "configuration directory does not exist or is not a directory: " + bundle.root.string());
+        return false;
+    }
+
+    bundle.sys_config = bundle.root / "sys.cfg";
+    filesystem_error.clear();
+    if (!std::filesystem::is_regular_file(bundle.sys_config, filesystem_error) || filesystem_error) {
+        set_error(error, "sys.cfg does not exist or is not a regular file: " + bundle.sys_config.string());
+        return false;
+    }
+
+    bundle.config_schema = bundle.root / "config_schema.json";
+    bundle.memory_estimates = bundle.root / "memory_estimates.json";
+    bundle.model_presets = bundle.root / "model_presets.json";
+    bundle.model_overrides = bundle.root / "model_overrides.json";
+    config_bundle_ = std::move(bundle);
+    set_error(error, "");
+    return true;
+}
+
+void HLIEConfigService::finalize_config_bundle(const std::string& model_presets_path,
+                                               const std::string& model_overrides_path) {
+    std::lock_guard lock(mutex_);
+    config_bundle_.model_presets = config_bundle_.resolve_asset(model_presets_path, "model_presets.json");
+    config_bundle_.model_overrides = config_bundle_.resolve_asset(model_overrides_path, "model_overrides.json");
+}
+
+HLIEConfigBundle HLIEConfigService::get_config_bundle() const {
+    std::lock_guard lock(mutex_);
+    return config_bundle_;
 }
 
 HLIE_NAMESPACE_END

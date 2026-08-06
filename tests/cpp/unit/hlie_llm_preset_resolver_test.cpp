@@ -34,6 +34,8 @@ TEST_CASE("Llama param layers support switches repeats and deletion", "[llm-pres
 }
 
 TEST_CASE("Llama param catalog rejects framework owned arguments", "[llm-preset][validation]") {
+    CHECK(HLIELlmParamSet::is_framework_owned("--config"));
+
     HLIELlmPresetCatalog catalog;
     std::string error;
     CHECK_FALSE(catalog.load_json({

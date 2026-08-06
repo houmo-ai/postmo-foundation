@@ -1,5 +1,6 @@
 add_library(hlie-testable-core STATIC
         ${PROJECT_SOURCE_DIR}/src/hlie_app/util/hlie_background_task_group.cpp
+        ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_config_bundle_validator.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_model_family_registry.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_model_info_core.cpp
         ${PROJECT_SOURCE_DIR}/src/hlie_app/hlie_llm_param_set.cpp
@@ -32,6 +33,8 @@ target_link_libraries(hlie-testable-core PUBLIC
 
 add_executable(hlie-unit-tests
         unit/hlie_background_task_group_test.cpp
+        unit/hlie_config_service_test.cpp
+        unit/hlie_config_bundle_validator_test.cpp
         unit/hlie_document_core_test.cpp
         unit/hlie_hal_path_resolver_test.cpp
         unit/hlie_logger_test.cpp
@@ -64,6 +67,33 @@ set_target_properties(
         hlie-testable-core
         hlie-unit-tests
         PROPERTIES FOLDER "tests")
+
+if (HLIE_BUILD_TCIM_HARDWARE_TESTS)
+    find_library(HLIE_TEST_TCIM_RUNTIME
+            NAMES tcim_runtime_lite
+            PATHS ${PROJECT_SOURCE_DIR}/third_party/houmo/lib
+            NO_DEFAULT_PATH REQUIRED)
+    find_library(HLIE_TEST_TCIM_DEV_CTRL
+            NAMES tcim_dev_ctrl
+            PATHS ${PROJECT_SOURCE_DIR}/third_party/houmo/lib
+            NO_DEFAULT_PATH REQUIRED)
+    find_library(HLIE_TEST_GGML_BASE
+            NAMES ggml-base
+            PATHS ${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/lib
+            NO_DEFAULT_PATH REQUIRED)
+
+    add_executable(tcim-module-lifecycle-test
+            unit/tcim_module_lifecycle_test.cpp)
+    target_include_directories(tcim-module-lifecycle-test PRIVATE
+            ${PROJECT_SOURCE_DIR}/third_party/houmo/include
+            ${PROJECT_SOURCE_DIR}/third_party/llama.cpp_houmo/include)
+    target_link_libraries(tcim-module-lifecycle-test PRIVATE
+            ${HLIE_TEST_TCIM_RUNTIME}
+            ${HLIE_TEST_TCIM_DEV_CTRL}
+            ${HLIE_TEST_GGML_BASE})
+    target_compile_features(tcim-module-lifecycle-test PRIVATE cxx_std_17)
+    set_target_properties(tcim-module-lifecycle-test PROPERTIES FOLDER "tests/hardware")
+endif ()
 
 set(HLIE_MIRAGE_EXECUTABLE "" CACHE FILEPATH
         "Path to the HLAW Mirage executable used by HTTP component tests")
