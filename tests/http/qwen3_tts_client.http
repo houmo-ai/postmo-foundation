@@ -66,7 +66,7 @@ POST {{host}}/v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "HiModel_xh2_qwen3-tts-1.7b-w8a16-256-2k-b1-1chip-2cores-v1.4.0_20260720",
+  "model": "HiModel_xh2_qwen3-tts-0.6b-customvoice-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0_20260720",
   "input": "其中配置文件中的default_mmproj 可以留空，因为服务会自动根据 name 匹配到对应的 mmproj 文件，如果存在多个同版本&同构建时间不同分辨率的 mmproj，则需要指定到具体 mmproj 名称。",
   "voice": "vivian",
   "language": "Chinese",

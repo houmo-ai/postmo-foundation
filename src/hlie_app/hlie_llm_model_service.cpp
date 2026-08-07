@@ -110,6 +110,14 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         return -1;
     }
 
+    if (model_info.is_embedding_model() || model_info.is_rerank_model()) {
+        params_.embedding = true;
+        is_embedding_ = true;
+        if (model_info.is_rerank_model()) {
+            params_.pooling_type = LLAMA_POOLING_TYPE_RANK;
+        }
+    }
+
     if (params_.embedding && params_.n_batch > params_.n_ubatch) {
         LOG_WRN("%s: embeddings enabled with n_batch (%d) > n_ubatch (%d)\n", __func__, params_.n_batch, params_.n_ubatch);
         LOG_WRN("%s: setting n_batch = n_ubatch = %d to avoid assertion failure\n", __func__, params_.n_ubatch);
@@ -121,14 +129,6 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
 
         params_.n_parallel = 1;
         params_.kv_unified = true;
-    }
-
-    if (model_info.is_embedding_model() || model_info.is_rerank_model()) {
-        params_.embedding = true;
-        is_embedding_ = true;
-        if (model_info.is_rerank_model()) {
-            params_.pooling_type = LLAMA_POOLING_TYPE_RANK;
-        }
     }
 
     if (model_info.is_mtp()) {

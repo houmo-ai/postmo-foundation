@@ -198,7 +198,8 @@ package_service() {
 
     # 清理并创建目录结构
     rm -rf "$release_dir"/*
-    mkdir -p "$release_dir/config" "$release_dir/lib" "$release_dir/bin" "$release_dir/scripts" "$release_dir/samples"
+    mkdir -p "$release_dir/config" "$release_dir/lib" "$release_dir/bin" "$release_dir/scripts" \
+        "$release_dir/samples" "$release_dir/licenses"
 
     # 复制库文件
     cp build/bin/libhlie*.so "$release_dir/lib/" || true
@@ -211,6 +212,20 @@ package_service() {
     cp config/model_overrides.json "$release_dir/config/model_overrides.json"
     cp config/config_schema.json "$release_dir/config/config_schema.json"
     cp config/memory_estimates.json "$release_dir/config/memory_estimates.json"
+
+    local license_manifest="licenses/required-runtime-files.txt"
+    if [[ ! -f "$license_manifest" ]]; then
+        echo "Error: third-party license manifest is missing: $license_manifest"
+        exit 1
+    fi
+    while IFS= read -r license_file || [[ -n "$license_file" ]]; do
+        [[ -z "$license_file" || "$license_file" == \#* ]] && continue
+        if [[ ! -f "licenses/$license_file" ]]; then
+            echo "Error: required third-party license missing from source tree: $license_file"
+            exit 1
+        fi
+    done < "$license_manifest"
+    cp -r licenses/. "$release_dir/licenses/"
 
     local required_config_files=(
         sys.cfg

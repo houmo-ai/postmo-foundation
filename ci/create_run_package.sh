@@ -18,13 +18,14 @@ chmod +x "$SOURCE_DIR/scripts/postinstall.sh"
 chmod +x "$SOURCE_DIR/scripts/uninstall.sh"
 
 # 创建临时构建目录
-mkdir -p "$BUILD_DIR"/{bin,lib,etc,demo,config}
+mkdir -p "$BUILD_DIR"/{bin,lib,etc,demo,config,licenses}
 cp "$SOURCE_DIR"/bin/HLIECpp "$BUILD_DIR"/bin/
 cp "$SOURCE_DIR"/lib/* "$BUILD_DIR"/lib/ 2>/dev/null || true
 cp "$SOURCE_DIR"/etc/* "$BUILD_DIR"/etc/ 2>/dev/null || true
 cp "$SOURCE_DIR"/HLIECpp.service "$BUILD_DIR"/
 cp "$SOURCE_DIR"/scripts/* "$BUILD_DIR"/
 cp "$SOURCE_DIR"/config/* "$BUILD_DIR"/config/
+cp -r "$SOURCE_DIR"/licenses/. "$BUILD_DIR"/licenses/
 
 # 创建改进的安装脚本
 cat > "$BUILD_DIR/install.sh" <<'EOF'
@@ -58,7 +59,8 @@ fi
 mkdir -p /opt/HLIECpp/logs
 
 # 复制文件到目标位置
-cp -r "$TMP_DIR/bin" "$TMP_DIR/lib" "$TMP_DIR/etc"  "$TMP_DIR/config"   "$TMP_DIR/HLIECpp.service" "$TMP_DIR/postinstall.sh" /opt/HLIECpp/
+cp -r "$TMP_DIR/bin" "$TMP_DIR/lib" "$TMP_DIR/etc" "$TMP_DIR/config" "$TMP_DIR/licenses" \
+    "$TMP_DIR/HLIECpp.service" "$TMP_DIR/postinstall.sh" /opt/HLIECpp/
 
 # 执行安装后脚本
 "$TMP_DIR/postinstall.sh"
@@ -73,7 +75,7 @@ echo "__ARCHIVE_BELOW__" >> "$BUILD_DIR/install.sh"
 
 # 打包文件并追加到脚本
 cd "$BUILD_DIR" || exit
-tar -cf files.tar bin lib etc demo config HLIECpp.service preinstall.sh postinstall.sh
+tar -cf files.tar bin lib etc demo config licenses HLIECpp.service preinstall.sh postinstall.sh
 gzip files.tar
 cat files.tar.gz >> "$BUILD_DIR/install.sh"
 mv "$BUILD_DIR/install.sh" "$SOURCE_DIR/$PACKAGE_NAME"

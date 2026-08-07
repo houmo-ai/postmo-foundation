@@ -160,7 +160,7 @@ package_service() {
 
     # 清理并创建目录结构
     rm -rf "$release_dir"/*
-    mkdir -p "$release_dir/bin" "$release_dir/config" "$release_dir/samples"
+    mkdir -p "$release_dir/bin" "$release_dir/config" "$release_dir/samples" "$release_dir/licenses"
     cp build/bin/Release/houmo-llm-hi-cpp-win.exe "$release_dir/bin/HLIECpp.exe"
     cp samples/zero_shot_prompt.wav "$release_dir/samples/zero_shot_prompt.wav"
     cp build/bin/Release/hlie-*.dll "$release_dir/bin/"
@@ -170,6 +170,20 @@ package_service() {
     cp config/model_overrides.json "$release_dir/config/"
     cp config/config_schema.json "$release_dir/config/"
     cp config/memory_estimates.json "$release_dir/config/"
+
+    local license_manifest="licenses/required-runtime-files.txt"
+    if [[ ! -f "$license_manifest" ]]; then
+        echo "Error: third-party license manifest is missing: $license_manifest"
+        exit 1
+    fi
+    while IFS= read -r license_file || [[ -n "$license_file" ]]; do
+        [[ -z "$license_file" || "$license_file" == \#* ]] && continue
+        if [[ ! -f "licenses/$license_file" ]]; then
+            echo "Error: required third-party license missing from source tree: $license_file"
+            exit 1
+        fi
+    done < "$license_manifest"
+    cp -r licenses/. "$release_dir/licenses/"
 
     local required_config_files=(
         sys.cfg

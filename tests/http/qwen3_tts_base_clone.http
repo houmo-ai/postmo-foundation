@@ -1,8 +1,8 @@
 @host = http://127.0.0.1:7901
 @modelType = qwen3_tts
 @device = 0
-@baseModelPath = D:/workspace/wtt/houmo/llm/hi.cpp/artifacts/qwen3-tts-base-v1.4.0/HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0.gguf
-@baseModel = HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0
+@baseModelPath = "E:/models/HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0-20250730.gguf"
+@baseModel = HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0-20250730
 @customVoiceModel = HiModel_xh2_qwen3-tts-1.7b-w8a16-256-2k-b1-1chip-2cores-v1.4.0_20260720
 @referenceWav = D:/workspace/wtt/houmo/imodelzoo/data/audio/clone_1.wav
 
