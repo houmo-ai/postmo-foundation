@@ -34,7 +34,8 @@ public:
     server_http_res_ptr handle_reference_debug(const server_http_req& req);
     server_http_res_ptr handle_speech_debug(const server_http_req& req);
     server_http_res_ptr handle_stateful_decoder_debug(const server_http_req& req);
-    void handle_speech(const httplib::Request& req, httplib::Response& res);
+    void handle_speech(const httplib::Request& req, httplib::Response& res,
+                       std::shared_ptr<void> request_guard = {});
 
     [[nodiscard]] const std::string& get_model_key() const { return model_key_; }
     [[nodiscard]] const std::shared_ptr<HLIEQwen3TTSModel>& model() const { return model_; }

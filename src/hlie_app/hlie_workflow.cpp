@@ -2607,6 +2607,285 @@ server_http_res_ptr HLIEWorkflow::route_llm_request(
     return attach_model_request_lease(proxy_request(req, method, name, inst1->meta.port), model_registry_, model_key, lease);
 }
 
+void HLIEWorkflow::handle_speech(const httplib::Request& req, httplib::Response& res) {
+    const auto fail = [&](const std::string& message, const error_type type) {
+        const auto error_data = format_error_response_ex(message, type, 80004);
+        const json final_response{{"error", error_data}};
+        res.set_content(safe_json_to_str(final_response), MIMETYPE_JSON);
+        res.status = json_value(error_data, "code", 500);
+    };
+    const auto body = json::parse(req.body, nullptr, false);
+    if (body.is_discarded() || !body.is_object()) {
+        fail("request body must be a JSON object", ERROR_TYPE_INVALID_REQUEST);
+        return;
+    }
+
+    if (body.contains("model") && !body.at("model").is_null() &&
+        !body.at("model").is_string()) {
+        fail("model must be a string", ERROR_TYPE_INVALID_REQUEST);
+        return;
+    }
+    const std::string requested_model =
+        body.contains("model") && body.at("model").is_string()
+            ? body.at("model").get<std::string>() : std::string();
+
+    // A concrete model id can resolve to a child process even when a different
+    // TTS model is loaded in the primary process. Keep the historical aliases
+    // (qwen3_tts, cosyvoice and tts) local so their old default behavior does
+    // not change.
+    if (!requested_model.empty()) {
+        auto instance = get_model_inst(requested_model);
+        if (instance && instance->meta.status == SERVER_MODEL_STATUS_LOADING) {
+            constexpr auto model_load_timeout = std::chrono::minutes(5);
+            const auto model_load_deadline =
+                std::chrono::steady_clock::now() + model_load_timeout;
+            std::unique_lock<std::mutex> lock(slave_mutex_);
+            const auto wait_result = wait_for_model_load(
+                slave_cv_, lock,
+                [this, &requested_model]() {
+                    const auto current = get_model_inst(requested_model);
+                    return current
+                        ? std::optional(current->meta.status) : std::nullopt;
+                },
+                model_load_deadline, req.is_connection_closed);
+
+            if (wait_result == ModelLoadWaitResult::TIMED_OUT) {
+                fail("timed out waiting for speech model to load",
+                     ERROR_TYPE_UNAVAILABLE);
+                return;
+            }
+            if (wait_result == ModelLoadWaitResult::CANCELLED) {
+                auto error_data = format_error_response(
+                    "request cancelled while waiting for speech model to load",
+                    ERROR_TYPE_UNAVAILABLE);
+                error_data["code"] = 499;
+                res.set_content(
+                    safe_json_to_str(json{{"error", error_data}}), MIMETYPE_JSON);
+                res.status = 499;
+                return;
+            }
+            if (wait_result == ModelLoadWaitResult::MISSING) {
+                fail("speech model not found while loading", ERROR_TYPE_NOT_FOUND);
+                return;
+            }
+            instance = get_model_inst(requested_model);
+        }
+        if (instance) {
+            const auto service_kind = HLIEModelServiceFactory::service_kind(instance->model_info);
+            const bool speech_instance =
+                service_kind == ModelServiceKind::Qwen3TTS ||
+                service_kind == ModelServiceKind::CosyVoice;
+            if (speech_instance && instance->meta.port != port_) {
+                if (instance->meta.status != SERVER_MODEL_STATUS_LOADED ||
+                    instance->meta.port <= 0) {
+                    fail("requested speech model is not loaded", ERROR_TYPE_UNAVAILABLE);
+                    return;
+                }
+
+                auto lease = std::make_shared<ModelRequestLease>(model_registry_, instance->key);
+                if (!lease->active()) {
+                    fail("model is not loaded", ERROR_TYPE_INVALID_REQUEST);
+                    return;
+                }
+
+                std::map<std::string, std::string> headers;
+                for (const auto& [key, value] : req.headers) {
+                    headers[key] = value;
+                }
+
+                std::string proxy_path = req.path;
+                if (!req.params.empty()) {
+                    proxy_path += "?";
+                    bool first = true;
+                    for (const auto& [key, value] : req.params) {
+                        if (!first) {
+                            proxy_path += "&";
+                        }
+                        first = false;
+                        proxy_path += httplib::encode_query_component(key) + "=" +
+                                      httplib::encode_query_component(value);
+                    }
+                }
+
+                LOG_INFO("Proxying speech request for model {} to port {} (stream={})",
+                         requested_model, instance->meta.port,
+                         json_boolish(body, "stream"));
+
+                std::shared_ptr<ServerHttpProxy> proxy;
+                try {
+                    proxy = std::make_shared<ServerHttpProxy>(
+                        "POST", "127.0.0.1", instance->meta.port, proxy_path,
+                        headers, req.body, std::map<std::string, uploaded_file>{},
+                        req.is_connection_closed, build_proxy_timeout_options());
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Failed to create speech proxy for model {} on port {}: {}",
+                              requested_model, instance->meta.port, error.what());
+                    fail("failed to connect to speech model instance", ERROR_TYPE_UNAVAILABLE);
+                    return;
+                }
+
+                res.status = proxy->status;
+                for (const auto& [key, value] : proxy->headers) {
+                    res.set_header(key, value);
+                }
+
+                if (!json_boolish(body, "stream")) {
+                    std::string complete_body;
+                    std::string chunk;
+                    while (proxy->next(chunk)) {
+                        complete_body += chunk;
+                        chunk.clear();
+                    }
+                    proxy->cancel();
+                    res.set_content(std::move(complete_body), proxy->content_type);
+                    return;
+                }
+
+                res.set_chunked_content_provider(
+                    proxy->content_type,
+                    [proxy, lease](size_t, httplib::DataSink& sink) {
+                        (void)lease;
+                        if (!sink.is_writable()) {
+                            proxy->cancel();
+                            return false;
+                        }
+
+                        std::string chunk;
+                        const bool has_next = proxy->next(chunk);
+                        if (!chunk.empty() &&
+                            !sink.write(chunk.data(), chunk.size())) {
+                            proxy->cancel();
+                            return false;
+                        }
+
+                        if (!has_next) {
+                            if (!sink.is_writable()) {
+                                proxy->cancel();
+                                return false;
+                            }
+                            const auto upstream_trailers = proxy->response_trailers();
+                            if (upstream_trailers.empty()) {
+                                sink.done();
+                            } else {
+                                httplib::Headers trailers;
+                                for (const auto& [key, value] : upstream_trailers) {
+                                    trailers.emplace(key, value);
+                                }
+                                sink.done_with_trailer(trailers);
+                            }
+                            proxy->cancel();
+                        }
+                        return true;
+                    },
+                    [proxy, lease](bool) {
+                        (void)lease;
+                        proxy->cancel();
+                    });
+                return;
+            }
+        }
+    }
+
+    enum class SpeechBackend { NONE, COSYVOICE, QWEN3_TTS };
+    SpeechBackend backend = SpeechBackend::NONE;
+    std::shared_ptr<Qwen3TTSModelService> qwen_service;
+    std::shared_ptr<CosyVoiceModelService> cosy_service;
+    std::shared_ptr<ModelRequestLease> lease;
+    {
+        std::lock_guard workflow_lock(mutex_);
+        qwen_service = model_service_manager_.qwen3_tts();
+        cosy_service = model_service_manager_.cosyvoice();
+        const bool cosy_ready = cosy_service &&
+            cosy_service->get_state() == SERVER_STATE_READY;
+        const bool qwen_ready = qwen_service &&
+            qwen_service->get_state() == SERVER_STATE_READY;
+
+        if (!requested_model.empty()) {
+            std::string requested_type;
+            std::string requested_key;
+            if (const auto instance = get_model_inst(requested_model)) {
+                requested_type = normalize_model_name(
+                    instance->model_info.get_service_kind());
+                requested_key = normalize_model_name(instance->key);
+            }
+            const std::string normalized = normalize_model_name(requested_model);
+            const std::string loaded_cosy_key = cosy_service
+                ? normalize_model_name(cosy_service->get_model_key())
+                : std::string();
+            const std::string loaded_qwen_key = qwen_service
+                ? normalize_model_name(qwen_service->get_model_key())
+                : std::string();
+            const bool cosy_alias =
+                normalized == HLIEModelType::COSYVOICE ||
+                normalized == HLIEModelType::TTS;
+            const bool qwen_alias =
+                normalized == HLIEModelType::QWEN3_TTS ||
+                normalized == "qwen3-tts";
+            const bool cosy_model_match = !loaded_cosy_key.empty() &&
+                (normalized == loaded_cosy_key ||
+                 requested_key == loaded_cosy_key);
+            const bool qwen_model_match = !loaded_qwen_key.empty() &&
+                (normalized == loaded_qwen_key ||
+                 requested_key == loaded_qwen_key);
+            if (cosy_alias || cosy_model_match) {
+                backend = SpeechBackend::COSYVOICE;
+            } else if (qwen_alias || qwen_model_match) {
+                backend = SpeechBackend::QWEN3_TTS;
+            } else {
+                LOG_WARN(
+                    "Speech request rejected because requested model is not the "
+                    "loaded speech instance: requested={}, requested_type={}, "
+                    "loaded_cosy={}, loaded_qwen={}",
+                    requested_model, requested_type, loaded_cosy_key,
+                    loaded_qwen_key);
+                fail("requested speech model is not loaded",
+                     ERROR_TYPE_INVALID_REQUEST);
+                return;
+            }
+        } else if (cosy_ready) {
+            // Backward compatibility: /v1/audio/speech without a model has
+            // always meant CosyVoice.
+            backend = SpeechBackend::COSYVOICE;
+        } else if (qwen_ready) {
+            fail("model is required when using Qwen3-TTS",
+                 ERROR_TYPE_INVALID_REQUEST);
+            return;
+        }
+
+        if (backend == SpeechBackend::QWEN3_TTS && !qwen_ready) {
+            fail("Qwen3-TTS model is not available", ERROR_TYPE_UNAVAILABLE);
+            return;
+        }
+        if (backend == SpeechBackend::COSYVOICE && !cosy_ready) {
+            fail("CosyVoice model is not available", ERROR_TYPE_UNAVAILABLE);
+            return;
+        }
+        if (backend == SpeechBackend::NONE) {
+            fail("No speech model is available", ERROR_TYPE_UNAVAILABLE);
+            return;
+        }
+        const std::string model_key = backend == SpeechBackend::QWEN3_TTS
+            ? qwen_service->get_model_key() : cosy_service->get_model_key();
+        lease = std::make_shared<ModelRequestLease>(model_registry_, model_key);
+        if (!lease->active()) {
+            fail("model is not loaded", ERROR_TYPE_INVALID_REQUEST);
+            return;
+        }
+    }
+
+    const char* backend_name = backend == SpeechBackend::QWEN3_TTS
+        ? HLIEModelType::QWEN3_TTS : HLIEModelType::COSYVOICE;
+    res.set_header("X-HLIE-TTS-Backend", backend_name);
+    LOG_INFO("Speech request routed to {} (requested_model={})",
+             backend_name,
+             requested_model.empty() ? "<legacy-default>" : requested_model);
+    if (backend == SpeechBackend::QWEN3_TTS) {
+        qwen_service->handle_speech(req, res, lease);
+    } else {
+        cosy_service->handle_speech(req, res);
+    }
+}
+
 std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
     auto make_handler = [this](auto func) { return [this, func](const server_http_req& req) { return (this->*func)(req); }; };
     auto route_llm = [this](const server_http_req& req, auto handler, const std::string& method = "POST") -> server_http_res_ptr {
@@ -2739,126 +3018,7 @@ std::vector<HLIEWorkflow::RouteConfig> HLIEWorkflow::get_route_configs() {
                 false,
                 HLIEModelType::TTS,
                 [this](const httplib::Request& req, httplib::Response& res) {
-                    const auto fail = [&](const std::string& message, const error_type type) {
-                        const auto error_data = format_error_response_ex(message, type, 80004);
-                        const json final_response{{"error", error_data}};
-                        res.set_content(safe_json_to_str(final_response), MIMETYPE_JSON);
-                        res.status = json_value(error_data, "code", 500);
-                    };
-                    const auto body = json::parse(req.body, nullptr, false);
-                    if (body.is_discarded() || !body.is_object()) {
-                        fail("request body must be a JSON object", ERROR_TYPE_INVALID_REQUEST);
-                        return;
-                    }
-
-                    enum class SpeechBackend { NONE, COSYVOICE, QWEN3_TTS };
-                    SpeechBackend backend = SpeechBackend::NONE;
-                    const std::string requested_model =
-                        body.contains("model") && body.at("model").is_string()
-                            ? body.at("model").get<std::string>() : std::string();
-                    if (body.contains("model") && !body.at("model").is_null() &&
-                        !body.at("model").is_string()) {
-                        fail("model must be a string", ERROR_TYPE_INVALID_REQUEST);
-                        return;
-                    }
-
-                    std::shared_ptr<Qwen3TTSModelService> qwen_service;
-                    std::shared_ptr<CosyVoiceModelService> cosy_service;
-                    std::unique_ptr<ModelRequestLease> lease;
-                    {
-                        std::lock_guard workflow_lock(mutex_);
-                        qwen_service = model_service_manager_.qwen3_tts();
-                        cosy_service = model_service_manager_.cosyvoice();
-                        const bool cosy_ready = cosy_service &&
-                            cosy_service->get_state() == SERVER_STATE_READY;
-                        const bool qwen_ready = qwen_service &&
-                            qwen_service->get_state() == SERVER_STATE_READY;
-
-                        if (!requested_model.empty()) {
-                            std::string requested_type;
-                            std::string requested_key;
-                            if (const auto instance = get_model_inst(requested_model)) {
-                                requested_type = normalize_model_name(
-                                    instance->model_info.get_service_kind());
-                                requested_key = normalize_model_name(instance->key);
-                            }
-                            const std::string normalized = normalize_model_name(requested_model);
-                            const std::string loaded_cosy_key = cosy_service
-                                ? normalize_model_name(cosy_service->get_model_key())
-                                : std::string();
-                            const std::string loaded_qwen_key = qwen_service
-                                ? normalize_model_name(qwen_service->get_model_key())
-                                : std::string();
-                            const bool cosy_alias =
-                                normalized == HLIEModelType::COSYVOICE ||
-                                normalized == HLIEModelType::TTS;
-                            const bool qwen_alias =
-                                normalized == HLIEModelType::QWEN3_TTS ||
-                                normalized == "qwen3-tts";
-                            const bool cosy_model_match = !loaded_cosy_key.empty() &&
-                                (normalized == loaded_cosy_key ||
-                                 requested_key == loaded_cosy_key);
-                            const bool qwen_model_match = !loaded_qwen_key.empty() &&
-                                (normalized == loaded_qwen_key ||
-                                 requested_key == loaded_qwen_key);
-                            if (cosy_alias || cosy_model_match) {
-                                backend = SpeechBackend::COSYVOICE;
-                            } else if (qwen_alias || qwen_model_match) {
-                                backend = SpeechBackend::QWEN3_TTS;
-                            } else {
-                                LOG_WARN(
-                                    "Speech request rejected because requested model is not the "
-                                    "loaded speech instance: requested={}, requested_type={}, "
-                                    "loaded_cosy={}, loaded_qwen={}",
-                                    requested_model, requested_type, loaded_cosy_key,
-                                    loaded_qwen_key);
-                                fail("requested speech model is not loaded",
-                                     ERROR_TYPE_INVALID_REQUEST);
-                                return;
-                            }
-                        } else if (cosy_ready) {
-                            // Backward compatibility: /v1/audio/speech without
-                            // a model has always meant CosyVoice, including its
-                            // prompt_text/prompt_wav_path voice-clone fields.
-                            backend = SpeechBackend::COSYVOICE;
-                        } else if (qwen_ready) {
-                            fail("model is required when using Qwen3-TTS",
-                                 ERROR_TYPE_INVALID_REQUEST);
-                            return;
-                        }
-
-                        if (backend == SpeechBackend::QWEN3_TTS && !qwen_ready) {
-                            fail("Qwen3-TTS model is not available", ERROR_TYPE_UNAVAILABLE);
-                            return;
-                        }
-                        if (backend == SpeechBackend::COSYVOICE && !cosy_ready) {
-                            fail("CosyVoice model is not available", ERROR_TYPE_UNAVAILABLE);
-                            return;
-                        }
-                        if (backend == SpeechBackend::NONE) {
-                            fail("No speech model is available", ERROR_TYPE_UNAVAILABLE);
-                            return;
-                        }
-                        const std::string model_key = backend == SpeechBackend::QWEN3_TTS
-                            ? qwen_service->get_model_key() : cosy_service->get_model_key();
-                        lease = std::make_unique<ModelRequestLease>(model_registry_, model_key);
-                        if (!lease->active()) {
-                            fail("model is not loaded", ERROR_TYPE_INVALID_REQUEST);
-                            return;
-                        }
-                    }
-
-                    const char* backend_name = backend == SpeechBackend::QWEN3_TTS
-                        ? HLIEModelType::QWEN3_TTS : HLIEModelType::COSYVOICE;
-                    res.set_header("X-HLIE-TTS-Backend", backend_name);
-                    LOG_INFO("Speech request routed to {} (requested_model={})",
-                             backend_name,
-                             requested_model.empty() ? "<legacy-default>" : requested_model);
-                    if (backend == SpeechBackend::QWEN3_TTS) {
-                        qwen_service->handle_speech(req, res);
-                    } else {
-                        cosy_service->handle_speech(req, res);
-                    }
+                    handle_speech(req, res);
                 },
             },
             {

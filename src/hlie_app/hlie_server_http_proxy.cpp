@@ -111,17 +111,25 @@ HLIE_NAMESPACE_BEGIN
 // used for streaming data between threads
 template<typename T>
 struct pipe_t {
+    static constexpr size_t max_queue_size = 16;
+
     std::mutex mutex;
     std::condition_variable cv;
     std::queue<T> queue;
-    std::atomic<bool> writer_closed{false};
-    std::atomic<bool> reader_closed{false};
+    bool writer_closed = false;
+    bool reader_closed = false;
     void close_write() {
-        writer_closed.store(true, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lk(mutex);
+            writer_closed = true;
+        }
         cv.notify_all();
     }
     void close_read() {
-        reader_closed.store(true, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lk(mutex);
+            reader_closed = true;
+        }
         cv.notify_all();
     }
     bool read(T & output, const std::function<bool()> & should_stop) {
@@ -131,21 +139,32 @@ struct pipe_t {
             if (!queue.empty()) {
                 output = std::move(queue.front());
                 queue.pop();
+                cv.notify_all();
                 return true;
             }
-            if (writer_closed.load()) {
+            if (writer_closed) {
                 return false; // clean EOF
             }
             if (should_stop()) {
-                close_read(); // signal broken pipe to writer
+                // The reader already owns mutex here. Update the predicate
+                // under that lock, then notify the writer after unlocking so
+                // cancellation cannot be lost between its predicate check and
+                // wait.
+                reader_closed = true;
+                lk.unlock();
+                cv.notify_all();
                 return false; // cancelled / reader no longer alive
             }
             cv.wait_for(lk, poll_interval);
         }
     }
     bool write(T && data) {
-        std::lock_guard<std::mutex> lk(mutex);
-        if (reader_closed.load()) {
+        std::unique_lock<std::mutex> lk(mutex);
+        cv.wait(lk, [&] {
+            return reader_closed || writer_closed ||
+                   queue.size() < max_queue_size;
+        });
+        if (reader_closed || writer_closed) {
             return false; // broken pipe
         }
         queue.push(std::move(data));
@@ -153,6 +172,39 @@ struct pipe_t {
         return true;
     }
 };
+
+struct ServerHttpProxy::trailer_state_t {
+    mutable std::mutex mutex;
+    std::map<std::string, std::string> trailers;
+};
+
+
+ServerHttpProxy::~ServerHttpProxy() {
+    cancel();
+}
+
+void ServerHttpProxy::cancel() {
+    std::function<void()> cleanup_to_run;
+    {
+        std::lock_guard lock(cleanup_mutex_);
+        if (cleaned_up_) {
+            return;
+        }
+        cleaned_up_ = true;
+        cleanup_to_run = cleanup;
+    }
+    if (cleanup_to_run) {
+        cleanup_to_run();
+    }
+}
+
+std::map<std::string, std::string> ServerHttpProxy::response_trailers() const {
+    if (!trailer_state_) {
+        return {};
+    }
+    std::lock_guard lock(trailer_state_->mutex);
+    return trailer_state_->trailers;
+}
 
 
 ServerHttpProxy::ServerHttpProxy(const std::string& method, const std::string& host, int port, const std::string& path,
@@ -163,6 +215,9 @@ ServerHttpProxy::ServerHttpProxy(const std::string& method, const std::string& h
 // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::Client>(host, port);
     auto pipe = std::make_shared<pipe_t<msg_t>>();
+    auto response_started = std::make_shared<std::atomic<bool>>(false);
+    trailer_state_ = std::make_shared<trailer_state_t>();
+    auto trailer_state = trailer_state_;
 
     // setup Client
     const auto timeouts = timeout_options.normalized();
@@ -191,7 +246,7 @@ ServerHttpProxy::ServerHttpProxy(const std::string& method, const std::string& h
 
     // wire up the HTTP client
     // note: do NOT capture `this` pointer, as it may be destroyed before the thread ends
-    httplib::ResponseHandler response_handler = [pipe, cli](const httplib::Response & response) {
+    httplib::ResponseHandler response_handler = [pipe, response_started](const httplib::Response & response) {
         msg_t msg;
         msg.status = response.status;
         for (const auto & [key, value] : response.headers) {
@@ -205,7 +260,9 @@ ServerHttpProxy::ServerHttpProxy(const std::string& method, const std::string& h
             }
             msg.headers[key] = value;
         }
-        return pipe->write(std::move(msg)); // send headers first
+        const bool accepted = pipe->write(std::move(msg)); // send headers first
+        response_started->store(accepted);
+        return accepted;
     };
     httplib::ContentReceiverWithProgress content_receiver = [pipe](const char * data, size_t data_length, size_t, size_t) {
         // send data chunks
@@ -262,13 +319,23 @@ ServerHttpProxy::ServerHttpProxy(const std::string& method, const std::string& h
 
     // start the proxy thread
     LOG_DEBUG("start proxy thread {} {}", req.method.c_str(), req.path.c_str());
-    this->thread = std::thread([cli, pipe, req]() mutable {
+    this->thread = std::thread([cli, pipe, req, trailer_state, response_started]() mutable {
         auto result = cli->send(std::move(req));
-        if (result.error() != httplib::Error::Success) {
+        if (result.error() == httplib::Error::Success) {
+            std::lock_guard lock(trailer_state->mutex);
+            for (const auto& [key, value] : result->trailers) {
+                trailer_state->trailers[key] = value;
+            }
+        } else {
             auto err_str = httplib::to_string(result.error());
             LOG_ERROR("http client error: {}", err_str.c_str());
-            pipe->write({{}, 500, "", ""}); // header
-            pipe->write({{}, 0, "proxy error: " + err_str, ""}); // body
+            // Once response headers have been forwarded, appending a textual
+            // proxy error would corrupt a binary/audio stream. Only synthesize
+            // an HTTP 500 body when the upstream failed before it responded.
+            if (!response_started->load()) {
+                pipe->write({{}, 500, "", "text/plain; charset=utf-8"});
+                pipe->write({{}, 0, "proxy error: " + err_str, ""});
+            }
         }
         pipe->close_write(); // signal EOF to reader
         LOG_DEBUG("client request thread ended");

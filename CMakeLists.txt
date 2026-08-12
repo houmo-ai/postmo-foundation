@@ -17,6 +17,15 @@ endif()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# Linux packages place executables in bin/ and all shared libraries in lib/.
+# Use the install RPATH for build artifacts too because the packaging scripts
+# copy directly from the build tree instead of running cmake --install.
+if (UNIX AND NOT APPLE)
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
+    set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib")
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
+endif ()
+
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/bin/config)
 configure_file(
         ${CMAKE_SOURCE_DIR}/config/config_schema.json

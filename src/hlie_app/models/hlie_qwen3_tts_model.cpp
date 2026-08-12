@@ -1129,7 +1129,9 @@ bool HLIEQwen3TTSModel::generate_base_codec_frames_unlocked(
     const std::vector<float>& reference_pcm, const int max_frames,
     Qwen3TTSCodecFramesDebugResult& result, const bool do_sample,
     std::string& error,
-    std::vector<std::vector<int32_t>>* reference_codes_output) {
+    std::vector<std::vector<int32_t>>* reference_codes_output,
+    const CodecFrameCallback& on_frame,
+    const Qwen3TTSStopCallback& should_stop) {
     result = {};
     if (max_frames <= 0 || max_frames >= context_length_) {
         error = "max_frames must be between 1 and the model context length";
@@ -1164,6 +1166,10 @@ bool HLIEQwen3TTSModel::generate_base_codec_frames_unlocked(
         int32_t talker_token = result.prefill.first_codec_token;
         int32_t past_seq_length = result.prefill.prompt_length;
         for (int frame_index = 0; frame_index < max_frames; ++frame_index) {
+            if (should_stop && should_stop()) {
+                error = "Qwen3-TTS streaming synthesis was cancelled";
+                return false;
+            }
             result.talker_tokens.push_back(talker_token);
             std::vector<int32_t> predictor_tokens;
             std::vector<tcim::Tensor> predictor_embeds;
@@ -1177,6 +1183,12 @@ bool HLIEQwen3TTSModel::generate_base_codec_frames_unlocked(
             frame.push_back(talker_token);
             frame.insert(frame.end(), predictor_tokens.begin(), predictor_tokens.end());
             result.codec_frames.push_back(std::move(frame));
+            if (on_frame && !on_frame(result.codec_frames.back())) {
+                if (error.empty()) {
+                    error = "Qwen3-TTS audio stream consumer stopped";
+                }
+                return false;
+            }
             if (frame_index + 1 >= max_frames) {
                 break;
             }
@@ -1524,7 +1536,8 @@ bool HLIEQwen3TTSModel::debug_generate_clone_codec_frames(
 bool HLIEQwen3TTSModel::generate_codec_frames_unlocked(
     const std::string& text, const std::string& language, const std::string& speaker,
     const int max_frames, Qwen3TTSCodecFramesDebugResult& result, const bool do_sample,
-    std::string& error) {
+    std::string& error, const CodecFrameCallback& on_frame,
+    const Qwen3TTSStopCallback& should_stop) {
     result = {};
     if (max_frames <= 0 || max_frames > context_length_) {
         error = "max_frames must be between 1 and the model context length";
@@ -1546,6 +1559,10 @@ bool HLIEQwen3TTSModel::generate_codec_frames_unlocked(
         int32_t talker_token = result.prefill.first_codec_token;
         int32_t past_seq_length = result.prefill.prompt_length;
         for (int frame_index = 0; frame_index < max_frames; ++frame_index) {
+            if (should_stop && should_stop()) {
+                error = "Qwen3-TTS streaming synthesis was cancelled";
+                return false;
+            }
             result.talker_tokens.push_back(talker_token);
             std::vector<int32_t> predictor_tokens;
             std::vector<tcim::Tensor> predictor_embeds;
@@ -1561,6 +1578,12 @@ bool HLIEQwen3TTSModel::generate_codec_frames_unlocked(
             frame.push_back(talker_token);
             frame.insert(frame.end(), predictor_tokens.begin(), predictor_tokens.end());
             result.codec_frames.push_back(std::move(frame));
+            if (on_frame && !on_frame(result.codec_frames.back())) {
+                if (error.empty()) {
+                    error = "Qwen3-TTS audio stream consumer stopped";
+                }
+                return false;
+            }
             if (frame_index + 1 >= max_frames) {
                 break;
             }
@@ -1630,6 +1653,35 @@ bool HLIEQwen3TTSModel::create_stateful_decoder_state(
         error = std::string("failed to create Stateful Decoder state: ") + ex.what();
         return false;
     }
+}
+
+bool HLIEQwen3TTSModel::prime_stateful_decoder_with_reference(
+    const std::vector<std::vector<int32_t>>& reference_codes,
+    StatefulDecoderState& state, std::string& error) {
+    if (reference_codes.empty()) {
+        error = "Base Stateful Decoder requires reference codec frames";
+        return false;
+    }
+    for (size_t begin = 0; begin < reference_codes.size();
+         begin += static_cast<size_t>(stateful_chunk_size_)) {
+        const size_t end = std::min(
+            reference_codes.size(),
+            begin + static_cast<size_t>(stateful_chunk_size_));
+        std::vector<std::vector<int32_t>> chunk(
+            reference_codes.begin() + static_cast<std::ptrdiff_t>(begin),
+            reference_codes.begin() + static_cast<std::ptrdiff_t>(end));
+        if (chunk.size() < static_cast<size_t>(stateful_chunk_size_)) {
+            const auto pad_frame = chunk.back();
+            while (chunk.size() < static_cast<size_t>(stateful_chunk_size_)) {
+                chunk.push_back(pad_frame);
+            }
+        }
+        std::vector<float> discarded;
+        if (!decode_stateful_chunk(chunk, false, state, discarded, error)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool HLIEQwen3TTSModel::decode_stateful_chunk(
@@ -1796,27 +1848,8 @@ bool HLIEQwen3TTSModel::decode_codec_frames_with_reference_unlocked(
         return false;
     }
     try {
-        for (size_t begin = 0; begin < reference_codes.size();
-             begin += static_cast<size_t>(stateful_chunk_size_)) {
-            const size_t end = std::min(
-                reference_codes.size(),
-                begin + static_cast<size_t>(stateful_chunk_size_));
-            std::vector<std::vector<int32_t>> chunk(
-                reference_codes.begin() + static_cast<std::ptrdiff_t>(begin),
-                reference_codes.begin() + static_cast<std::ptrdiff_t>(end));
-            if (chunk.size() < static_cast<size_t>(stateful_chunk_size_)) {
-                if (chunk.empty()) {
-                    break;
-                }
-                const auto pad_frame = chunk.back();
-                while (chunk.size() < static_cast<size_t>(stateful_chunk_size_)) {
-                    chunk.push_back(pad_frame);
-                }
-            }
-            std::vector<float> discarded;
-            if (!decode_stateful_chunk(chunk, false, state, discarded, error)) {
-                return false;
-            }
+        if (!prime_stateful_decoder_with_reference(reference_codes, state, error)) {
+            return false;
         }
 
         for (size_t begin = 0; begin < frames.size();
@@ -1870,6 +1903,191 @@ bool HLIEQwen3TTSModel::synthesize_clone(
 
     return decode_codec_frames_with_reference_unlocked(
         reference_codes, result.codec_frames, result.audio, error);
+}
+
+bool HLIEQwen3TTSModel::synthesize_stream(
+    const std::string& text, const std::string& language,
+    const std::string& speaker, const int max_frames,
+    Qwen3TTSStreamResult& result,
+    const Qwen3TTSAudioChunkCallback& on_audio_chunk,
+    const Qwen3TTSStopCallback& should_stop, std::string& error,
+    const bool require_eos, const bool do_sample, const uint32_t seed) {
+    std::lock_guard lock(inference_mutex_);
+    result = {};
+    error.clear();
+    if (!on_audio_chunk) {
+        error = "Qwen3-TTS streaming synthesis requires an audio callback";
+        return false;
+    }
+    if (do_sample) {
+        sampling_rng_.seed(seed);
+    }
+
+    StatefulDecoderState decoder_state;
+    if (!create_stateful_decoder_state(decoder_state, error)) {
+        return false;
+    }
+    std::vector<std::vector<int32_t>> pending_frames;
+    pending_frames.reserve(static_cast<size_t>(stateful_chunk_size_));
+    const auto emit_audio = [&](const std::vector<float>& audio) {
+        if (audio.empty()) {
+            return true;
+        }
+        result.audio_samples += audio.size();
+        if (!on_audio_chunk(audio)) {
+            error = "Qwen3-TTS audio stream consumer stopped";
+            return false;
+        }
+        return true;
+    };
+    const auto on_frame = [&](const std::vector<int32_t>& frame) {
+        pending_frames.push_back(frame);
+        ++result.codec_frames;
+        if (pending_frames.size() < static_cast<size_t>(stateful_chunk_size_)) {
+            return true;
+        }
+        std::vector<float> audio;
+        if (!decode_stateful_chunk(
+                pending_frames, false, decoder_state, audio, error)) {
+            return false;
+        }
+        pending_frames.clear();
+        return emit_audio(audio);
+    };
+
+    Qwen3TTSCodecFramesDebugResult generated;
+    if (!generate_codec_frames_unlocked(
+            text, language, speaker, max_frames, generated, do_sample, error,
+            on_frame, should_stop)) {
+        result.reached_eos = generated.reached_eos;
+        return false;
+    }
+    result.reached_eos = generated.reached_eos;
+    if (require_eos && !result.reached_eos) {
+        error = "Qwen3-TTS generation reached max_frames before EOS";
+        return false;
+    }
+    if (should_stop && should_stop()) {
+        error = "Qwen3-TTS streaming synthesis was cancelled";
+        return false;
+    }
+
+    std::vector<float> final_audio;
+    if (!decode_stateful_chunk(
+            pending_frames, true, decoder_state, final_audio, error) ||
+        !emit_audio(final_audio)) {
+        return false;
+    }
+    LOG_INFO("Qwen3-TTS streamed {} codec frames into {} samples (eos={})",
+             result.codec_frames, result.audio_samples, result.reached_eos);
+    return true;
+}
+
+bool HLIEQwen3TTSModel::synthesize_clone_stream(
+    const std::string& text, const std::string& language,
+    const std::string& reference_text,
+    const std::vector<float>& reference_pcm, const int max_frames,
+    Qwen3TTSStreamResult& result,
+    const Qwen3TTSAudioChunkCallback& on_audio_chunk,
+    const Qwen3TTSStopCallback& should_stop, std::string& error,
+    const bool require_eos, const bool do_sample, const uint32_t seed) {
+    std::lock_guard lock(inference_mutex_);
+    result = {};
+    error.clear();
+    if (config_.variant != Qwen3TTSVariant::Base) {
+        error = "Qwen3-TTS model is not a Base variant";
+        return false;
+    }
+    if (!on_audio_chunk) {
+        error = "Qwen3-TTS streaming synthesis requires an audio callback";
+        return false;
+    }
+    if (do_sample) {
+        sampling_rng_.seed(seed);
+    }
+
+    StatefulDecoderState decoder_state;
+    if (!create_stateful_decoder_state(decoder_state, error)) {
+        return false;
+    }
+    std::vector<std::vector<int32_t>> reference_codes;
+    std::vector<std::vector<int32_t>> pending_frames;
+    pending_frames.reserve(static_cast<size_t>(stateful_chunk_size_));
+    bool reference_primed = false;
+    const auto emit_audio = [&](const std::vector<float>& audio) {
+        if (audio.empty()) {
+            return true;
+        }
+        result.audio_samples += audio.size();
+        if (!on_audio_chunk(audio)) {
+            error = "Qwen3-TTS audio stream consumer stopped";
+            return false;
+        }
+        return true;
+    };
+    const auto on_frame = [&](const std::vector<int32_t>& frame) {
+        if (!reference_primed) {
+            if (!prime_stateful_decoder_with_reference(
+                    reference_codes, decoder_state, error)) {
+                return false;
+            }
+            reference_primed = true;
+        }
+        pending_frames.push_back(frame);
+        ++result.codec_frames;
+        // Base decoding historically marks its last generated chunk as final,
+        // including a full-sized chunk. Keep one full chunk buffered until the
+        // next frame proves it is non-final so stream=false and stream=true use
+        // the same Stateful Decoder finalization semantics.
+        if (pending_frames.size() <= static_cast<size_t>(stateful_chunk_size_)) {
+            return true;
+        }
+        std::vector<std::vector<int32_t>> chunk(
+            pending_frames.begin(),
+            pending_frames.begin() + stateful_chunk_size_);
+        std::vector<float> audio;
+        if (!decode_stateful_chunk(
+                chunk, false, decoder_state, audio, error)) {
+            return false;
+        }
+        pending_frames.erase(
+            pending_frames.begin(),
+            pending_frames.begin() + stateful_chunk_size_);
+        return emit_audio(audio);
+    };
+
+    Qwen3TTSCodecFramesDebugResult generated;
+    if (!generate_base_codec_frames_unlocked(
+            text, language, reference_text, reference_pcm, max_frames,
+            generated, do_sample, error, &reference_codes, on_frame,
+            should_stop)) {
+        result.reached_eos = generated.reached_eos;
+        return false;
+    }
+    result.reached_eos = generated.reached_eos;
+    if (require_eos && !result.reached_eos) {
+        error = "Qwen3-TTS Base generation reached max_frames before EOS";
+        return false;
+    }
+    if (should_stop && should_stop()) {
+        error = "Qwen3-TTS streaming synthesis was cancelled";
+        return false;
+    }
+    if (!reference_primed &&
+        !prime_stateful_decoder_with_reference(
+            reference_codes, decoder_state, error)) {
+        return false;
+    }
+
+    std::vector<float> final_audio;
+    if (!decode_stateful_chunk(
+            pending_frames, true, decoder_state, final_audio, error) ||
+        !emit_audio(final_audio)) {
+        return false;
+    }
+    LOG_INFO("Qwen3-TTS Base streamed {} codec frames into {} samples (eos={})",
+             result.codec_frames, result.audio_samples, result.reached_eos);
+    return true;
 }
 
 bool HLIEQwen3TTSModel::decode_codec_frames_unlocked(

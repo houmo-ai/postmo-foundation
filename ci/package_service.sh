@@ -206,7 +206,7 @@ package_service() {
     cp build/bin/libhlie*.so "$release_dir/lib/" || true
     cp third_party/llama.cpp_houmo/lib/*.so* "$release_dir/lib/" || true
     cp build/bin/houmo-llm-hi-cpp-linux "$release_dir/bin/HLIECpp" || true
-    cp samples/zero_shot_prompt.wav "$release_dir/samples/zero_shot_prompt.wav" || true
+    cp samples/zero_shot_prompt.wav "$release_dir/samples/zero_shot_prompt.wav"
     cp config/linux/sys.cfg "$release_dir/config/sys.cfg"
     cp config/model_presets.json "$release_dir/config/model_presets.json"
     cp config/model_overrides.json "$release_dir/config/model_overrides.json"
@@ -219,6 +219,7 @@ package_service() {
         exit 1
     fi
     while IFS= read -r license_file || [[ -n "$license_file" ]]; do
+        license_file="${license_file%$'\r'}"
         [[ -z "$license_file" || "$license_file" == \#* ]] && continue
         if [[ ! -f "licenses/$license_file" ]]; then
             echo "Error: required third-party license missing from source tree: $license_file"
@@ -246,7 +247,12 @@ package_service() {
     cp third_party/uwebsockets/bin/libuv.so "$release_dir/lib/" || true
     cp third_party/samplerate/lib/libsamplerate.so.* "$release_dir/lib/" || true
     cp third_party/kaldi-native-fbank/lib/libkaldi-native-fbank-core.so "$release_dir/lib/" || true
-    cp third_party/houmo/lib/libhal_xh2a.so.1.0 "$release_dir/lib/" || true
+    local hal_libraries=(third_party/houmo/lib/libhal_xh2a.so*)
+    if [[ -e "${hal_libraries[0]}" ]]; then
+        cp -a "${hal_libraries[@]}" "$release_dir/lib/"
+    else
+        echo "Warning: optional HAL runtime library was not found; skipping libhal_xh2a.so*"
+    fi
     cp third_party/pdfium/lib/*.so "$release_dir/lib/" || true
     cp third_party/pdfium/bin/icudtl.dat "$release_dir/bin/" || true
     cp third_party/pdfium/bin/icudtl.dat "$release_dir/lib/" || true
@@ -262,8 +268,27 @@ package_service() {
     cp -r ci/scripts "$release_dir"
     cp ci/HLIECpp.service "$release_dir"
 
+    # These files may come from a Windows checkout. Bash heredoc delimiters and
+    # shebangs require Unix line endings in the generated Linux package.
+    if ! sed -i 's/\r$//' "$release_dir/create_run_package.sh" "$release_dir"/scripts/*.sh; then
+        echo "Error: failed to normalize Linux package scripts"
+        exit 1
+    fi
+
+    if command -v readelf >/dev/null 2>&1; then
+        local executable_rpath
+        executable_rpath=$(readelf -d "$release_dir/bin/HLIECpp" | grep -E '[(](RPATH|RUNPATH)[)]' || true)
+        if [[ "$executable_rpath" != *'$ORIGIN/../lib'* ]]; then
+            echo 'Error: packaged HLIECpp is missing the required $ORIGIN/../lib RPATH'
+            exit 1
+        fi
+    fi
+
     cd "$release_dir"
-    bash ./create_run_package.sh "$ARCH"
+    if ! bash ./create_run_package.sh "$ARCH"; then
+        echo "Error: failed to create Linux run package"
+        exit 1
+    fi
     cd -
 
     echo "Release files have been organized under: $release_dir"

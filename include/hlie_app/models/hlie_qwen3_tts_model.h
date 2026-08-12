@@ -2,6 +2,7 @@
 #define HLIE_QWEN3_TTS_MODEL_H
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -79,6 +80,16 @@ struct Qwen3TTSSynthesisResult {
     bool reached_eos = false;
 };
 
+struct Qwen3TTSStreamResult {
+    size_t codec_frames = 0;
+    size_t audio_samples = 0;
+    bool reached_eos = false;
+};
+
+using Qwen3TTSAudioChunkCallback =
+    std::function<bool(const std::vector<float>&)>;
+using Qwen3TTSStopCallback = std::function<bool()>;
+
 struct Qwen3TTSReferenceDebugResult {
     int32_t valid_frames = 0;
     std::vector<int64_t> codec_shape;
@@ -120,6 +131,23 @@ public:
                           int max_frames, Qwen3TTSSynthesisResult& result,
                           std::string& error, bool require_eos = false,
                           bool do_sample = false, uint32_t seed = 1024U);
+    bool synthesize_stream(
+        const std::string& text, const std::string& language,
+        const std::string& speaker, int max_frames,
+        Qwen3TTSStreamResult& result,
+        const Qwen3TTSAudioChunkCallback& on_audio_chunk,
+        const Qwen3TTSStopCallback& should_stop, std::string& error,
+        bool require_eos = false, bool do_sample = false,
+        uint32_t seed = 1024U);
+    bool synthesize_clone_stream(
+        const std::string& text, const std::string& language,
+        const std::string& reference_text,
+        const std::vector<float>& reference_pcm, int max_frames,
+        Qwen3TTSStreamResult& result,
+        const Qwen3TTSAudioChunkCallback& on_audio_chunk,
+        const Qwen3TTSStopCallback& should_stop, std::string& error,
+        bool require_eos = false, bool do_sample = false,
+        uint32_t seed = 1024U);
     bool debug_reference_audio(const std::vector<float>& reference_pcm,
                                Qwen3TTSReferenceDebugResult& result,
                                std::string& error);
@@ -136,6 +164,9 @@ public:
     [[nodiscard]] int stateful_chunk_size() const { return stateful_chunk_size_; }
 
 private:
+    using CodecFrameCallback =
+        std::function<bool(const std::vector<int32_t>&)>;
+
     bool load_metadata(std::string& error);
     bool load_module(const std::string& tensor_name, std::shared_ptr<tcim::Module>& module,
                      const std::vector<std::string>& dummy_names, std::string& error);
@@ -162,7 +193,9 @@ private:
                                         const std::string& language,
                                         const std::string& speaker, int max_frames,
                                         Qwen3TTSCodecFramesDebugResult& result,
-                                        bool do_sample, std::string& error);
+                                        bool do_sample, std::string& error,
+                                        const CodecFrameCallback& on_frame = {},
+                                        const Qwen3TTSStopCallback& should_stop = {});
     bool encode_reference_audio(const std::vector<float>& pcm,
                                 std::vector<std::vector<int32_t>>& reference_codes,
                                 tcim::Tensor& speaker_embedding,
@@ -183,7 +216,9 @@ private:
         const std::vector<float>& reference_pcm, int max_frames,
         Qwen3TTSCodecFramesDebugResult& result, bool do_sample,
         std::string& error,
-        std::vector<std::vector<int32_t>>* reference_codes_output = nullptr);
+        std::vector<std::vector<int32_t>>* reference_codes_output = nullptr,
+        const CodecFrameCallback& on_frame = {},
+        const Qwen3TTSStopCallback& should_stop = {});
     bool decode_codec_frames_with_reference_unlocked(
         const std::vector<std::vector<int32_t>>& reference_codes,
         const std::vector<std::vector<int32_t>>& frames,
@@ -196,6 +231,9 @@ private:
         bool device_backed = false;
     };
     bool create_stateful_decoder_state(StatefulDecoderState& state, std::string& error);
+    bool prime_stateful_decoder_with_reference(
+        const std::vector<std::vector<int32_t>>& reference_codes,
+        StatefulDecoderState& state, std::string& error);
     bool decode_stateful_chunk(const std::vector<std::vector<int32_t>>& frames,
                                bool is_final, StatefulDecoderState& state,
                                std::vector<float>& audio, std::string& error);

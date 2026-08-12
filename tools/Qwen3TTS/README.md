@@ -100,25 +100,35 @@ temporary model-specific verification routes:
 - `POST /hlie/v1/qwen3_tts/speech_debug`
 
 The debug speech and codec-frame routes use deterministic greedy generation for
-Python/C++ graph comparison. Base requests must provide both `prompt_text` (the
-reference transcript) and `prompt_wav_path` (a local WAV file); the aliases
+Python/C++ graph comparison. Base debug requests must provide both `prompt_text`
+(the reference transcript) and `prompt_wav_path` (a local WAV file); the aliases
 `reference_text` and `reference_audio_path` are also accepted. The native
 frontend resamples the reference to 24 kHz, runs the speech-tokenizer encoder
 and speaker encoder, and primes the Stateful Decoder with the reference codec
 before decoding clone audio. References longer than the static tokenizer
 encoder window are truncated in the same way as `demo_base.py`; the speaker
 mel frontend independently trims to the encoder's configured frame count. See
-`tests/http/qwen3_tts_client.http` for Base
+`tests/http/tts/qwen3_tts_client.http` for Base
 reference, clone, load, and unload requests.
 
-The synchronous pipeline is also available from the OpenAI-compatible
+Production synthesis is available from the OpenAI-compatible
 `POST /v1/audio/speech` API. Select it with `"model":"qwen3_tts"` or the
 loaded model key. `input` and `voice` follow the OpenAI request surface. For
-Base voice clone, select the Base model and add `prompt_text` and
-`prompt_wav_path`; `voice` is ignored because Base has no fixed speaker map.
-`language` and `max_frames` are optional HLIE extensions. The current native
-backend supports `response_format=wav` and `speed=1.0`. Streaming behavior and
-additional encoded formats will be added separately.
+Base voice clone, `voice` is ignored because Base has no fixed speaker map.
+Provide `prompt_text` and `prompt_wav_path` together to select a reference, or
+omit both to use `samples/zero_shot_prompt.wav` with the transcript
+`希望你以后能够做的比我还好呦。`. Providing only one reference field is rejected
+so text and audio cannot be paired accidentally. `language` and `max_frames`
+are optional HLIE extensions and `speed=1.0` is currently required.
+
+Non-streaming requests retain the original behavior: use `stream=false` (the
+default) with `response_format=wav` to receive one complete WAV after EOS.
+Set `stream=true` with `response_format=pcm` (or omit `response_format`) to
+receive chunked mono PCM16LE at the model sample rate. The stream keeps one
+Talker generation and one Stateful Decoder state for the complete input; HTTP
+chunks do not restart synthesis. Audio metadata is returned in `X-Audio-*`
+headers. Final frame/sample counts, EOS state, and finish reason are sent as
+HTTP trailers named `X-Qwen3-TTS-*`.
 
 Requests without a `model` preserve the historical CosyVoice behavior,
 including `prompt_text` and `prompt_wav_path`. Qwen3-TTS requests must select
@@ -139,7 +149,9 @@ effective seed is returned in the `X-Qwen3-TTS-Seed` response header. Small
 run-to-run differences can still occur when near-tied NPU logits change order.
 
 Production speech requests require the Talker to emit EOS. If `max_frames` is
-too small, the API returns an error instead of presenting truncated audio as a
-successful WAV response. The model registry also holds an active-request lease
-for the complete synchronous inference, so a concurrent unload cannot destroy
-the service while it is in use.
+too small, a non-streaming request returns an error instead of presenting
+truncated audio as a successful WAV response. A streaming response reports
+`X-Qwen3-TTS-Finish-Reason: length` in its trailers because its HTTP 200 status
+and earlier audio chunks may already have been sent. The model registry holds
+an active-request lease until either response mode completes, so a concurrent
+unload cannot destroy the service while it is in use.

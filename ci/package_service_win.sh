@@ -177,6 +177,7 @@ package_service() {
         exit 1
     fi
     while IFS= read -r license_file || [[ -n "$license_file" ]]; do
+        license_file="${license_file%$'\r'}"
         [[ -z "$license_file" || "$license_file" == \#* ]] && continue
         if [[ ! -f "licenses/$license_file" ]]; then
             echo "Error: required third-party license missing from source tree: $license_file"

@@ -1,7 +1,7 @@
 @host = http://127.0.0.1:7901
 @modelType = qwen3_tts
 @device = 0
-@baseModelPath = "E:/models/HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0-20250730.gguf"
+@baseModelPath = E:/models/HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0-20250730.gguf
 @baseModel = HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0-20250730
 @customVoiceModel = HiModel_xh2_qwen3-tts-1.7b-w8a16-256-2k-b1-1chip-2cores-v1.4.0_20260720
 @referenceWav = D:/workspace/wtt/houmo/imodelzoo/data/audio/clone_1.wav
@@ -192,7 +192,68 @@ Content-Type: application/json
     });
 %}
 
-### 10. Unload Qwen3-TTS Base
+### 10. Base Clone defaults keep the original non-streaming WAV behavior
+# Omitting both prompt fields selects samples/zero_shot_prompt.wav and its
+# matching built-in transcript. Explicit stream=false must still return a
+# complete WAV with the legacy response headers.
+# @timeout 600
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "input": "这是默认克隆参考音色的非流式测试。",
+  "language": "Chinese",
+  "stream": false,
+  "response_format": "wav",
+  "seed": 1024,
+  "max_frames": 256
+}
+
+> {%
+    client.test("default Base clone returns a completed WAV", function () {
+        client.assert(response.status === 200, "expected HTTP 200");
+        client.assert(response.headers.valueOf("Content-Type").includes("audio/wav"),
+            "expected audio/wav");
+        client.assert(response.headers.valueOf("X-Qwen3-TTS-Reference-Profile") === "default-zero-shot",
+            "default reference profile was not selected");
+        client.assert(response.headers.valueOf("X-Qwen3-TTS-Reached-EOS") === "true",
+            "generation did not reach EOS");
+    });
+%}
+
+### 11. Stream one Base Clone synthesis as PCM16LE
+# The response is HTTP chunked audio/pcm. Final frame/sample/EOS metadata is
+# carried in X-Qwen3-TTS-* trailers when the client exposes HTTP trailers.
+# @timeout 600
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "input": "这是同一次克隆推理连续输出的流式语音测试。",
+  "language": "Chinese",
+  "stream": true,
+  "response_format": "pcm",
+  "seed": 1024,
+  "max_frames": 256
+}
+
+> {%
+    client.test("Base clone streams PCM", function () {
+        client.assert(response.status === 200, "expected HTTP 200");
+        client.assert(response.headers.valueOf("Content-Type").includes("audio/pcm"),
+            "expected audio/pcm");
+        client.assert(response.headers.valueOf("X-Qwen3-TTS-Stream") === "true",
+            "streaming response header is missing");
+        client.assert(response.headers.valueOf("X-Audio-Format") === "s16le",
+            "unexpected PCM format");
+        client.assert(response.headers.valueOf("X-Qwen3-TTS-Variant") === "base",
+            "wrong Qwen3-TTS variant");
+    });
+%}
+
+### 12. Unload Qwen3-TTS Base
 # @timeout 600
 POST {{host}}/models/unload
 Content-Type: application/json

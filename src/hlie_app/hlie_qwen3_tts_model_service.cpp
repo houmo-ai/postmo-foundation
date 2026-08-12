@@ -1,10 +1,12 @@
 #include "hlie_app/hlie_qwen3_tts_model_service.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <iomanip>
 #include <limits>
 #include <random>
@@ -18,9 +20,17 @@
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
 
+#ifdef WIN32
+#include <windows.h>
+#endif
+
 HLIE_NAMESPACE_BEGIN
 
 namespace {
+constexpr const char* kDefaultCloneReferenceText =
+    "希望你以后能够做的比我还好呦。";
+constexpr const char* kDefaultCloneReferenceFile = "zero_shot_prompt.wav";
+
 std::string lower_ascii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
                    [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -62,6 +72,47 @@ std::string pcm16_wav(const std::vector<float>& audio, const int sample_rate) {
                     &pcm, sizeof(pcm));
     }
     return bytes;
+}
+
+std::string pcm16_bytes(const std::vector<float>& audio) {
+    std::string bytes(audio.size() * sizeof(int16_t), '\0');
+    for (size_t index = 0; index < audio.size(); ++index) {
+        const int16_t pcm = static_cast<int16_t>(std::clamp(
+            audio[index] * 32767.0F, -32768.0F, 32767.0F));
+        std::memcpy(bytes.data() + index * sizeof(pcm), &pcm, sizeof(pcm));
+    }
+    return bytes;
+}
+
+std::string default_clone_reference_path() {
+    const std::string working_directory_path = HlieUtil::join_paths(
+        "samples", kDefaultCloneReferenceFile);
+#ifdef WIN32
+    std::array<char, MAX_PATH> executable_path{};
+    const DWORD length = GetModuleFileNameA(
+        nullptr, executable_path.data(), static_cast<DWORD>(executable_path.size()));
+    if (length > 0 && length < executable_path.size()) {
+        const std::filesystem::path executable(
+            std::string(executable_path.data(), length));
+        const std::string packaged_path = HlieUtil::join_paths(
+            executable.parent_path().string(), "..", "samples",
+            kDefaultCloneReferenceFile);
+        std::error_code ec;
+        if (std::filesystem::exists(packaged_path, ec)) {
+            return packaged_path;
+        }
+    }
+#endif
+    return working_directory_path;
+}
+
+std::string safe_trailer_value(std::string value) {
+    std::replace(value.begin(), value.end(), '\r', ' ');
+    std::replace(value.begin(), value.end(), '\n', ' ');
+    if (value.size() > 512) {
+        value.resize(512);
+    }
+    return value;
 }
 
 std::string precise_float(const double value) {
@@ -475,11 +526,16 @@ server_http_res_ptr Qwen3TTSModelService::handle_stateful_decoder_debug(
 }
 
 void Qwen3TTSModelService::handle_speech(
-    const httplib::Request& req, httplib::Response& res) {
-    std::lock_guard lock(model_mutex_);
-    if (!model_ || !model_->ready() || get_state() != SERVER_STATE_READY) {
-        set_oai_error(res, "Qwen3-TTS model is not ready", ERROR_TYPE_UNAVAILABLE);
-        return;
+    const httplib::Request& req, httplib::Response& res,
+    std::shared_ptr<void> request_guard) {
+    std::shared_ptr<HLIEQwen3TTSModel> model;
+    {
+        std::lock_guard lock(model_mutex_);
+        if (!model_ || !model_->ready() || get_state() != SERVER_STATE_READY) {
+            set_oai_error(res, "Qwen3-TTS model is not ready", ERROR_TYPE_UNAVAILABLE);
+            return;
+        }
+        model = model_;
     }
 
     const auto body = json::parse(req.body, nullptr, false);
@@ -506,31 +562,86 @@ void Qwen3TTSModelService::handle_speech(
         value = body.at(name).get<std::string>();
         return true;
     };
+    const auto alias_present = [&](const char* primary, const char* secondary) {
+        return (body.contains(primary) && !body.at(primary).is_null()) ||
+               (body.contains(secondary) && !body.at(secondary).is_null());
+    };
     const auto string_alias = [&](const char* primary, const char* secondary,
                                   std::string& value) {
-        const char* selected = body.contains(primary) ? primary : secondary;
+        const char* selected = nullptr;
+        if (body.contains(primary) && !body.at(primary).is_null()) {
+            selected = primary;
+        } else if (body.contains(secondary) && !body.at(secondary).is_null()) {
+            selected = secondary;
+        }
+        if (!selected) {
+            value.clear();
+            return true;
+        }
         return string_option(selected, std::string(), value);
     };
 
+    bool stream_output = false;
+    if (body.contains("stream") && !body.at("stream").is_null()) {
+        if (!body.at("stream").is_boolean()) {
+            set_oai_error(res, "stream must be a boolean",
+                          ERROR_TYPE_INVALID_REQUEST);
+            return;
+        }
+        stream_output = body.at("stream").get<bool>();
+    }
     std::string language;
     std::string speaker;
     std::string response_format;
     if (!string_option("language", "Chinese", language) ||
         !string_option("voice", "vivian", speaker) ||
-        !string_option("response_format", "wav", response_format)) {
+        !string_option("response_format", stream_output ? "pcm" : "wav",
+                       response_format)) {
         return;
     }
     std::string reference_text;
     std::string reference_path;
-    if (model_->is_base() &&
-        (!string_alias("prompt_text", "reference_text", reference_text) ||
-         !string_alias("prompt_wav_path", "reference_audio_path", reference_path))) {
-        return;
+    bool default_reference = false;
+    if (model->is_base()) {
+        const bool has_reference_text = alias_present(
+            "prompt_text", "reference_text");
+        const bool has_reference_audio = alias_present(
+            "prompt_wav_path", "reference_audio_path");
+        if (has_reference_text != has_reference_audio) {
+            set_oai_error(
+                res,
+                "prompt_text and prompt_wav_path must be provided together",
+                ERROR_TYPE_INVALID_REQUEST);
+            return;
+        }
+        if (!has_reference_text) {
+            reference_text = kDefaultCloneReferenceText;
+            reference_path = default_clone_reference_path();
+            default_reference = true;
+        } else if (!string_alias(
+                       "prompt_text", "reference_text", reference_text) ||
+                   !string_alias(
+                       "prompt_wav_path", "reference_audio_path",
+                       reference_path)) {
+            return;
+        }
+        if (reference_text.empty() || reference_path.empty()) {
+            set_oai_error(
+                res,
+                "prompt_text and prompt_wav_path must be non-empty",
+                ERROR_TYPE_INVALID_REQUEST);
+            return;
+        }
     }
     response_format = lower_ascii(response_format);
-    if (response_format != "wav") {
-        set_oai_error(res, "Qwen3-TTS currently supports response_format=wav only",
-                      ERROR_TYPE_INVALID_REQUEST);
+    if ((stream_output && response_format != "pcm") ||
+        (!stream_output && response_format != "wav")) {
+        set_oai_error(
+            res,
+            stream_output
+                ? "Qwen3-TTS streaming currently supports response_format=pcm only"
+                : "Qwen3-TTS non-streaming currently supports response_format=wav only",
+            ERROR_TYPE_INVALID_REQUEST);
         return;
     }
     if (body.contains("speed") && !body.at("speed").is_null()) {
@@ -569,7 +680,7 @@ void Qwen3TTSModelService::handle_speech(
             max_frames = static_cast<int>(signed_value);
         }
     }
-    if (max_frames <= 0 || max_frames >= model_->context_length()) {
+    if (max_frames <= 0 || max_frames >= model->context_length()) {
         set_oai_error(res, "max_frames must be between 1 and the model context length",
                       ERROR_TYPE_INVALID_REQUEST);
         return;
@@ -605,66 +716,173 @@ void Qwen3TTSModelService::handle_speech(
 
     const std::string speaker_key = lower_ascii(speaker);
     const std::string language_key = lower_ascii(language);
-    if (!model_->is_base() &&
-        !model_->config().speaker_ids.contains(speaker_key)) {
+    if (!model->is_base() &&
+        !model->config().speaker_ids.contains(speaker_key)) {
         set_oai_error(res, "unsupported Qwen3-TTS speaker: " + speaker_key,
                       ERROR_TYPE_INVALID_REQUEST);
         return;
     }
     if (language_key != "auto" &&
-        !model_->config().codec_language_ids.contains(language_key)) {
+        !model->config().codec_language_ids.contains(language_key)) {
         set_oai_error(res, "unsupported Qwen3-TTS language: " + language_key,
                       ERROR_TYPE_INVALID_REQUEST);
         return;
     }
-    if (model_->is_base() && (reference_text.empty() || reference_path.empty())) {
-        set_oai_error(
-            res,
-            "Qwen3-TTS Base requires prompt_text and prompt_wav_path",
-            ERROR_TYPE_INVALID_REQUEST);
-        return;
-    }
-
-    Qwen3TTSSynthesisResult result;
+    std::vector<float> reference_pcm;
     std::string error;
-    bool success = false;
-    if (model_->is_base()) {
-        std::vector<float> reference_pcm;
+    if (model->is_base()) {
         if (!load_qwen3_reference_audio(
-                reference_path, model_->config().reference_sample_rate,
+                reference_path, model->config().reference_sample_rate,
                 reference_pcm, error)) {
             set_oai_error(res, error, ERROR_TYPE_INVALID_REQUEST);
             return;
         }
-        success = model_->synthesize_clone(
-            body.at("input").get<std::string>(), language, reference_text,
-            reference_pcm, max_frames, result, error, true, true,
-            sampling_seed);
-    } else {
-        success = model_->synthesize(
-            body.at("input").get<std::string>(), language, speaker,
-            max_frames, result, error, true, true, sampling_seed);
     }
-    if (!success) {
-        const error_type type = error.find("max_frames before EOS") != std::string::npos
-            ? ERROR_TYPE_INVALID_REQUEST
-            : error.find("context length") != std::string::npos
-                ? ERROR_TYPE_EXCEED_CONTEXT_SIZE : ERROR_TYPE_SERVER;
-        set_oai_error(res, error, type);
+
+    const std::string input = body.at("input").get<std::string>();
+    if (!stream_output) {
+        Qwen3TTSSynthesisResult result;
+        bool success = false;
+        if (model->is_base()) {
+            success = model->synthesize_clone(
+                input, language, reference_text, reference_pcm, max_frames,
+                result, error, true, true, sampling_seed);
+        } else {
+            success = model->synthesize(
+                input, language, speaker, max_frames, result, error, true, true,
+                sampling_seed);
+        }
+        if (!success) {
+            const error_type type =
+                error.find("max_frames before EOS") != std::string::npos
+                    ? ERROR_TYPE_INVALID_REQUEST
+                    : error.find("context length") != std::string::npos
+                        ? ERROR_TYPE_EXCEED_CONTEXT_SIZE
+                        : ERROR_TYPE_SERVER;
+            set_oai_error(res, error, type);
+            return;
+        }
+        try {
+            auto wav = pcm16_wav(result.audio, model->config().sample_rate);
+            res.set_header("Content-Disposition",
+                           "attachment; filename=\"speech.wav\"");
+            res.set_header("X-Qwen3-TTS-Frames",
+                           std::to_string(result.codec_frames.size()));
+            res.set_header("X-Qwen3-TTS-Samples",
+                           std::to_string(result.audio.size()));
+            res.set_header("X-Qwen3-TTS-Reached-EOS",
+                           result.reached_eos ? "true" : "false");
+            res.set_header("X-Qwen3-TTS-Seed",
+                           std::to_string(sampling_seed));
+            res.set_header("X-Qwen3-TTS-Variant",
+                           model->is_base() ? "base" : "custom_voice");
+            if (default_reference) {
+                res.set_header("X-Qwen3-TTS-Reference-Profile",
+                               "default-zero-shot");
+            }
+            res.set_content(std::move(wav), "audio/wav");
+        } catch (const std::exception& ex) {
+            set_oai_error(res, ex.what(), ERROR_TYPE_SERVER);
+        }
         return;
     }
-    try {
-        auto wav = pcm16_wav(result.audio, model_->config().sample_rate);
-        res.set_header("Content-Disposition", "attachment; filename=\"speech.wav\"");
-        res.set_header("X-Qwen3-TTS-Frames", std::to_string(result.codec_frames.size()));
-        res.set_header("X-Qwen3-TTS-Samples", std::to_string(result.audio.size()));
-        res.set_header("X-Qwen3-TTS-Reached-EOS", result.reached_eos ? "true" : "false");
-        res.set_header("X-Qwen3-TTS-Seed", std::to_string(sampling_seed));
-        res.set_header("X-Qwen3-TTS-Variant", model_->is_base() ? "base" : "custom_voice");
-        res.set_content(std::move(wav), "audio/wav");
-    } catch (const std::exception& ex) {
-        set_oai_error(res, ex.what(), ERROR_TYPE_SERVER);
+
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("Content-Disposition", "inline; filename=\"speech.pcm\"");
+    res.set_header("X-Audio-Bits-Per-Sample", "16");
+    res.set_header("X-Audio-Channels", "1");
+    res.set_header("X-Audio-Format", "s16le");
+    res.set_header("X-Audio-Sample-Rate",
+                   std::to_string(model->config().sample_rate));
+    res.set_header("X-Qwen3-TTS-Seed", std::to_string(sampling_seed));
+    res.set_header("X-Qwen3-TTS-Stream", "true");
+    res.set_header("X-Qwen3-TTS-Variant",
+                   model->is_base() ? "base" : "custom_voice");
+    res.set_header(
+        "Trailer",
+        "X-Qwen3-TTS-Frames, X-Qwen3-TTS-Samples, "
+        "X-Qwen3-TTS-Reached-EOS, X-Qwen3-TTS-Finish-Reason, "
+        "X-Qwen3-TTS-Error");
+    if (default_reference) {
+        res.set_header("X-Qwen3-TTS-Reference-Profile", "default-zero-shot");
     }
+
+    const bool base_variant = model->is_base();
+    res.set_chunked_content_provider(
+        "audio/pcm",
+        [model = std::move(model), input, language, speaker, reference_text,
+         reference_pcm = std::move(reference_pcm), max_frames, sampling_seed,
+         base_variant, request_guard = std::move(request_guard),
+         started = false](size_t, httplib::DataSink& sink) mutable {
+            if (started) {
+                sink.done();
+                return true;
+            }
+            started = true;
+            (void)request_guard;
+
+            Qwen3TTSStreamResult result;
+            std::string stream_error;
+            const auto on_audio_chunk = [&](const std::vector<float>& audio) {
+                const std::string bytes = pcm16_bytes(audio);
+                return bytes.empty() || sink.write(bytes.data(), bytes.size());
+            };
+            const auto should_stop = [&]() {
+                return !sink.is_writable();
+            };
+
+            bool success = false;
+            try {
+                if (base_variant) {
+                    success = model->synthesize_clone_stream(
+                        input, language, reference_text, reference_pcm,
+                        max_frames, result, on_audio_chunk, should_stop,
+                        stream_error, true, true, sampling_seed);
+                } else {
+                    success = model->synthesize_stream(
+                        input, language, speaker, max_frames, result,
+                        on_audio_chunk, should_stop, stream_error, true, true,
+                        sampling_seed);
+                }
+            } catch (const std::exception& ex) {
+                stream_error = ex.what();
+            }
+
+            if (!sink.is_writable()) {
+                return false;
+            }
+            std::string finish_reason = "stop";
+            if (!success) {
+                if (stream_error.find("max_frames before EOS") !=
+                    std::string::npos) {
+                    finish_reason = "length";
+                } else if (stream_error.find("cancel") != std::string::npos ||
+                           stream_error.find("consumer stopped") !=
+                               std::string::npos) {
+                    finish_reason = "cancelled";
+                } else {
+                    finish_reason = "error";
+                }
+                LOG_ERROR("Qwen3-TTS HTTP audio stream failed: {}",
+                          stream_error);
+            }
+
+            httplib::Headers trailers{
+                {"X-Qwen3-TTS-Frames",
+                 std::to_string(result.codec_frames)},
+                {"X-Qwen3-TTS-Samples",
+                 std::to_string(result.audio_samples)},
+                {"X-Qwen3-TTS-Reached-EOS",
+                 result.reached_eos ? "true" : "false"},
+                {"X-Qwen3-TTS-Finish-Reason", finish_reason},
+            };
+            if (!success && !stream_error.empty()) {
+                trailers.emplace("X-Qwen3-TTS-Error",
+                                 safe_trailer_value(stream_error));
+            }
+            sink.done_with_trailer(trailers);
+            return true;
+        });
 }
 
 HLIE_NAMESPACE_END

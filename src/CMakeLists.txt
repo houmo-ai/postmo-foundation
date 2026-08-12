@@ -133,6 +133,23 @@ elseif (UNIX)
     install(TARGETS ${TARGET}-hi-cpp-linux RUNTIME)
     target_include_directories(${TARGET}-hi-cpp-linux PRIVATE ${CMAKE_SOURCE_DIR})
     target_link_libraries(${TARGET}-hi-cpp-linux PUBLIC hlie-app ${CMAKE_THREAD_LIBS_INIT})
+    # The packaged ELF uses $ORIGIN-based RPATHs, but while linking this
+    # executable its indirect dependencies still live in the SDK directories.
+    # rpath-link is link-time-only and is not embedded in the resulting ELF.
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        set(HLIE_LINK_TIME_LIBRARY_DIRS
+                "${STABLE_DIFFUSION_LIBRARY_PATH}/lib"
+                "${WHISPER_CPP_LIBRARY_PATH}/lib"
+                "${UWEBSOCKET_PATH}/lib"
+                "${SAMPLERATE_LIBRARY_PATH}/lib"
+                "${KALDI_LIBRARY_PATH}/lib"
+                "${PDFIUM_LIBRARY_PATH}/lib"
+                "${TCIM_RUNTIME_PATH}/lib"
+                "${LLAMA_CPP_LIBRARY_PATH}/lib")
+        list(JOIN HLIE_LINK_TIME_LIBRARY_DIRS ":" HLIE_LINK_TIME_LIBRARY_PATH)
+        target_link_options(${TARGET}-hi-cpp-linux PRIVATE
+                "-Wl,-rpath-link,${HLIE_LINK_TIME_LIBRARY_PATH}")
+    endif ()
     target_compile_features(${TARGET}-hi-cpp-linux PRIVATE cxx_std_17)
 else ()
     message(FATAL_ERROR "Unsupported operating system")
