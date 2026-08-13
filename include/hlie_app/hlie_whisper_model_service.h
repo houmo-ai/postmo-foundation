@@ -22,7 +22,6 @@ const std::string srt_format = "srt";
 const std::string vjson_format = "verbose_json";
 const std::string vtt_format = "vtt";
 
-
 struct whisper_params {
     int32_t n_threads = std::min(4, (int32_t)std::thread::hardware_concurrency());
     int32_t n_processors = 1;
@@ -62,7 +61,7 @@ struct whisper_params {
     bool no_context = true;
     bool no_language_probabilities = false;
 
-    std::string language = "en";
+    std::string language = "auto";
     std::string prompt = "";
     std::string font_path = "/System/Library/Fonts/Supplemental/Courier New Bold.ttf";
     std::string model = "models/ggml-base.en.bin";
@@ -94,6 +93,7 @@ HLIE_NAMESPACE_BEGIN
  */
 struct WhisperRequest {
     struct whisper_full_params params;
+    whisper_params output_params;
     std::string filename;
     std::vector<float> pcmf32; // mono-channel F32 PCM
     std::vector<std::vector<float>> pcmf32s; // stereo-channel F32 PCM
@@ -134,6 +134,7 @@ public:
     void handle_models(nlohmann::ordered_json& resp) const;
 
     void fill_params(whisper_full_params& wparams) const;
+    void fill_params(whisper_full_params& wparams, const whisper_params& params) const;
 
     std::string handle_stream(const WhisperStreamRequest& request, const TranscriptCallback& callback) const;
 

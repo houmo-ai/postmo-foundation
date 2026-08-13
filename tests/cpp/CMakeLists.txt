@@ -47,6 +47,7 @@ add_executable(hlie-unit-tests
         unit/hlie_model_residency_manager_test.cpp
         unit/hlie_proxy_timeout_test.cpp
         unit/hlie_ws_limits_test.cpp
+        unit/hlie_whisper_language_test.cpp
         unit/audio/hlie_realtime_vad_test.cpp
         unit/audio/hlie_realtime_session_test.cpp)
 target_sources(hlie-unit-tests PRIVATE

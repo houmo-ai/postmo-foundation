@@ -171,7 +171,7 @@ namespace {
             params.no_timestamps = parse_str_to_bool(req.form.get_file("no_timestamps").content);
         }
         if (req.form.has_file("language")) {
-            params.language = req.form.get_file("language").content;
+            params.language = normalize_whisper_language(req.form.get_file("language").content);
         }
         if (req.form.has_file("detect_language")) {
             params.detect_language = parse_str_to_bool(req.form.get_file("detect_language").content);
@@ -482,62 +482,70 @@ void WhisperModelService::handle_models(nlohmann::ordered_json& resp) const {
 }
 
 void WhisperModelService::fill_params(whisper_full_params& wparams) const {
-    wparams.strategy = params_.beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY;
+    fill_params(wparams, params_);
+}
+
+void WhisperModelService::fill_params(whisper_full_params& wparams, const whisper_params& params) const {
+    wparams.strategy = params.beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY;
 
     wparams.print_realtime = false;
-    wparams.print_progress = params_.print_progress;
-    wparams.print_timestamps = !params_.no_timestamps;
-    wparams.print_special = params_.print_special;
-    wparams.translate = params_.translate;
-    wparams.language = params_.language.c_str();
-    wparams.detect_language = params_.detect_language;
-    wparams.n_threads = params_.n_threads;
-    wparams.n_max_text_ctx = params_.max_context >= 0 ? params_.max_context : wparams.n_max_text_ctx;
-    wparams.offset_ms = params_.offset_t_ms;
-    wparams.duration_ms = params_.duration_ms;
+    wparams.print_progress = params.print_progress;
+    wparams.print_timestamps = !params.no_timestamps;
+    wparams.print_special = params.print_special;
+    wparams.translate = params.translate;
+    wparams.language = params.language.c_str();
+    wparams.detect_language = params.detect_language;
+    wparams.n_threads = params.n_threads;
+    wparams.n_max_text_ctx = params.max_context >= 0 ? params.max_context : wparams.n_max_text_ctx;
+    wparams.offset_ms = params.offset_t_ms;
+    wparams.duration_ms = params.duration_ms;
 
-    wparams.thold_pt = params_.word_thold;
-    wparams.max_len = params_.max_len == 0 ? 60 : params_.max_len;
-    wparams.split_on_word = params_.split_on_word;
-    wparams.audio_ctx = params_.audio_ctx;
+    wparams.thold_pt = params.word_thold;
+    wparams.max_len = params.max_len == 0 ? 60 : params.max_len;
+    wparams.split_on_word = params.split_on_word;
+    wparams.audio_ctx = params.audio_ctx;
 
-    wparams.debug_mode = params_.debug_mode;
+    wparams.debug_mode = params.debug_mode;
 
-    wparams.tdrz_enable = params_.tinydiarize; // [TDRZ]
+    wparams.tdrz_enable = params.tinydiarize; // [TDRZ]
 
-    wparams.initial_prompt = params_.prompt.c_str();
+    wparams.initial_prompt = params.prompt.c_str();
 
-    wparams.greedy.best_of = params_.best_of;
-    wparams.beam_search.beam_size = params_.beam_size;
+    wparams.greedy.best_of = params.best_of;
+    wparams.beam_search.beam_size = params.beam_size;
 
-    wparams.temperature = params_.temperature;
-    wparams.no_speech_thold = params_.no_speech_thold;
-    wparams.temperature_inc = params_.temperature_inc;
-    wparams.entropy_thold = params_.entropy_thold;
-    wparams.logprob_thold = params_.logprob_thold;
+    wparams.temperature = params.temperature;
+    wparams.no_speech_thold = params.no_speech_thold;
+    wparams.temperature_inc = params.temperature_inc;
+    wparams.entropy_thold = params.entropy_thold;
+    wparams.logprob_thold = params.logprob_thold;
 
-    wparams.no_timestamps = params_.no_timestamps;
-    wparams.token_timestamps = !params_.no_timestamps && params_.response_format == vjson_format;
-    wparams.no_context = params_.no_context;
+    wparams.no_timestamps = params.no_timestamps;
+    wparams.token_timestamps = !params.no_timestamps && params.response_format == vjson_format;
+    wparams.no_context = params.no_context;
 
-    wparams.suppress_nst = params_.suppress_nst;
+    wparams.suppress_nst = params.suppress_nst;
 
-    wparams.vad = params_.vad;
-    wparams.vad_model_path = params_.vad_model.c_str();
+    wparams.vad = params.vad;
+    wparams.vad_model_path = params.vad_model.c_str();
 
-    wparams.vad_params.threshold = params_.vad_threshold;
-    wparams.vad_params.min_speech_duration_ms = params_.vad_min_speech_duration_ms;
-    wparams.vad_params.min_silence_duration_ms = params_.vad_min_silence_duration_ms;
-    wparams.vad_params.max_speech_duration_s = params_.vad_max_speech_duration_s;
-    wparams.vad_params.speech_pad_ms = params_.vad_speech_pad_ms;
-    wparams.vad_params.samples_overlap = params_.vad_samples_overlap;
+    wparams.vad_params.threshold = params.vad_threshold;
+    wparams.vad_params.min_speech_duration_ms = params.vad_min_speech_duration_ms;
+    wparams.vad_params.min_silence_duration_ms = params.vad_min_silence_duration_ms;
+    wparams.vad_params.max_speech_duration_s = params.vad_max_speech_duration_s;
+    wparams.vad_params.speech_pad_ms = params.vad_speech_pad_ms;
+    wparams.vad_params.samples_overlap = params.vad_samples_overlap;
 }
 
 std::string WhisperModelService::handle_stream(
     const WhisperStreamRequest& request,
     const TranscriptCallback& callback) const {
     whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    fill_params(wparams);
+    whisper_params stream_params = default_params_;
+    stream_params.language = normalize_whisper_language(request.language);
+    stream_params.prompt = request.prompt;
+    stream_params.response_format = request.response_format.empty() ? json_format : request.response_format;
+    fill_params(wparams, stream_params);
 
     struct StreamCallbackContext {
         const TranscriptCallback* callback;
@@ -582,7 +590,7 @@ std::string WhisperModelService::handle_stream(
             }
             return "HLIECpp-FAILED-888";
         }
-        transcription_result = output_str(whisper_ctx_, params_, request.pcmf32s);
+        transcription_result = output_str(whisper_ctx_, stream_params, request.pcmf32s);
     }
     const auto end = std::chrono::steady_clock::now();
     auto predicted_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -616,11 +624,15 @@ std::string WhisperModelService::transcription(const WhisperRequest& request) co
     try {
         std::lock_guard lock(whisper_mtx_);
         LOG_INFO("whisper.cpp full parallel ready to run {}", request.filename);
-        if (whisper_full_parallel(whisper_ctx_, request.params, request.pcmf32.data(), request.pcmf32.size(), request.n_processors) != 0) {
+        whisper_full_params inference_params = request.params;
+        inference_params.language = request.output_params.language.c_str();
+        inference_params.initial_prompt = request.output_params.prompt.c_str();
+        inference_params.vad_model_path = request.output_params.vad_model.c_str();
+        if (whisper_full_parallel(whisper_ctx_, inference_params, request.pcmf32.data(), request.pcmf32.size(), request.n_processors) != 0) {
             return "HLIECpp-FAILED-888";
         }
 
-        results = output_str(whisper_ctx_, params_, request.pcmf32s);
+        results = output_str(whisper_ctx_, request.output_params, request.pcmf32s);
     } catch (const std::exception& e) {
         LOG_ERROR("transcription exception: {}", e.what());
         return "HLIECpp-FAILED-888";
@@ -643,7 +655,9 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
         auto audio_file = req.form.get_file("file");
 
         // check non-required fields
-        get_req_parameters(req, params_);
+        whisper_params request_params = default_params_;
+        get_req_parameters(req, request_params);
+        request_params.language = normalize_whisper_language(request_params.language);
 
         std::string filename{audio_file.filename};
         printf("Received request: %s\n", filename.c_str());
@@ -652,7 +666,7 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
         std::vector<float> pcmf32; // mono-channel F32 PCM
         std::vector<std::vector<float>> pcmf32s; // stereo-channel F32 PCM
 
-        if (!read_audio_data(audio_file.content, pcmf32, pcmf32s, params_.diarize)) {
+        if (!read_audio_data(audio_file.content, pcmf32, pcmf32s, request_params.diarize)) {
             fprintf(stderr, "error: failed to read audio data\n");
             const std::string error_resp = "{\"error\":\"failed to read audio data\"}";
             res.set_content(error_resp, "application/json");
@@ -663,40 +677,40 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
 
         // print system information
         {
-            LOG_INFO("system_info: n_threads = {} / {} | {}", params_.n_threads * params_.n_processors, std::thread::hardware_concurrency(),
+            LOG_INFO("system_info: n_threads = {} / {} | {}", request_params.n_threads * request_params.n_processors, std::thread::hardware_concurrency(),
                      whisper_print_system_info());
         }
 
         // print some info about the processing
         {
             if (!whisper_is_multilingual(whisper_ctx_)) {
-                if (params_.language != "en" || params_.translate) {
-                    params_.language = "en";
-                    params_.translate = false;
+                if (request_params.language != "en" || request_params.translate) {
+                    request_params.language = "en";
+                    request_params.translate = false;
                     LOG_WARN("WARNING: model is not multilingual, ignoring language and translation options");
                 }
             }
-            if (params_.detect_language) {
-                params_.language = "auto";
+            if (request_params.detect_language) {
+                request_params.language = "auto";
             }
 
             LOG_WARN("processing '{}' ({} samples, {} sec), {} threads, {} processors, lang = {}, task = {}, {}timestamps = {} ...\n",
-                     filename.c_str(), int(pcmf32.size()), float(pcmf32.size()) / WHISPER_SAMPLE_RATE, params_.n_threads,
-                     params_.n_processors, params_.language.c_str(), params_.translate ? "translate" : "transcribe",
-                     params_.tinydiarize ? "tdrz = 1, " : "", params_.no_timestamps ? 0 : 1);
+                     filename.c_str(), int(pcmf32.size()), float(pcmf32.size()) / WHISPER_SAMPLE_RATE, request_params.n_threads,
+                     request_params.n_processors, request_params.language.c_str(), request_params.translate ? "translate" : "transcribe",
+                     request_params.tinydiarize ? "tdrz = 1, " : "", request_params.no_timestamps ? 0 : 1);
         }
 
         // run the inference
         {
             LOG_INFO("Running whisper.cpp inference on {}", filename);
             whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-            fill_params(wparams);
+            fill_params(wparams, request_params);
 
             /*
             whisper_print_user_data user_data = {&params_, &pcmf32s, 0};
 
             // this callback is called on each new segment
-            if (params_.print_realtime) {
+            if (request_params.print_realtime) {
                 wparams.new_segment_callback = whisper_print_segment_callback;
                 wparams.new_segment_callback_user_data = &user_data;
             }
@@ -717,10 +731,11 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
 
             WhisperRequest whisper_request;
             whisper_request.params = wparams;
+            whisper_request.output_params = request_params;
             whisper_request.filename = filename;
             whisper_request.pcmf32 = pcmf32;
             whisper_request.pcmf32s = pcmf32s;
-            whisper_request.n_processors = params_.n_processors;
+            whisper_request.n_processors = request_params.n_processors;
 
             if (auto [results, success, error_message, predicted_ms] = transcription_sync(whisper_request); !success) {
                 // handle failure or early abort
@@ -744,8 +759,6 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
 
         LOG_INFO("process audio done");
 
-        // reset params to their defaults
-        params_ = default_params_;
     } catch (const std::exception& ex) {
         LOG_ERROR("handle_transcriptions ex: {}", ex.what());
         throw;
