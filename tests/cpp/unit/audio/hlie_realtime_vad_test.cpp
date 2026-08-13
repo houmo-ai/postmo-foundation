@@ -229,6 +229,31 @@ TEST_CASE("Realtime VAD manual commit flushes an active segment", "[audio][vad]"
     CHECK_FALSE(segments.front()->audio.empty());
 }
 
+TEST_CASE("Realtime VAD manual commit trims accumulated endpoint silence", "[audio][vad]") {
+    RealtimeVadConfig config;
+    config.sample_rate = 16000;
+    config.silence_duration_ms = 3000;
+    config.suffix_padding_ms = 200;
+    HLIERealtimeVad vad(config);
+
+    std::vector<float> input;
+    append(input, silence(config.sample_rate, 300));
+    append(input, tone(config.sample_rate, 1000));
+    append(input, silence(config.sample_rate, 900));
+    auto events = runInChunks(vad, input, config.sample_rate / 10);
+    auto committed = vad.commit();
+    events.insert(
+        events.end(),
+        std::make_move_iterator(committed.begin()),
+        std::make_move_iterator(committed.end()));
+
+    const auto segments = eventsOfType(events, RealtimeVadEventType::SegmentReady);
+    REQUIRE(segments.size() == 1);
+    CHECK(segments.front()->reason == RealtimeVadCommitReason::Manual);
+    CHECK(segments.front()->audio.size() >= static_cast<size_t>(config.sample_rate * 1.4));
+    CHECK(segments.front()->audio.size() <= static_cast<size_t>(config.sample_rate * 1.6));
+}
+
 TEST_CASE("Realtime VAD preserves session time across sample rate changes", "[audio][vad]") {
     RealtimeVadConfig config;
     config.sample_rate = 16000;

@@ -559,12 +559,27 @@ std::string WhisperModelService::handle_stream(
         }
     };
     wparams.new_segment_callback_user_data = &callback_context;
+    wparams.abort_callback = [](void* user_data) {
+        const auto* stream_request = static_cast<const WhisperStreamRequest*>(user_data);
+        return stream_request && stream_request->should_stop && stream_request->should_stop();
+    };
+    wparams.abort_callback_user_data = const_cast<WhisperStreamRequest*>(&request);
 
     const auto start = std::chrono::steady_clock::now();
     std::string transcription_result;
     {
-        std::lock_guard lock(whisper_mtx_);
+        std::unique_lock lock(whisper_mtx_, std::defer_lock);
+        while (!lock.try_lock()) {
+            if (request.should_stop && request.should_stop()) {
+                LOG_WARN("Whisper websocket transcription cancelled while waiting for the model lock");
+                return "HLIECpp-FAILED-888";
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
         if (whisper_full(whisper_ctx_, wparams, request.pcmf32.data(), request.pcmf32.size()) != 0) {
+            if (request.should_stop && request.should_stop()) {
+                LOG_WARN("Whisper websocket transcription aborted");
+            }
             return "HLIECpp-FAILED-888";
         }
         transcription_result = output_str(whisper_ctx_, params_, request.pcmf32s);

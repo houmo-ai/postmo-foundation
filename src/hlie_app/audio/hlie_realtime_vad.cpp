@@ -201,7 +201,10 @@ public:
         }
 
         if (active_) {
-            finalizeSegment(RealtimeVadCommitReason::Manual, events, false);
+            // Client endpointing commits after it has already observed trailing
+            // silence. Reuse the normal silence trimming so that the ASR model
+            // receives only suffix padding instead of the full endpoint window.
+            finalizeSegment(RealtimeVadCommitReason::Manual, events, true);
         } else if (!prefix_audio_.empty()) {
             RealtimeVadEvent segment;
             segment.type = RealtimeVadEventType::SegmentReady;

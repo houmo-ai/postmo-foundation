@@ -36,6 +36,10 @@
         "max_pending_segments": {
           "type": "integer",
           "description": "Maximum committed audio segments waiting for Realtime ASR inference, clamped to 1-64."
+        },
+        "asr_inference_timeout_sec": {
+          "type": "integer",
+          "description": "Maximum time for one Realtime ASR inference, clamped to 5-300 seconds."
         }
       }
     },

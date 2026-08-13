@@ -448,7 +448,10 @@ void HLIEWebSocketService::init() {
     const auto config = Singleton<HLIEConfigService>::instance();
     max_pending_inference_tasks_ = static_cast<size_t>(std::clamp(
         config->get_int("realtime", "max_pending_segments", 8, true), 1, 64));
-    LOG_INFO("Realtime websocket configuration: max_pending_segments={}", max_pending_inference_tasks_);
+    inference_timeout_sec_ = std::clamp(
+        config->get_int("realtime", "asr_inference_timeout_sec", 30, true), 5, 300);
+    LOG_INFO("Realtime websocket configuration: max_pending_segments={}, asr_inference_timeout_sec={}",
+             max_pending_inference_tasks_, inference_timeout_sec_);
 }
 
 void HLIEWebSocketService::run(AudioHandler handler, const int port) {
@@ -560,14 +563,27 @@ void HLIEWebSocketService::processInferenceTasks() {
             continue;
         }
 
+        const auto inference_started_at = std::chrono::steady_clock::now();
+        const auto deadline = inference_started_at + std::chrono::seconds(inference_timeout_sec_);
+        const auto queue_wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            inference_started_at - task.enqueued_at).count();
         WhisperStreamRequest request = std::move(task.request);
         request.pcmf32 = resample(request.pcmf32, request.sample_rate, 16000);
         request.sample_rate = 16000;
+        request.should_stop = [this, connection = task.connection, deadline] {
+            return stopping_.load() || !connection->active.load() ||
+                   std::chrono::steady_clock::now() >= deadline;
+        };
         std::string streamed_text;
+        std::chrono::steady_clock::time_point first_delta_at{};
+        size_t delta_count = 0;
 
-        const auto on_delta = [this, &task, &streamed_text](const std::string& delta) {
+        const auto on_delta = [this, &task, &streamed_text, &first_delta_at, &delta_count](const std::string& delta) {
             if (delta.empty()) {
                 return;
+            }
+            if (delta_count++ == 0) {
+                first_delta_at = std::chrono::steady_clock::now();
             }
             streamed_text += delta;
             sendEvent(task,
@@ -580,7 +596,34 @@ void HLIEWebSocketService::processInferenceTasks() {
         };
 
         const std::string transcript = handler_(request, on_delta);
+        const auto inference_finished_at = std::chrono::steady_clock::now();
+        const auto inference_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            inference_finished_at - inference_started_at).count();
+        const auto first_delta_ms = first_delta_at == std::chrono::steady_clock::time_point{}
+            ? -1
+            : std::chrono::duration_cast<std::chrono::milliseconds>(
+                first_delta_at - inference_started_at).count();
+        const bool timed_out = inference_finished_at >= deadline;
+        LOG_INFO("Realtime ASR inference finished: item_id={}, queue_wait_ms={}, inference_ms={}, "
+                 "first_delta_ms={}, deltas={}, chars={}, timed_out={}",
+                 task.item_id, queue_wait_ms, inference_ms, first_delta_ms,
+                 delta_count, transcript.size(), timed_out);
         if (!task.connection->active) {
+            continue;
+        }
+
+        if (timed_out) {
+            sendEvent(task,
+                      json{{"event_id", eventId("event", task.item_id.size())},
+                           {"type", "conversation.item.input_audio_transcription.failed"},
+                           {"item_id", task.item_id},
+                           {"content_index", 0},
+                           {"error",
+                            {{"type", "transcription_error"},
+                             {"code", "transcription_timeout"},
+                             {"message", "Audio transcription timed out"},
+                             {"param", nullptr}}}}
+                          .dump());
             continue;
         }
 

@@ -181,6 +181,62 @@ TEST_CASE("Realtime Session keeps manual commit behavior when VAD is disabled", 
     CHECK(connection->active.load());
 }
 
+TEST_CASE("Realtime Session manual commit flushes a server VAD turn", "[audio][vad][realtime]") {
+    constexpr int sample_rate = 16000;
+    std::vector<std::string> sent_events;
+    std::vector<WhisperStreamRequest> submitted;
+    std::vector<std::string> submitted_ids;
+    auto connection = std::make_shared<SessionConnectionState>();
+
+    Session session;
+    session.init(
+        [&](WhisperStreamRequest request, std::string item_id) {
+            submitted.push_back(std::move(request));
+            submitted_ids.push_back(std::move(item_id));
+            return true;
+        },
+        [&](std::string event) { sent_events.push_back(std::move(event)); },
+        connection);
+
+    sendJson(session, {
+        {"type", "session.update"},
+        {"session", {{"audio", {{"input", {
+            {"format", {{"type", "audio/pcm"}, {"rate", sample_rate}}},
+            {"turn_detection", {
+                {"type", "server_vad"},
+                {"threshold", 0.5},
+                {"silence_duration_ms", 3000},
+            }},
+        }}}}}},
+    });
+
+    const auto audio = makeAudio(sample_rate);
+    const size_t without_long_trailing_silence = static_cast<size_t>(sample_rate) * 18U / 10U;
+    sendJson(session, {
+        {"type", "input_audio_buffer.append"},
+        {"audio", encodePcm16(audio, 0, without_long_trailing_silence)},
+    });
+    sendJson(session, {{"type", "input_audio_buffer.commit"}});
+
+    const auto parsed = parseEvents(sent_events);
+    const auto starts = eventsOfType(parsed, "input_audio_buffer.speech_started");
+    const auto stops = eventsOfType(parsed, "input_audio_buffer.speech_stopped");
+    const auto commits = eventsOfType(parsed, "input_audio_buffer.committed");
+
+    REQUIRE(starts.size() == 1);
+    REQUIRE(stops.size() == 1);
+    REQUIRE(commits.size() == 1);
+    REQUIRE(submitted.size() == 1);
+    REQUIRE(submitted_ids.size() == 1);
+    const auto item_id = starts.front().at("item_id").get<std::string>();
+    CHECK(stops.front().at("item_id") == item_id);
+    CHECK(commits.front().at("item_id") == item_id);
+    CHECK(submitted_ids.front() == item_id);
+    CHECK(submitted.front().pcmf32.size() >= static_cast<size_t>(sample_rate * 1.4));
+    CHECK(submitted.front().pcmf32.size() <= without_long_trailing_silence);
+    CHECK(connection->active.load());
+}
+
 TEST_CASE("Realtime Session reports invalid VAD configuration without closing", "[audio][vad][realtime]") {
     std::vector<std::string> sent_events;
     auto connection = std::make_shared<SessionConnectionState>();

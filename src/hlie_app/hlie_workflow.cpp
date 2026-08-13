@@ -1116,7 +1116,9 @@ std::string HLIEWorkflow::handle_asr_stream(
         request_body["language"] = request.language;
     }
 
-    std::function<bool()> should_stop = [] { return false; };
+    const std::function<bool()> should_stop = request.should_stop
+        ? request.should_stop
+        : std::function<bool()>([] { return false; });
     server_http_req transcription_req{
         {},
         {},

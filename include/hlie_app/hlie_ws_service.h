@@ -4,6 +4,7 @@
 #define UWS_NO_ZLIB
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -33,6 +34,7 @@ struct WhisperStreamRequest {
     std::string language;
     std::string response_format = "json";
     std::string path;
+    std::function<bool()> should_stop;
 };
 
 using TranscriptCallback = std::function<void(const std::string&)>;
@@ -116,6 +118,7 @@ private:
         std::shared_ptr<SessionConnectionState> connection;
         WhisperStreamRequest request;
         std::string item_id;
+        std::chrono::steady_clock::time_point enqueued_at = std::chrono::steady_clock::now();
     };
 
     bool enqueue(InferenceTask task);
@@ -131,6 +134,7 @@ private:
     std::condition_variable queue_cv_;
     std::deque<InferenceTask> queue_;
     size_t max_pending_inference_tasks_ = 8;
+    int inference_timeout_sec_ = 30;
 
     struct us_listen_socket_t* listen_token_ = nullptr;
     uWS::Loop* loop_ = nullptr;
