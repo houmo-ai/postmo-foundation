@@ -5,6 +5,7 @@ import base64
 import importlib
 import io
 import wave
+import uuid
 from http import HTTPStatus
 from collections.abc import AsyncGenerator
 from inspect import isawaitable
@@ -258,7 +259,10 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
         await websocket.close(code=1011)
         return
 
-    if not hasattr(engine, "websocket_transcribe_bytes"):
+    if not (
+        hasattr(engine, "websocket_transcribe_stream_with_usage")
+        or hasattr(engine, "websocket_transcribe_stream")
+    ):
         await websocket.send_json({
             "type": "error",
             "error": {"type": "unsupported_model", "message": "当前模型不支持实时 ASR"},
@@ -272,6 +276,7 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
     language = ""
     prompt = ""
     response_format = "json"
+    include: list[str] = []
     turn_detection: dict[str, Any] | None = {
         "type": "server_vad",
         "threshold": 0.5,
@@ -289,6 +294,7 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
     async def _send_error(message: str, err_type: str = "invalid_request_error") -> None:
         await websocket.send_json({
             "type": "error",
+            "event_id": f"evt_{uuid.uuid4().hex}",
             "error": {"type": err_type, "message": message},
         })
 
@@ -298,6 +304,7 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
             "object": "realtime.transcription_session",
             "type": "transcription",
             "model": MODEL_NAME,
+            "include": include,
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcm", "rate": sample_rate},
@@ -312,13 +319,41 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
             },
         }
 
-    async def _transcribe_buffer(final_audio: bytes) -> str:
-        transcribe_fn = getattr(engine, "websocket_transcribe_bytes")
+    async def _transcribe_buffer(
+        final_audio: bytes,
+    ) -> AsyncGenerator[
+        tuple[str, list[dict[str, Any]] | None, dict[str, Any] | None],
+        None,
+    ]:
         wav_audio = _pcm16le_to_wav_bytes(final_audio, sample_rate)
-        result = transcribe_fn(wav_audio, language=language or None, prompt=prompt)
-        if isawaitable(result):
-            result = await result
-        return str(result)
+        include_logprobs = "item.input_audio_transcription.logprobs" in include
+        transcribe_with_usage_fn = getattr(
+            engine,
+            "websocket_transcribe_stream_with_usage",
+            None,
+        )
+        if transcribe_with_usage_fn is not None:
+            async for result in transcribe_with_usage_fn(
+                wav_audio,
+                language=language or None,
+                prompt=prompt,
+                include_logprobs=include_logprobs,
+            ):
+                yield result.delta, result.logprobs, result.usage
+            return
+
+        transcribe_fn = getattr(engine, "websocket_transcribe_stream")
+        async for delta in transcribe_fn(
+            wav_audio,
+            language=language or None,
+            prompt=prompt,
+        ):
+            if delta:
+                yield str(delta), None, None
+        yield "", None, {
+            "type": "duration",
+            "seconds": len(final_audio) / (sample_rate * 2),
+        }
 
     async def _commit_turn() -> None:
         nonlocal audio_buffer, item_index, speech_started, speech_stopped, silence_ms, turn_ms, committed
@@ -335,43 +370,69 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
         item_id = f"item_{item_index}"
         content_index = 0
 
-        if speech_started and not speech_stopped:
+        vad_enabled = (
+            isinstance(turn_detection, dict)
+            and turn_detection.get("type") == "server_vad"
+        )
+        if vad_enabled and speech_started and not speech_stopped:
             speech_stopped = True
             await websocket.send_json({
                 "type": "input_audio_buffer.speech_stopped",
+                "event_id": f"evt_{uuid.uuid4().hex}",
                 "item_id": item_id,
                 "audio_end_ms": int(turn_ms),
             })
 
         await websocket.send_json({
             "type": "input_audio_buffer.committed",
+            "event_id": f"evt_{uuid.uuid4().hex}",
             "item_id": item_id,
         })
 
         try:
-            transcript = (await _transcribe_buffer(bytes(audio_buffer))).strip()
+            transcript_parts: list[str] = []
+            usage: dict[str, Any] | None = None
+            completed_logprobs: list[dict[str, Any]] | None = None
+            async for delta, result_logprobs, result_usage in _transcribe_buffer(
+                bytes(audio_buffer)
+            ):
+                if result_usage is not None:
+                    usage = result_usage
+                    completed_logprobs = result_logprobs
+                if delta:
+                    transcript_parts.append(delta)
+                    delta_event: dict[str, Any] = {
+                        "type": "conversation.item.input_audio_transcription.delta",
+                        "event_id": f"evt_{uuid.uuid4().hex}",
+                        "item_id": item_id,
+                        "content_index": content_index,
+                        "delta": delta,
+                    }
+                    if result_logprobs is not None:
+                        delta_event["logprobs"] = result_logprobs
+                    await websocket.send_json(delta_event)
+            transcript = "".join(transcript_parts).strip()
         except Exception as exc:
             logger.exception(f"Worker {MODEL_NAME}:{PORT} OpenAI Realtime ASR 转写失败: {exc}")
             await websocket.send_json({
                 "type": "conversation.item.input_audio_transcription.failed",
+                "event_id": f"evt_{uuid.uuid4().hex}",
                 "item_id": item_id,
                 "content_index": content_index,
                 "error": {"type": "server_error", "message": str(exc)},
             })
         else:
-            if transcript:
-                await websocket.send_json({
-                    "type": "conversation.item.input_audio_transcription.delta",
-                    "item_id": item_id,
-                    "content_index": content_index,
-                    "delta": transcript,
-                })
-            await websocket.send_json({
+            completed_event: dict[str, Any] = {
                 "type": "conversation.item.input_audio_transcription.completed",
+                "event_id": f"evt_{uuid.uuid4().hex}",
                 "item_id": item_id,
                 "content_index": content_index,
                 "transcript": transcript,
-            })
+                "usage": usage,
+            }
+            if completed_logprobs is not None:
+                completed_event["logprobs"] = completed_logprobs
+            await websocket.send_json(completed_event)
         finally:
             audio_buffer = bytearray()
             speech_started = False
@@ -381,7 +442,7 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
 
     await websocket.send_json({
         "type": "session.created",
-        "event_id": f"evt_{int(asyncio.get_running_loop().time() * 1000)}",
+        "event_id": f"evt_{uuid.uuid4().hex}",
         "session": _session_payload(),
     })
 
@@ -405,6 +466,23 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
             msg_type = msg.get("type")
             if msg_type == "session.update":
                 session = msg.get("session") or {}
+                requested_include = session.get("include")
+                if requested_include is not None:
+                    if not isinstance(requested_include, list) or not all(
+                        isinstance(value, str) for value in requested_include
+                    ):
+                        await _send_error("session.include 必须是字符串数组")
+                        continue
+                    unsupported_include = set(requested_include) - {
+                        "item.input_audio_transcription.logprobs"
+                    }
+                    if unsupported_include:
+                        await _send_error(
+                            "不支持的 session.include 值: "
+                            + ", ".join(sorted(unsupported_include))
+                        )
+                        continue
+                    include = list(dict.fromkeys(requested_include))
                 audio_input = ((session.get("audio") or {}).get("input") or {})
                 fmt = audio_input.get("format") or {}
                 transcription = audio_input.get("transcription") or {}
@@ -419,7 +497,7 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
 
                 await websocket.send_json({
                     "type": "session.updated",
-                    "event_id": f"evt_{int(asyncio.get_running_loop().time() * 1000)}",
+                    "event_id": f"evt_{uuid.uuid4().hex}",
                     "session": _session_payload(),
                 })
                 continue
@@ -465,6 +543,7 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
                         speech_started = True
                         await websocket.send_json({
                             "type": "input_audio_buffer.speech_started",
+                            "event_id": f"evt_{uuid.uuid4().hex}",
                             "item_id": f"item_{item_index + 1}",
                             "audio_start_ms": max(0, int(turn_ms - chunk_ms)),
                         })
@@ -476,8 +555,6 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
                 continue
 
             if msg_type == "input_audio_buffer.commit":
-                if not speech_started:
-                    speech_started = True
                 await _commit_turn()
                 continue
 

@@ -4,6 +4,7 @@ import time
 import asyncio
 import math
 import re
+from dataclasses import dataclass
 from typing import Any, Dict
 
 import numpy as np
@@ -81,6 +82,13 @@ SpeechToTextSegment: TypeAlias = TranscriptionSegment | TranslationSegment
 T = TypeVar("T", bound=SpeechToTextResponse)
 V = TypeVar("V", bound=SpeechToTextResponseVerbose)
 S = TypeVar("S", bound=SpeechToTextSegment)
+
+
+@dataclass(frozen=True)
+class RealtimeTranscriptionResult:
+    delta: str = ""
+    logprobs: list[dict[str, Any]] | None = None
+    usage: dict[str, Any] | None = None
 
 ResponseType: TypeAlias = (
     TranscriptionResponse
@@ -898,9 +906,41 @@ class ASREngine(InferenceEngine):
         language: str | None = None,
         prompt: str = "",
     ) -> str:
-        """WebSocket 场景下的单段音频转写。"""
+        """WebSocket 场景下的单段音频转写，兼容需要完整文本的调用方。"""
+        text_parts: list[str] = []
+        async for delta in self.websocket_transcribe_stream(
+            audio_bytes,
+            language=language,
+            prompt=prompt,
+        ):
+            text_parts.append(delta)
+        return "".join(text_parts)
+
+    async def websocket_transcribe_stream(
+        self,
+        audio_bytes: bytes,
+        language: str | None = None,
+        prompt: str = "",
+    ) -> AsyncGenerator[str, None]:
+        """按 vLLM 累计生成结果产出 OpenAI Realtime 风格文本增量。"""
+        async for result in self.websocket_transcribe_stream_with_usage(
+            audio_bytes,
+            language=language,
+            prompt=prompt,
+        ):
+            if result.delta:
+                yield result.delta
+
+    async def websocket_transcribe_stream_with_usage(
+        self,
+        audio_bytes: bytes,
+        language: str | None = None,
+        prompt: str = "",
+        include_logprobs: bool = False,
+    ) -> AsyncGenerator[RealtimeTranscriptionResult, None]:
+        """产出文本增量、可选 token logprobs 和最终 usage。"""
         if not audio_bytes:
-            return ""
+            return
 
         # 用轻量对象承载 _preprocess/create_sampling_params 所需字段。
         class _WsRequest:
@@ -909,7 +949,8 @@ class ASREngine(InferenceEngine):
                 self.to_language = None
                 self.prompt = prmpt
                 self.response_format = "json"
-                self.stream = False
+                # CUMULATIVE 使 vLLM 在生成期间持续返回当前完整候选文本。
+                self.stream = True
                 self.n = 1
                 self.seed = None
                 self.temperature = 0.0
@@ -921,28 +962,168 @@ class ASREngine(InferenceEngine):
 
         ws_request = _WsRequest(language, prompt)
         ws_request_id = f"ws-asr-pre-{self._base_request_id(None)}"
-        prompts, _ = await self._preprocess_speech_to_text(
+        prompts, audio_duration_s = await self._preprocess_speech_to_text(
             ws_request,
             audio_bytes,
             request_id=ws_request_id,
         )
         sampling_params = self.create_sampling_params(ws_request)
+        if include_logprobs:
+            # vLLM 中 0 表示仅返回实际选中 token 的 log probability，
+            # 不额外返回 top candidates，符合 Realtime transcription schema。
+            sampling_params.logprobs = 0
 
-        merged_text = ""
+        text_input_tokens = 0
+        output_tokens = 0
+        completed_logprobs: list[dict[str, Any]] = []
+
         for idx, prompt_item in enumerate(prompts):
             request_id = f"ws-asr-{self._base_request_id(None)}-{idx}"
             result_generator = self.engine.generate(prompt_item, sampling_params, request_id)
 
-            prev = ""
-            chunk_text = ""
+            previous_text = ""
+            previous_visible_logprob_count = 0
+            segment_input_tokens = 0
+            segment_output_tokens = 0
+            is_qwen_asr = "qwen" in str(self.arch_name).lower()
             async for out in result_generator:
                 if not out.outputs:
                     continue
-                processed = self._post_process_asr_text(out.outputs[0].text)
-                delta = processed[len(prev):]
-                prev = processed
-                chunk_text += delta
+                output = out.outputs[0]
+                raw_text = output.text or ""
+                if out.prompt_token_ids is not None:
+                    segment_input_tokens = len(out.prompt_token_ids)
+                segment_output_tokens = len(output.token_ids or [])
 
-            merged_text += chunk_text
+                # Qwen3-ASR 的控制前缀可能跨多个生成结果拆分。在 <asr_text>
+                # 完整出现前不向客户端泄漏前缀；若模型最终没有输出该标签，
+                # 则在结束时回退到通用后处理。
+                if is_qwen_asr and "<asr_text>" not in raw_text:
+                    if output.finish_reason is None:
+                        continue
+                    current_text = self._post_process_asr_text(raw_text)
+                else:
+                    current_text = self._post_process_asr_text(raw_text)
 
-        return merged_text
+                visible_logprobs: list[dict[str, Any]] = []
+                if include_logprobs:
+                    visible_logprobs = self._get_realtime_transcription_logprobs(
+                        raw_text=raw_text,
+                        visible_text=current_text,
+                        token_ids=output.token_ids or [],
+                        token_logprobs=output.logprobs,
+                    )
+                    if visible_logprobs[:previous_visible_logprob_count] != (
+                        completed_logprobs[-previous_visible_logprob_count:]
+                        if previous_visible_logprob_count
+                        else []
+                    ):
+                        raise RuntimeError(
+                            "ASR 流式累计 logprobs 发生前文改写，无法转换为追加式数据"
+                        )
+
+                if current_text.startswith(previous_text):
+                    delta = current_text[len(previous_text):]
+                else:
+                    # OpenAI transcription.delta 是仅追加协议，无法表达撤回或
+                    # 替换已经发送的内容，因此拒绝非单调累计输出。
+                    raise RuntimeError(
+                        "ASR 流式累计输出发生前文改写，无法转换为追加式 delta"
+                    )
+
+                previous_text = current_text
+                if delta:
+                    delta_logprobs = (
+                        visible_logprobs[previous_visible_logprob_count:]
+                        if include_logprobs
+                        else None
+                    )
+                    if delta_logprobs:
+                        completed_logprobs.extend(delta_logprobs)
+                    previous_visible_logprob_count = len(visible_logprobs)
+                    yield RealtimeTranscriptionResult(
+                        delta=delta,
+                        logprobs=delta_logprobs,
+                    )
+
+            text_input_tokens += segment_input_tokens
+            output_tokens += segment_output_tokens
+
+        audio_tokens = self.model_cls.get_num_audio_tokens(
+            audio_duration_s,
+            self.asr_config,
+            self.model_config,
+        ) or 0
+        input_tokens = text_input_tokens + audio_tokens
+        yield RealtimeTranscriptionResult(
+            logprobs=completed_logprobs if include_logprobs else None,
+            usage={
+                "type": "tokens",
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+                "input_token_details": {
+                    "audio_tokens": audio_tokens,
+                    "text_tokens": text_input_tokens,
+                },
+            }
+        )
+
+    def _get_realtime_transcription_logprobs(
+        self,
+        raw_text: str,
+        visible_text: str,
+        token_ids: list[int],
+        token_logprobs: FlatLogprobs | list[dict[int, Logprob]] | None,
+    ) -> list[dict[str, Any]]:
+        """将 vLLM 累计 token logprobs 转换为可见转录文本的标准结构。"""
+        if token_logprobs is None:
+            raise RuntimeError("ASR 后端未返回请求的 logprobs")
+
+        records: list[dict[str, Any]] = []
+        for index, token_id in enumerate(token_ids):
+            if index >= len(token_logprobs):
+                break
+            candidates = token_logprobs[index]
+            selected = candidates.get(token_id) if candidates is not None else None
+            if selected is None:
+                raise RuntimeError(f"ASR 后端缺少 token {token_id} 的 logprob")
+            token = selected.decoded_token
+            if token is None:
+                token = self.tokenizer.decode([token_id])
+            records.append({
+                "token": token,
+                "bytes": list(token.encode("utf-8", errors="replace")),
+                "logprob": max(selected.logprob, -9999.0),
+            })
+
+        decoded_text = "".join(record["token"] for record in records)
+        alignment_text = decoded_text if decoded_text.endswith(visible_text) else raw_text
+        if not alignment_text.endswith(visible_text):
+            raise RuntimeError("ASR logprobs 无法与转录文本对齐")
+        hidden_prefix_len = len(alignment_text) - len(visible_text)
+
+        visible_records: list[dict[str, Any]] = []
+        offset = 0
+        for record in records:
+            token = record["token"]
+            token_end = offset + len(token)
+            if token_end <= hidden_prefix_len:
+                offset = token_end
+                continue
+            if offset < hidden_prefix_len:
+                token = token[hidden_prefix_len - offset:]
+            remaining_visible_chars = len(visible_text) - sum(
+                len(item["token"]) for item in visible_records
+            )
+            token = token[:remaining_visible_chars]
+            if token:
+                visible_records.append({
+                    **record,
+                    "token": token,
+                    "bytes": list(token.encode("utf-8", errors="replace")),
+                })
+            offset = token_end
+            if sum(len(item["token"]) for item in visible_records) >= len(visible_text):
+                break
+        return visible_records

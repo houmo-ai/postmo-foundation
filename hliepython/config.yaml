@@ -1,28 +1,19 @@
 
 # 模型配置
 models:
-  # # Qwen3.5-9B 模型
-  # - model_path: "HiModel_xh2_qwen3.5_9b_256_32k_b1_1chip_2cores_v1.2.0_20260401.gguf"
-  #   model_type: "llm"
-  #   instances:
-  #     - vllm_config:
-  #         # serving:
-  #         #   enable-auto-tool-choice: true
-  #         #   tool-call-parser: "qwen3_coder"
-  #         api-server:
-  #           port: 7801
-  #           server-model-name: "Qwen3.5-9B"
-  #       # additional_config:
-  #       #   "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
-  #     - vllm_config:
-  #         # serving:
-  #         #   enable-auto-tool-choice: true
-  #         #   tool-call-parser: "qwen3_coder"
-  #         api-server:
-  #           port: 7802
-  #           server-model-name: "Qwen3.5-9B"
-  #       # additional_config:
-  #       #   "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
+  # Qwen3.5-0.8B 模型
+  - model_path: "HiModel_xh2_qwen3.5-0.8b_w8a16_256_256k_b1_1chip_2cores_v1.4.0_20260708.gguf"
+    model_type: "llm"
+    instances:
+      - vllm_config:
+          # serving:
+          #   enable-auto-tool-choice: true
+          #   tool-call-parser: "qwen3_coder"
+          api-server:
+            port: 7801
+            server-model-name: "Qwen3.5-0.8B"
+        # additional_config:
+        #   "vit_model_name": "mmproj_xh2_qwen3.5-0.8b_w8a16_2cores_vit_448x448_v1.4.0_20260708.gguf"
 
   # # CoPaw-Flash-9B 模型
   # - model_path: "CoPaw-Flash-9B"
@@ -112,6 +103,12 @@ models:
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_qwen3.6_27b_2cores_vit_448x448_v1.3.0_20260603.gguf"
 
+##############################################################################################
+#                                                                                            #
+#                                 ASR & ForcedAligned Models                                 #
+#                                                                                            #
+##############################################################################################
+
   # # whisper-turbo 模型
   # - model_path: "HiModel-whisper-large_v3_turbo_1chip_2cores_v1.2.0-20260420.gguf"
   #   model_type: "asr"
@@ -124,19 +121,19 @@ models:
   #           port: 7803
   #           server-model-name: "whisper-turbo"
 
-  # # Qwen3-ASR-1.7B 模型
-  # - model_path: "HiModel_xh2_qwen3_asr_1.7b_1chip_2cores_v1.3.0_20260604.gguf"
-  #   model_type: "asr"
-  #   instances:
-  #     - vllm_config:
-  #         engine:
-  #           load-format: "dummy"
-  #           no-enable-prefix-caching: true
-  #         api-server:
-  #           port: 7803
-  #           server-model-name: "Qwen3-ASR-1.7B"
-  #       additional_config:
-  #         "vit_model_name": "mmproj_xh2_qwen3-asr_1.7b_2cores_v1.3.0_20260604.gguf"
+  # Qwen3-ASR-0.6B 模型
+  - model_path: "HiModel_xh2_qwen3-asr-0.6b_2k_1chip_2cores_v1.4.0_20260721.gguf"
+    model_type: "asr"
+    instances:
+      - vllm_config:
+          engine:
+            load-format: "dummy"
+            no-enable-prefix-caching: true
+          api-server:
+            port: 7803
+            server-model-name: "Qwen3-ASR-0.6B"
+        additional_config:
+          "vit_model_name": "mmproj_xh2_qwen3-asr-0.6b_2cores_v1.4.0_20260721.gguf"
 
   # # Qwen3-ForcedAligner-0.6B 模型
   # - model_path: "HiModel_xh2_qwen3-ForcedAligner_0.6b_2cores_v1.3.0_20260525.gguf"
@@ -156,8 +153,14 @@ models:
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_qwen3-ForcedAligner_0.6b_2cores_v1.3.0_20260525.gguf"
 
+##############################################################################################
+#                                                                                            #
+#                                        TTS Models                                          #
+#                                                                                            #
+##############################################################################################
+
   # # Fun-CosyVoice3-0.5B 模型
-  # - model_path: HiModel_xh2_cosyvoice3_0.5b_1chip_2cores_v1.1.0-20260409.gguf
+  # - model_path: HiModel_xh2_cosyvoice3-0.5b-2512_256_2k_b1_1chip_2cores_v1.4.0_20260720.gguf
   #   model_type: "tts"
   #   instances:
   #     - vllm_config:
@@ -165,8 +168,14 @@ models:
   #           port: 7805
   #           server-model-name: "Fun-CosyVoice3-0.5B"
 
+##############################################################################################
+#                                                                                            #
+#                                 Embedding & Reranker Models                                #
+#                                                                                            #
+##############################################################################################
+
   # # Qwen3-Embedding-8B 模型
-  # - model_path: "HiModel_xh2_qwen3-embedding_8b_256_8k_b1_1chip_2cores_v1.2.0_20260421.gguf"
+  # - model_path: "HiModel_xh2_qwen3-embedding-8b_256_8k_b1_1chip_2cores_v1.4.0_20260720.gguf"
   #   model_type: "embedding"
   #   instances:
   #     - vllm_config:
@@ -175,7 +184,7 @@ models:
   #           server-model-name: "Qwen3-Embedding-8B"
 
   # # bge-m3 模型
-  # - model_path: "HiModel_xh2_bge_0.5b_0.5k_b10_1chip_2cores_v1.3.0_20260609.gguf"
+  # - model_path: "HiModel_xh2_bge-0.5b_0.5k_b10_1chip_2cores_v1.4.0_20260720.gguf"
   #   model_type: "embedding"
   #   instances:
   #     - vllm_config:

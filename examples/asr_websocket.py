@@ -8,8 +8,9 @@ Protocol used by HLIECpp:
     2. Client sends ``session.update`` with transcription audio settings.
     3. Client streams base64-encoded little-endian PCM16 chunks with
        ``input_audio_buffer.append``.
-    4. Server VAD sends ``input_audio_buffer.committed`` and transcription
-       delta/completed events. With ``--manual-commit``, the client sends
+        4. Server VAD sends ``input_audio_buffer.committed``, followed by zero or
+             more incremental transcription ``delta`` events and one ``completed``
+             event. With ``--manual-commit``, the client sends
        ``input_audio_buffer.commit`` after upload instead.
 """
 
@@ -20,7 +21,9 @@ import asyncio
 import base64
 import json
 import math
+import shutil
 import struct
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -29,7 +32,7 @@ import numpy as np
 
 
 DEFAULT_URI = "ws://127.0.0.1:7803/v1/realtime"
-DEFAULT_AUDIO_FILE = "E:/test_data/audio/long_2.wav"
+DEFAULT_AUDIO_FILE = "./long_audio.mp3"
 TARGET_SAMPLE_RATE = 24_000
 CHUNK_DURATION_MS = 250
 TRAILING_SILENCE_MS = 750
@@ -96,6 +99,40 @@ def read_wav_pcm(path: Path) -> tuple[np.ndarray, int]:
     return samples.astype(np.float32, copy=False), sample_rate
 
 
+def decode_audio_ffmpeg(path: Path, target_rate: int) -> np.ndarray:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError(
+            f"Audio format {path.suffix or '<unknown>'} requires ffmpeg, but ffmpeg was not found in PATH"
+        )
+
+    command = [
+        ffmpeg,
+        "-v",
+        "error",
+        "-i",
+        str(path),
+        "-f",
+        "f32le",
+        "-acodec",
+        "pcm_f32le",
+        "-ac",
+        "1",
+        "-ar",
+        str(target_rate),
+        "pipe:1",
+    ]
+    result = subprocess.run(command, capture_output=True, check=False)
+    if result.returncode != 0:
+        error = result.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"Failed to decode audio file {path}: {error or 'ffmpeg exited with an error'}")
+
+    samples = np.frombuffer(result.stdout, dtype="<f4")
+    if samples.size == 0:
+        raise ValueError(f"Decoded audio is empty: {path}")
+    return samples.astype(np.float32, copy=False)
+
+
 def resample_linear(samples: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
     if source_rate == target_rate or samples.size == 0:
         return samples.astype(np.float32, copy=False)
@@ -108,10 +145,14 @@ def resample_linear(samples: np.ndarray, source_rate: int, target_rate: int) -> 
 
 def load_audio(path: Path, target_rate: int) -> np.ndarray:
     log("INFO", f"Loading audio: {path}")
-    samples, sample_rate = read_wav_pcm(path)
-    log("INFO", f"Original audio: sample_rate={sample_rate}, samples={samples.size}")
+    if path.suffix.lower() in {".wav", ".wave"}:
+        samples, sample_rate = read_wav_pcm(path)
+        log("INFO", f"Original audio: sample_rate={sample_rate}, samples={samples.size}")
+        samples = resample_linear(samples, sample_rate, target_rate)
+    else:
+        samples = decode_audio_ffmpeg(path, target_rate)
+        log("INFO", f"Decoded audio with ffmpeg: samples={samples.size}")
 
-    samples = resample_linear(samples, sample_rate, target_rate)
     samples = np.clip(samples, -1.0, 1.0).astype(np.float32, copy=False)
 
     duration = samples.size / target_rate
@@ -147,6 +188,7 @@ async def configure_session(
     vad_threshold: float,
     silence_duration_ms: int,
     max_turn_duration_ms: int,
+    include_logprobs: bool,
 ) -> None:
     turn_detection = None
     if vad_enabled:
@@ -174,6 +216,11 @@ async def configure_session(
             "type": "session.update",
             "session": {
                 "type": "transcription",
+                "include": (
+                    ["item.input_audio_transcription.logprobs"]
+                    if include_logprobs
+                    else []
+                ),
                 "audio": {
                     "input": {
                         "format": {"type": "audio/pcm", "rate": sample_rate},
@@ -250,6 +297,7 @@ async def receive_transcripts(websocket: Any, sender_done: asyncio.Event, final_
     committed_turns = 0
     completed_turns = 0
     transcripts: list[str] = []
+    delta_parts_by_item: dict[str, list[str]] = {}
     deadline = time.monotonic() + final_timeout
 
     while True:
@@ -283,12 +331,27 @@ async def receive_transcripts(websocket: Any, sender_done: asyncio.Event, final_
             committed_turns += 1
             log("INFO", f"Committed turn {committed_turns}: {event.get('item_id')}")
         elif event_type == "conversation.item.input_audio_transcription.delta":
-            print(event.get("delta", ""), end="", flush=True)
+            item_id = str(event.get("item_id", ""))
+            delta = str(event.get("delta", ""))
+            delta_parts_by_item.setdefault(item_id, []).append(delta)
+            print(delta, end="", flush=True)
+            if event.get("logprobs") is not None:
+                log("DEBUG", f"Delta logprobs: {event['logprobs']}")
         elif event_type == "conversation.item.input_audio_transcription.completed":
+            item_id = str(event.get("item_id", ""))
             transcript = event.get("transcript", "").strip()
+            streamed_transcript = "".join(delta_parts_by_item.pop(item_id, []))
+            if streamed_transcript.strip() != transcript:
+                log(
+                    "WARN",
+                    "Incremental deltas differ from completed transcript; "
+                    "using completed transcript as the authoritative result",
+                )
             transcripts.append(transcript)
             completed_turns += 1
             log("SUCCESS", f"\nCompleted turn {completed_turns}/{committed_turns}: {transcript}")
+            if event.get("logprobs") is not None:
+                log("INFO", f"Completed logprobs: {event['logprobs']}")
         elif event_type == "conversation.item.input_audio_transcription.failed":
             completed_turns += 1
             error = event.get("error", {})
@@ -337,6 +400,7 @@ async def run(args: argparse.Namespace) -> str:
             vad_threshold=args.vad_threshold,
             silence_duration_ms=args.silence_duration_ms,
             max_turn_duration_ms=args.max_turn_duration_ms,
+            include_logprobs=args.logprobs,
         )
 
         sender_done = asyncio.Event()
@@ -383,12 +447,13 @@ async def run(args: argparse.Namespace) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uri", default=DEFAULT_URI, help=f"WebSocket URI, default: {DEFAULT_URI}")
-    parser.add_argument("--audio", default=str(DEFAULT_AUDIO_FILE), help="Path to a PCM WAV file")
+    parser.add_argument("--audio", default=str(DEFAULT_AUDIO_FILE), help="Path to an audio file (WAV, MP3, etc.)")
     parser.add_argument("--sample-rate", type=int, default=TARGET_SAMPLE_RATE, help="Input sample rate declared to server")
     parser.add_argument("--model", default="", help="Optional transcription model; overrides model in the WebSocket URI")
     parser.add_argument("--prompt", default="", help="Optional transcription prompt")
     parser.add_argument("--language", default="", help="Optional transcription language hint")
     parser.add_argument("--response-format", default="json", help="Transcription response format")
+    parser.add_argument("--logprobs", action="store_true", help="Include token log probabilities in Realtime transcription events")
     parser.add_argument("--chunk-ms", type=int, default=CHUNK_DURATION_MS, help="Audio chunk duration in milliseconds")
     parser.add_argument("--trailing-silence-ms", type=int, default=TRAILING_SILENCE_MS, help="Silence sent to trigger VAD")
     parser.add_argument("--vad-threshold", type=float, default=0.5, help="OpenAI server_vad threshold")
