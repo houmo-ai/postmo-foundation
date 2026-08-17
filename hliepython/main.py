@@ -334,20 +334,33 @@ async def _parse_form_body(raw_request: Request) -> Dict[str, Any]:
     return payload
 
 
-def _get_served_model_name_from_instance(model_name: str, instance_cfg: Dict[str, Any]) -> str:
+def _get_served_model_names_from_instance(
+    model_name: str,
+    instance_cfg: Dict[str, Any],
+) -> list[str]:
     try:
-        _, _, api_server_args, _ = split_vllm_config(instance_cfg.get("vllm_config", {}))
+        _, frontend_args, api_server_args, _ = split_vllm_config(
+            instance_cfg.get("vllm_config", {})
+        )
     except Exception:
+        frontend_args = {}
         api_server_args = {}
 
-    configured_model_name = api_server_args.get("server_model_name")
+    configured_model_name = frontend_args.get("served_model_name")
+    if configured_model_name is None:
+        configured_model_name = api_server_args.get("server_model_name")
     if configured_model_name is None:
         configured_model_name = api_server_args.get("served_model_name")
     if isinstance(configured_model_name, list):
-        return str(configured_model_name[0]) if configured_model_name else str(model_name)
+        names = [str(name) for name in configured_model_name if str(name)]
+        return names or [str(model_name)]
     if configured_model_name not in (None, ""):
-        return str(configured_model_name)
-    return str(model_name)
+        return [str(configured_model_name)]
+    return [str(model_name)]
+
+
+def _get_served_model_name_from_instance(model_name: str, instance_cfg: Dict[str, Any]) -> str:
+    return _get_served_model_names_from_instance(model_name, instance_cfg)[0]
 
 
 def _find_model_by_type(model_type: str) -> tuple[Optional[str], Optional[int]]:
@@ -975,6 +988,22 @@ def _build_preload_instance_config(model_name: str, instance, fallback_model_typ
     }
 
 
+def _get_instance_request_model_names(
+    model_name: str,
+    instance_cfg: Dict[str, Any],
+) -> list[str]:
+    """返回一个预加载实例可接受的所有 OpenAI API 模型名。"""
+    names = {
+        str(model_name),
+        _get_model_list_name(
+            model_name,
+            instance_cfg.get("additional_config") or {},
+        ),
+    }
+    names.update(_get_served_model_names_from_instance(model_name, instance_cfg))
+    return sorted(name for name in names if name)
+
+
 def normalize_port(port_value: Any) -> Optional[int]:
     if port_value is None or port_value == "":
         return None
@@ -1111,11 +1140,11 @@ def start_workers(config: AppConfig):
                 instance=inst,
                 fallback_model_type=model.model_type,
             )
-            served_model_name = _get_served_model_name_from_instance(name, instance_cfg)
-            if served_model_name != name:
-                MODEL_PORT_MAP.setdefault(served_model_name, [])
-                if p not in MODEL_PORT_MAP[served_model_name]:
-                    MODEL_PORT_MAP[served_model_name].append(p)
+            request_model_names = _get_instance_request_model_names(name, instance_cfg)
+            for request_model_name in request_model_names:
+                MODEL_PORT_MAP.setdefault(request_model_name, [])
+                if p not in MODEL_PORT_MAP[request_model_name]:
+                    MODEL_PORT_MAP[request_model_name].append(p)
             PORT_MODEL_MAP[p] = name
             model_path = inst.model_path
             additional_config = inst.additional_config
@@ -1133,6 +1162,7 @@ def start_workers(config: AppConfig):
                     additional_config,
                     model_type,
                     config.server.logging.to_dict(),
+                    request_model_names,
                 ),
                 daemon=False,
             )
@@ -1153,6 +1183,7 @@ def start_workers(config: AppConfig):
 def start_dynamic_worker(model_name: str, server_config: Dict[str, Any]):
     instance_cfg = _build_instance_config(model_name, server_config)
     port = int(instance_cfg["port"])
+    request_model_names = _get_instance_request_model_names(model_name, instance_cfg)
 
     # 同模型同端口已经存在时直接复用
     if PORT_MODEL_MAP.get(port) == model_name and port in WORKER_PROCESS_MAP:
@@ -1168,6 +1199,7 @@ def start_dynamic_worker(model_name: str, server_config: Dict[str, Any]):
             instance_cfg.get("additional_config", {}),
             instance_cfg.get("model_type", "llm"),
             APP_CONFIG.server.logging.to_dict(),
+            request_model_names,
         ),
         daemon=False,
     )
@@ -1176,7 +1208,10 @@ def start_dynamic_worker(model_name: str, server_config: Dict[str, Any]):
     WORKERS.append(proc)
     WORKER_PROCESS_MAP[port] = proc
     PORT_MODEL_MAP[port] = model_name
-    MODEL_PORT_MAP.setdefault(model_name, []).append(port)
+    for request_model_name in request_model_names:
+        MODEL_PORT_MAP.setdefault(request_model_name, [])
+        if port not in MODEL_PORT_MAP[request_model_name]:
+            MODEL_PORT_MAP[request_model_name].append(port)
     DYNAMIC_MODEL_INSTANCES.setdefault(model_name, []).append(port)
     _register_worker_runtime(
         model_name=model_name,
@@ -1220,12 +1255,12 @@ def unload_worker(model_name: Optional[str] = None, port: Optional[int] = None):
                 proc.kill()
                 proc.join(timeout=5)
 
-        if loaded_model and loaded_model in MODEL_PORT_MAP:
-            MODEL_PORT_MAP[loaded_model] = [
-                p for p in MODEL_PORT_MAP[loaded_model] if p != target_port
+        for request_model_name in list(MODEL_PORT_MAP):
+            MODEL_PORT_MAP[request_model_name] = [
+                p for p in MODEL_PORT_MAP[request_model_name] if p != target_port
             ]
-            if not MODEL_PORT_MAP[loaded_model]:
-                MODEL_PORT_MAP.pop(loaded_model, None)
+            if not MODEL_PORT_MAP[request_model_name]:
+                MODEL_PORT_MAP.pop(request_model_name, None)
 
         if loaded_model and loaded_model in DYNAMIC_MODEL_INSTANCES:
             DYNAMIC_MODEL_INSTANCES[loaded_model] = [

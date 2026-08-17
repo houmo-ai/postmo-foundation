@@ -4,6 +4,7 @@
 schema_version: 1
 
 profiles:
+# LLM Models
   llm: &profile_llm
     model_type: "llm"
 
@@ -40,6 +41,7 @@ profiles:
         enable-auto-tool-choice: true
         tool-call-parser: "openai"
 
+# ASR Models
   asr_dummy_load: &profile_asr_dummy_load
     model_type: "asr"
     vllm_config:
@@ -61,6 +63,13 @@ profiles:
     additional_config:
       worker_startup_timeout: 600
 
+
+# TTS Models
+  tts: &profile_tts
+    model_type: "tts"
+
+
+# Embedding & Reranker Models
   embedding: &profile_embedding
     model_type: "embedding"
 
@@ -73,95 +82,96 @@ profiles:
           classifier_from_token: ["no", "yes"]
           is_original_qwen3_reranker: true
 
-  tts: &profile_tts
-    model_type: "tts"
+  reranker_bge_m3: &profile_reranker_bge_m3
+    model_type: "reranker"
+    vllm_config:
+      serving:
+        tool-call-parser: "hermes"
 
 models:
-  HiModel_xh2_qwen3.6_27b_mtp_256_128k_1chip_2cores_v1.3.0_20260603.gguf:
+# LLM Models
+  # Qwen3-next
+  HiModel_xh2_qwen3-next-80b-a3b_w4a8h0_ssfp_256_256k_b1_2chips_2cores_v1.4.0_20260709.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  # Qwen3.5
+  HiModel_xh2_qwen3.5-0.8b_w8a16_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_448_448.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-0.8b_w8a16_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_896_896.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-2b_w8a16_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_448_448.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-2b_w8a16_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_896_896.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-4b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_448_448.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-4b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_896_896.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-9b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_448_448.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-9b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_896_896.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  # Qwen3.6
+  HiModel_xh2_qwen3.6-27b_w4a8_256_128k_b1_1chip_2cores_v1.4.0_20260708_vit_448_448.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.6-27b_w4a8_256_128k_b1_1chip_2cores_v1.4.0_20260708_vit_896_896.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel-Qwen3.6-27b-mtp-w4a8-p256-128K-b1-2core-1d-xh2-v1.4.0-20260716153551_vit_448_448.gguf:
     <<: *profile_llm_qwen_mtp
 
-  HiModel_xh2_qwen3.6_27b_256_128k_b1_1chip_2cores_v1.3.0_20260603.gguf:
+  HiModel-Qwen3.6-27b-mtp-w4a8-p256-128K-b1-2core-1d-xh2-v1.4.0-20260716153551_vit_896_896.gguf:
+    <<: *profile_llm_qwen_mtp
+
+  HiModel_xh2_qwen3.6-35b-a3b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260716_vit_448_448.gguf:
     <<: *profile_llm_qwen_tool_call
 
-  HiModel_xh2_qwen3.6_27b_256_256k_b1_2chips_2cores_v1.3.0_20260603.gguf:
+  HiModel_xh2_qwen3.6-35b-a3b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260716_vit_896_896.gguf:
     <<: *profile_llm_qwen_tool_call
 
-  HiModel_xh2_qwen3.6_27b_256_256k_b1_4chips_2cores_v1.3.0_20260603.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3.6_35b-a3b_256_256k_b1_2chip_2cores_v1.3.0_20260512.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3.6_35b-a3b_w5a16_256_256k_b1_1chip_2cores_v1.3.0_20260515.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3.6_35b-a3b_w5a16_256_256k_b1_2chip_2cores_v1.3.0_20260515.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel-Qwen3.5-2b-w4a8-p256-256K-b1-2core-1d-xh2-v1.3.0-20260611101842.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel-Qwen3.5-2b-w8a8-p256-256K-b1-2core-1d-xh2-v1.3.0-20260611101241.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel-Qwen3.6-35b-a3b-w4a8-p256-256K-b1-2core-1d-xh2-v1.3.0-20260519.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel-Qwen3.6-35b-a3b-p256-256K-b1-2core-2d-xh2-v1.3.0-20260530061739.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3.5_0.8b_256_256k_b1_1chip_2cores_v1.3.0_20260429.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3.5_2b_256_256k_b1_1chip_2cores_v1.3.0_20260429.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3.5_4b_256_256k_b1_1chip_2cores_v1.3.0_20260429.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3.5_9b_256_256k_b1_1chip_2cores_v1.3.0_20260429.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3.6_35b-a3b_w5a8_256_256k_b1_1chip_2cores_v1.3.0_20260528.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel-Copaw-flash-9b-p256-128K-b1-2core-1d-xh2-v1.3.0-20260427015847.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel-Qwen3_2507-30b_a3b-p256-16K-b4-2core-1d-xh2-v1.4.0-20260527184720.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3_0.6b_256_32k_b1_1chip_2cores_v1.2.0_20260422.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3_8b_256_32k_b1_1chip_2cores_v1.2.0_20260421.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel-Qwen3-8b-p256-16K-b4-2core-1d-xh2-v1.2.0-20260422151138.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3-vl_8b_256_32k_b1_1chip_2cores_v1.2.0_20260421.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3_14b_256_32k_b1_2chips_2cores_v1.2.0_20260421.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3_30b_a3b_256_32k_b1_1chip_2cores_v1.2.0_20260421.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_qwen3-vl_30b_a3b_256_8k_b1_1chip_2cores_v1.2.0_20260421.gguf:
-    <<: *profile_llm_qwen_tool_call
-
-  HiModel_xh2_deepseek_8b_256_32k_b1_1chip_2cores_v1.2.0_20260421.gguf:
-    <<: *profile_llm_gemma_tool_call
-
-  HiModel_xh2_gemma4-26b-a4b_256_128k_b1_1chip_2cores_v1.4.0_20260616.gguf:
-    <<: *profile_llm_gemma_tool_call
-
-  HiModel_xh2_gpt-oss_20b_256_256k_b1_1chip_2cores_v1.2.0_20260421.gguf:
+  # GPT-OSS
+  HiModel_xh2_gpt-oss-20b_256_256k_b1_1chip_2cores_v1.4.0_20260708.gguf:
     <<: *profile_llm_openai_tool_call
 
+  # Gemma4
+  HiModel_xh2_gemma4-e2b_320_128k_b1_1chip_2cores_v1.4.0_20260708.gguf:
+    <<: *profile_llm_gemma_tool_call
+
+  HiModel_xh2_gemma4-e4b_320_128k_b1_1chip_2cores_v1.4.0_20260708.gguf:
+    <<: *profile_llm_gemma_tool_call
+
+  HiModel_xh2_gemma4-26b-a4b_320_256k_b1_1chip_2cores_v1.4.0_20260709_vit_768_2520.gguf:
+    <<: *profile_llm_gemma_tool_call
+
+  HiModel_xh2_gemma4-26b-a4b-mtp_320_256k_b1_1chip_2cores_v1.4.0_20260713_vit_768_2520.gguf:
+    <<: *profile_llm_gemma_tool_call
+
+  HiModel_xh2_gemma4-26b-a4b_320_128k_b1_1chip_2cores_v1.4.0_20260709_vit_768_2520.gguf:
+    <<: *profile_llm_gemma_tool_call
+
+  # GLM-OCR
+  HiModel_xh2_glm-ocr_0.9b_256_8k_b1_1chip_2cores_v1.4.0_20260707.gguf:
+    <<: *profile_llm
+
+  # Qwen
+  HiModel_xh2_copaw-flash-9b_256_8k_b1_1chip_2cores_v1.4.0_20260720.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+
+# ASR & ForcedAligned Models
   HiModel_xh2_qwen3-asr_0.6b_b1_1chip_2cores_v1.3.0_20260522.gguf:
+    <<: *profile_asr_dummy_load
+  
+  HiModel_xh2_qwen3-asr-1.7b_2k_1chip_2cores_v1.4.0_20260721.gguf:
     <<: *profile_asr_dummy_load
 
   HiModel-Whisper-medium-p256-8K-b1-2core-1d-xh2-v1.2.0-20260414145315.gguf:
@@ -169,18 +179,28 @@ models:
 
   HiModel-whisper-large_v3_turbo_1chip_2cores_v1.2.0-20260420.gguf:
     <<: *profile_asr_dummy_load
+  
+  HiModel_xh2_glm-asr_1.9b_b1_1chip_2cores_v1.4.0_20260721.gguf:
+    <<: *profile_asr_dummy_load
 
+  HiModel_xh2_qwen3-ForcedAligner_0.6b_2cores_v1.3.0_20260525.gguf:
+    <<: *profile_forced_aligner
+
+
+# TTS Models
+  HiModel_xh2_cosyvoice3_0.5b_1chip_2cores_v1.1.0-20260409.gguf:
+    <<: *profile_tts
+
+
+# Embedding & Reranker Models
   HiModel_xh2_qwen3-embedding_8b_256_8k_b1_1chip_2cores_v1.2.0_20260421.gguf:
     <<: *profile_embedding
 
   HiModel_xh2_qwen3-reranker_8b_256_8k_b1_1chip_2cores_v1.2.0_20260421.gguf:
     <<: *profile_reranker_qwen3
 
-  HiModel_xh2_qwen3-ForcedAligner_0.6b_2cores_v1.3.0_20260525.gguf:
-    <<: *profile_forced_aligner
+  HiModel_xh2_bge-0.5b_0.5k_b10_1chip_2cores_v1.4.0_20260720.gguf:
+    <<: *profile_embedding
 
-  HiModel_xh2_glm-ocr_0.9b_256_8k_b1_1chip_2cores_v1.3.0_20260519.gguf:
-    <<: *profile_llm
-
-  HiModel_xh2_cosyvoice3_0.5b_1chip_2cores_v1.1.0-20260409.gguf:
-    <<: *profile_tts
+  HiModel_xh2_bge-reranker-v2-m3-0.5b_0.5k_b10_1chip_2cores_v1.4.0_20260720.gguf:
+    <<: *profile_reranker_bge_m3

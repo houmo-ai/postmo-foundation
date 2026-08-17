@@ -682,6 +682,10 @@ def create_route_handler(method_name: str):
                     content={"error": f"端口{PORT}只允许模型 {sorted(ALLOWED_MODEL_NAMES)}，不允许 {request_model}"}
                 )
 
+            # API 层允许同一实例使用展示别名；vLLM serving 只识别初始化时
+            # 注册的 served model name，因此校验通过后统一改为该规范名称。
+            req_data["model"] = MODEL_NAME
+
             if not engine:
                 return JSONResponse(status_code=500, content={"error": "推理引擎未初始化"})
 
@@ -770,17 +774,21 @@ def run_worker(
     additional_config=None,
     model_type="llm",
     logging_config=None,
+    request_model_names=None,
 ):
     import uvicorn
     global MODEL_NAME, ALLOWED_MODEL_NAMES, PORT, INSTANCE_CONFIG, logger, sync_logger
 
     try:
-        _, _, api_server_args, unknown_args = split_vllm_config(vllm_config or {})
+        _, frontend_args, api_server_args, unknown_args = split_vllm_config(vllm_config or {})
     except Exception as exc:
+        frontend_args = {}
         api_server_args = {}
         unknown_args = {}
 
-    configured_model_name = api_server_args.get("server_model_name")
+    configured_model_name = frontend_args.get("served_model_name")
+    if configured_model_name is None:
+        configured_model_name = api_server_args.get("server_model_name")
     if configured_model_name is None:
         configured_model_name = api_server_args.get("served_model_name")
     if isinstance(configured_model_name, list):
@@ -792,6 +800,7 @@ def run_worker(
 
     served_model_name = configured_model_names[0] if configured_model_names else str(model_name)
     allowed_model_names = set(configured_model_names or [str(model_name)])
+    allowed_model_names.update(str(name) for name in (request_model_names or []) if str(name))
     allowed_model_names.add(served_model_name)
 
     configure_logging(
