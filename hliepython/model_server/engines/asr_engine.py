@@ -106,6 +106,27 @@ MAX_AUDIO_CLIP_SECONDS = 20
 OVERLAP_CHUNK_SECOND = 1
 MIN_ENERGY_WINDOW_SIZE = 1600  # 1600 ~ 100ms for 16000 Hz audio
 
+
+def normalize_hotwords(hotwords: Any) -> str | None:
+    """Normalize API hotwords to the string expected by vLLM STT models."""
+    if hotwords is None:
+        return None
+    if isinstance(hotwords, str):
+        value = hotwords.strip()
+        return value or None
+    if isinstance(hotwords, (list, tuple)):
+        values = [str(value).strip() for value in hotwords if str(value).strip()]
+        return ", ".join(values) or None
+    raise ValueError("hotwords must be a string or an array of strings")
+
+
+def build_qwen3_asr_context(request_prompt: str, hotwords: str | None) -> str:
+    """Build Qwen3-ASR context text from OpenAI prompt and hotwords fields."""
+    parts = [request_prompt.strip()] if request_prompt.strip() else []
+    if hotwords:
+        parts.append(f"可能出现的关键词：{hotwords}")
+    return "\n".join(parts)
+
 def asr_inter_chunk_separator(
     language: str | None, no_space_languages: Set[str]
 ) -> str:
@@ -466,6 +487,8 @@ class ASREngine(InferenceEngine):
             )
 
         parsed_prompts: list[DictPrompt] = []
+        request_prompt = str(getattr(request, "prompt", "") or "")
+        hotwords = normalize_hotwords(getattr(request, "hotwords", None))
         for chunk in chunks:
             # stt_params = request.build_stt_params(
             #     audio=chunk,
@@ -479,12 +502,27 @@ class ASREngine(InferenceEngine):
                 model_config=self.model_config,
                 language=language,
                 task_type=self.task_type,
-                # request_prompt=self.prompt,
+                request_prompt=request_prompt,
                 to_language=request.to_language,
-                # hotwords=self.hotwords,
+                hotwords=hotwords,
             )
 
             prompt = self.model_cls.get_generation_prompt(stt_params)
+
+            # Qwen3-ASR exposes contextual biasing as a system ``context``.
+            # The vLLM model adapter currently ignores SpeechToTextParams'
+            # request_prompt/hotwords, so prepend the equivalent official
+            # chat-template system message here.
+            if "qwen3asr" in str(self.arch_name).replace("_", "").lower():
+                context = build_qwen3_asr_context(request_prompt, hotwords)
+                if context:
+                    system_prefix = (
+                        f"<|im_start|>system\n{context}<|im_end|>\n"
+                    )
+                    prompt["prompt_token_ids"] = (
+                        self.tokenizer.encode(system_prefix)
+                        + list(prompt["prompt_token_ids"])
+                    )
 
             parsed_prompt: DictPrompt
             if request.response_format == "verbose_json":
@@ -905,6 +943,7 @@ class ASREngine(InferenceEngine):
         audio_bytes: bytes,
         language: str | None = None,
         prompt: str = "",
+        hotwords: str | list[str] | None = None,
     ) -> str:
         """WebSocket 场景下的单段音频转写，兼容需要完整文本的调用方。"""
         text_parts: list[str] = []
@@ -912,6 +951,7 @@ class ASREngine(InferenceEngine):
             audio_bytes,
             language=language,
             prompt=prompt,
+            hotwords=hotwords,
         ):
             text_parts.append(delta)
         return "".join(text_parts)
@@ -921,12 +961,14 @@ class ASREngine(InferenceEngine):
         audio_bytes: bytes,
         language: str | None = None,
         prompt: str = "",
+        hotwords: str | list[str] | None = None,
     ) -> AsyncGenerator[str, None]:
         """按 vLLM 累计生成结果产出 OpenAI Realtime 风格文本增量。"""
         async for result in self.websocket_transcribe_stream_with_usage(
             audio_bytes,
             language=language,
             prompt=prompt,
+            hotwords=hotwords,
         ):
             if result.delta:
                 yield result.delta
@@ -936,6 +978,7 @@ class ASREngine(InferenceEngine):
         audio_bytes: bytes,
         language: str | None = None,
         prompt: str = "",
+        hotwords: str | list[str] | None = None,
         include_logprobs: bool = False,
     ) -> AsyncGenerator[RealtimeTranscriptionResult, None]:
         """产出文本增量、可选 token logprobs 和最终 usage。"""
@@ -944,10 +987,16 @@ class ASREngine(InferenceEngine):
 
         # 用轻量对象承载 _preprocess/create_sampling_params 所需字段。
         class _WsRequest:
-            def __init__(self, lang: str | None, prmpt: str):
+            def __init__(
+                self,
+                lang: str | None,
+                prmpt: str,
+                request_hotwords: str | list[str] | None,
+            ):
                 self.language = lang
                 self.to_language = None
                 self.prompt = prmpt
+                self.hotwords = request_hotwords
                 self.response_format = "json"
                 # CUMULATIVE 使 vLLM 在生成期间持续返回当前完整候选文本。
                 self.stream = True
@@ -960,7 +1009,7 @@ class ASREngine(InferenceEngine):
                 self.frequency_penalty = 0.0
                 self.max_completion_tokens = None
 
-        ws_request = _WsRequest(language, prompt)
+        ws_request = _WsRequest(language, prompt, hotwords)
         ws_request_id = f"ws-asr-pre-{self._base_request_id(None)}"
         prompts, audio_duration_s = await self._preprocess_speech_to_text(
             ws_request,

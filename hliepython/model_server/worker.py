@@ -275,6 +275,7 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
     sample_rate = 24000
     language = ""
     prompt = ""
+    hotwords: str | list[str] | None = None
     response_format = "json"
     include: list[str] = []
     turn_detection: dict[str, Any] | None = {
@@ -312,6 +313,7 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
                         "model": MODEL_NAME,
                         "language": language,
                         "prompt": prompt,
+                        "hotwords": hotwords,
                         "response_format": response_format,
                     },
                     "turn_detection": turn_detection,
@@ -337,6 +339,7 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
                 wav_audio,
                 language=language or None,
                 prompt=prompt,
+                hotwords=hotwords,
                 include_logprobs=include_logprobs,
             ):
                 yield result.delta, result.logprobs, result.usage
@@ -347,6 +350,7 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
             wav_audio,
             language=language or None,
             prompt=prompt,
+            hotwords=hotwords,
         ):
             if delta:
                 yield str(delta), None, None
@@ -491,6 +495,17 @@ async def websocket_openai_realtime_transcriptions(websocket: WebSocket):
                     sample_rate = int(fmt["rate"])
                 language = str(transcription.get("language") or language or "")
                 prompt = str(transcription.get("prompt") or prompt or "")
+                requested_hotwords = transcription.get("hotwords", hotwords)
+                if requested_hotwords is not None and not (
+                    isinstance(requested_hotwords, str)
+                    or (
+                        isinstance(requested_hotwords, list)
+                        and all(isinstance(value, str) for value in requested_hotwords)
+                    )
+                ):
+                    await _send_error("transcription.hotwords 必须是字符串或字符串数组")
+                    continue
+                hotwords = requested_hotwords
                 response_format = str(transcription.get("response_format") or response_format)
                 new_turn_detection = audio_input.get("turn_detection")
                 turn_detection = new_turn_detection if isinstance(new_turn_detection, dict) else None

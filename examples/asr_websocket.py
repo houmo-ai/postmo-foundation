@@ -182,6 +182,7 @@ async def configure_session(
     sample_rate: int,
     model: str,
     prompt: str,
+    hotwords: list[str],
     language: str,
     response_format: str,
     vad_enabled: bool,
@@ -200,11 +201,13 @@ async def configure_session(
             "max_turn_duration_ms": max_turn_duration_ms,
         }
 
-    transcription: dict[str, str] = {}
+    transcription: dict[str, Any] = {}
     if model:
         transcription["model"] = model
     if prompt:
         transcription["prompt"] = prompt
+    if hotwords:
+        transcription["hotwords"] = hotwords
     if language:
         transcription["language"] = language
     if response_format:
@@ -394,6 +397,7 @@ async def run(args: argparse.Namespace) -> str:
             sample_rate=args.sample_rate,
             model=args.model,
             prompt=args.prompt,
+            hotwords=args.hotwords,
             language=args.language,
             response_format=args.response_format,
             vad_enabled=not args.manual_commit,
@@ -451,6 +455,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-rate", type=int, default=TARGET_SAMPLE_RATE, help="Input sample rate declared to server")
     parser.add_argument("--model", default="", help="Optional transcription model; overrides model in the WebSocket URI")
     parser.add_argument("--prompt", default="", help="Optional transcription prompt")
+    parser.add_argument(
+        "--hotwords",
+        nargs="*",
+        default=[],
+        help="Contextual hotwords, for example: --hotwords HLIE Houmo Qwen",
+    )
     parser.add_argument("--language", default="", help="Optional transcription language hint")
     parser.add_argument("--response-format", default="json", help="Transcription response format")
     parser.add_argument("--logprobs", action="store_true", help="Include token log probabilities in Realtime transcription events")

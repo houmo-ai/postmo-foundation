@@ -12,8 +12,8 @@ models:
           api-server:
             port: 7801
             server-model-name: "Qwen3.5-0.8B"
-        # additional_config:
-        #   "vit_model_name": "mmproj_xh2_qwen3.5-0.8b_w8a16_2cores_vit_448x448_v1.4.0_20260708.gguf"
+        additional_config:
+          "vit_model_name": "mmproj_xh2_qwen3.5-0.8b_w8a16_2cores_vit_448x448_v1.4.0_20260708.gguf"
 
   # # CoPaw-Flash-9B 模型
   # - model_path: "CoPaw-Flash-9B"
