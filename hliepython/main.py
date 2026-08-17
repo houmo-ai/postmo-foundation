@@ -830,25 +830,65 @@ def _build_model_records_for_ports(
     ]
 
 
+def _get_model_list_name(model_name: str, additional_config: Dict[str, Any]) -> str:
+    """返回 /v1/models 使用的模型名，多模态实例以主模型和 VIT 规格组合命名。"""
+    vit_model_name = additional_config.get("vit_model_name")
+    if not isinstance(vit_model_name, str) or not vit_model_name.strip():
+        return model_name
+
+    return _build_mmproj_model_key(model_name, os.path.basename(vit_model_name))
+
+
 def _build_model_records() -> list[Dict[str, Any]]:
     created = int(time.time())
     records = []
-    configured_dir_names: set[str] = set()
+    configured_model_names: set[str] = set()
+    emitted_model_names: set[str] = set()
+    multimodal_base_names = {
+        base_name
+        for alias, base_name in AVAILABLE_MODEL_BASE_NAMES.items()
+        if alias != base_name
+    }
 
     for model in APP_CONFIG.models:
-        for instance in model.instances:
-            configured_dir_names.add(os.path.basename(os.path.normpath(instance.model_path)))
+        active_ports = set(MODEL_PORT_MAP.get(model.name, []))
+        display_ports: Dict[str, list[int]] = {}
 
-        records.extend(
-            _build_model_records_for_ports(
-                model_name=model.name,
-                ports=MODEL_PORT_MAP.get(model.name, []),
-                created=created,
+        for instance in model.instances:
+            display_name = _get_model_list_name(
+                model.name,
+                instance.additional_config or {},
             )
-        )
+            display_ports.setdefault(display_name, [])
+            if int(instance.port) in active_ports:
+                display_ports[display_name].append(int(instance.port))
+
+        if not display_ports:
+            display_ports[model.name] = sorted(active_ports)
+
+        for display_name, ports in display_ports.items():
+            records.extend(
+                _build_model_records_for_ports(
+                    model_name=display_name,
+                    ports=ports,
+                    created=created,
+                )
+            )
+            emitted_model_names.add(display_name)
+
+        configured_model_names.add(model.name)
+        configured_model_names.add(os.path.basename(os.path.normpath(model.name)))
+        for instance in model.instances:
+            configured_model_names.add(
+                os.path.basename(os.path.normpath(instance.model_path))
+            )
 
     for model_dir_name in sorted(AVAILABLE_MODEL_PATHS.keys()):
-        if model_dir_name in configured_dir_names:
+        if (
+            model_dir_name in configured_model_names
+            or model_dir_name in emitted_model_names
+            or model_dir_name in multimodal_base_names
+        ):
             continue
 
         records.extend(
