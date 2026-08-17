@@ -54,4 +54,5 @@ hliepython = [
     "*.yml",
     "model_server/engines/files/*.json",
     "model_server/engines/files/*.wav",
+    "model_server/engines/files/audio/*.mp3",
 ]
