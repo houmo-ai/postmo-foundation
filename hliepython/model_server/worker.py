@@ -135,6 +135,13 @@ async def startup_event():
     INSTANCE_CONFIG["model_name"] = MODEL_NAME
     engine = InferenceEngineFactory.get_engine(INSTANCE_CONFIG)
 
+    # vLLM Responses PDF OCR 需要从 raw_request.app.state 获取同一实例的
+    # OpenAIServingChat，用于将 PDF 页面裁剪区域重新渲染为图像输入。
+    # hliepython worker 自己承载 HTTP 请求，因此这里需要显式注册该对象。
+    openai_serving_chat = getattr(engine, "openai_serving_chat", None)
+    if openai_serving_chat is not None:
+        app.state.openai_serving_chat = openai_serving_chat
+
     # 读取 vllm_config.engine.max_num_seqs 作为 slot 上限
     vllm_cfg = INSTANCE_CONFIG.get("vllm_config") or {}
     engine_cfg = vllm_cfg.get("engine") or {}

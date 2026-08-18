@@ -21,6 +21,16 @@ models:
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_qwen3.5-0.8b_w8a16_2cores_vit_448x448_v1.4.0_20260708.gguf"
 
+  # # GLM-OCR 模型
+  # - model_path: "HiModel_xh2_glm-ocr_0.9b_256_8k_b1_1chip_2cores_v1.4.0_20260707.gguf"
+  #   model_type: "llm"
+  #   instances:
+  #     - vllm_config:
+  #         api-server:
+  #           port: 7802
+  #       additional_config:
+  #         "vit_model_name": "mmproj_xh2_glm-ocr_0.9b_2cores_v1.4.0_20260707.gguf"
+
   # # CoPaw-Flash-9B 模型
   # - model_path: "CoPaw-Flash-9B"
   #   model_type: "llm"    # llm、embedding、asr、tts
