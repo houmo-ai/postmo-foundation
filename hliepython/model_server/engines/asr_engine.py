@@ -4,11 +4,15 @@ import time
 import asyncio
 import math
 import re
+import base64
+import binascii
+import json
+import zlib
 from dataclasses import dataclass
 from typing import Any, Dict
 
 import numpy as np
-from fastapi import Request
+from fastapi import Request, UploadFile
 from hliepython.utils.logging import async_logger as logger
 
 from typing import Literal, TypeAlias, TypeVar, cast, Callable
@@ -68,6 +72,9 @@ from vllm.entrypoints.openai.engine.protocol import (
     RequestResponseMetadata,
     ToolCall,
     UsageInfo,
+)
+from hliepython.model_server.engines.protocol.chat_completions import (
+    ChatCompletionRequest,
 )
 from vllm.renderers.inputs.preprocess import parse_enc_dec_prompt, parse_model_prompt
 from vllm.sampling_params import RequestOutputKind
@@ -917,6 +924,275 @@ class ASREngine(InferenceEngine):
             stream_generator_method=self.transcription_stream_generator,
         )
 
+    @staticmethod
+    def _extract_chat_audio(request: ChatCompletionRequest) -> tuple[bytes, str, str]:
+        """Extract an OpenAI ``input_audio`` part from chat messages.
+
+        ASR chat is intentionally a thin protocol adapter: the audio is
+        transcribed and the transcription is returned as assistant content.
+        The optional text parts are used as the ASR prompt.
+        """
+        audio_data: str | None = None
+        audio_format = "wav"
+        prompt_parts: list[str] = []
+
+        for message in request.messages:
+            content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, str):
+                prompt_parts.append(content)
+                continue
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                    prompt_parts.append(str(part.get("text")))
+                if part.get("type") != "input_audio":
+                    continue
+                input_audio = part.get("input_audio") or {}
+                if not isinstance(input_audio, dict):
+                    continue
+                if audio_data is not None:
+                    raise ValueError("每个请求只支持一个 input_audio 音频")
+                audio_data = input_audio.get("data")
+                audio_format = str(input_audio.get("format") or "wav").lower()
+
+        if not audio_data or not isinstance(audio_data, str):
+            raise ValueError(
+                "ASR Chat 请求必须在 messages.content 中包含 input_audio.data"
+            )
+        if audio_data.startswith("data:"):
+            _, _, audio_data = audio_data.partition(",")
+        try:
+            decoded = base64.b64decode(audio_data, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("input_audio.data 必须是合法 base64 音频数据") from exc
+        if not decoded:
+            raise ValueError("input_audio.data 不能为空")
+        if audio_format not in {"wav", "mp3", "flac", "ogg", "m4a", "webm", "mp4", "mpeg", "mpga"}:
+            raise ValueError(f"不支持的 input_audio.format: {audio_format}")
+        return decoded, audio_format, "\n".join(prompt_parts).strip()
+
+    async def create_chat_completions(
+        self,
+        request: ChatCompletionRequest,
+        raw_request: Request | None = None,
+    ):
+        """Support OpenAI Chat Completions requests containing input_audio.
+
+        This endpoint provides ASR-compatible chat semantics. It does not
+        generate an LLM answer; the assistant content is the transcription.
+        """
+        audio_data, audio_format, prompt = self._extract_chat_audio(request)
+        if request.stream:
+            return self._chat_completion_stream_generator(
+                request=request,
+                audio_data=audio_data,
+                prompt=prompt,
+                raw_request=raw_request,
+            )
+
+        if request.logprobs:
+            transcript_parts: list[str] = []
+            completed_logprobs: list[dict[str, Any]] = []
+            usage: dict[str, Any] | None = None
+            async for result in self.websocket_transcribe_stream_with_usage(
+                audio_data,
+                prompt=prompt,
+                include_logprobs=True,
+                top_logprobs=request.top_logprobs or 0,
+            ):
+                if result.delta:
+                    transcript_parts.append(result.delta)
+                if result.logprobs:
+                    completed_logprobs = result.logprobs
+                if result.usage:
+                    usage = result.usage
+            return self._build_chat_completion_response(
+                text="".join(transcript_parts),
+                request=request,
+                raw_request=raw_request,
+                usage=usage,
+                logprobs=completed_logprobs,
+            )
+
+        transcription_request = TranscriptionRequest(
+            file=UploadFile(
+                file=io.BytesIO(audio_data),
+                filename=f"audio.{audio_format}",
+            ),
+            model=self.model_name,
+            prompt=prompt,
+            response_format="json",
+            stream=False,
+        )
+        transcription = await self.create_audio_transcriptions(
+            transcription_request,
+            raw_request,
+        )
+        if isinstance(transcription, ErrorResponse):
+            return transcription
+
+        text = getattr(transcription, "text", None)
+        if text is None and isinstance(transcription, dict):
+            text = transcription.get("text", "")
+        text = self._post_process_asr_text(str(text or ""))
+        usage = getattr(transcription, "usage", None) or {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        usage_dump = getattr(usage, "model_dump", None)
+        if callable(usage_dump):
+            dumped_usage = usage_dump(mode="json")
+            usage = dumped_usage if isinstance(dumped_usage, dict) else None
+        if isinstance(usage, dict) and "type" in usage:
+            usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+        return {
+            "id": f"chatcmpl-{self._base_request_id(raw_request)}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": self.model_name,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }],
+            "usage": usage,
+        }
+
+    def _build_chat_completion_response(
+        self,
+        text: str,
+        request: ChatCompletionRequest,
+        raw_request: Request | None,
+        usage: dict[str, Any] | None,
+        logprobs: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        chat_usage = self._chat_usage_from_asr_usage(usage)
+        choice: dict[str, Any] = {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": self._post_process_asr_text(text),
+            },
+            "finish_reason": "stop",
+        }
+        if request.logprobs:
+            choice["logprobs"] = {"content": logprobs or []}
+        return {
+            "id": f"chatcmpl-{self._base_request_id(raw_request)}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": self.model_name,
+            "choices": [choice],
+            "usage": chat_usage,
+        }
+
+    @staticmethod
+    def _chat_usage_from_asr_usage(usage: dict[str, Any] | None) -> dict[str, int]:
+        if not usage or usage.get("type") != "tokens":
+            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        prompt_tokens = int(usage.get("input_tokens") or 0)
+        completion_tokens = int(usage.get("output_tokens") or 0)
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": int(
+                usage.get("total_tokens") or prompt_tokens + completion_tokens
+            ),
+        }
+
+    async def _chat_completion_stream_generator(
+        self,
+        request: ChatCompletionRequest,
+        audio_data: bytes,
+        prompt: str,
+        raw_request: Request | None,
+    ) -> AsyncGenerator[str, None]:
+        request_id = f"chatcmpl-{self._base_request_id(raw_request)}"
+        created = int(time.time())
+        include_usage = bool(
+            request.stream_options and request.stream_options.include_usage
+        )
+
+        first_chunk = {
+            "id": request_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": self.model_name,
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": ""},
+                "finish_reason": None,
+            }],
+        }
+        yield f"data: {json.dumps(first_chunk, ensure_ascii=False)}\n\n"
+
+        final_usage: dict[str, Any] | None = None
+        try:
+            async for result in self.websocket_transcribe_stream_with_usage(
+                audio_data,
+                prompt=prompt,
+                include_logprobs=bool(request.logprobs),
+                top_logprobs=request.top_logprobs or 0,
+            ):
+                if result.usage:
+                    final_usage = result.usage
+                if not result.delta:
+                    continue
+                choice: dict[str, Any] = {
+                    "index": 0,
+                    "delta": {"content": result.delta},
+                    "finish_reason": None,
+                }
+                if request.logprobs:
+                    choice["logprobs"] = {"content": result.logprobs or []}
+                chunk = {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": self.model_name,
+                    "choices": [choice],
+                }
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+            final_chunk = {
+                "id": request_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": self.model_name,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                }],
+            }
+            yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
+            if include_usage:
+                usage_chunk = {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": self.model_name,
+                    "choices": [],
+                    "usage": self._chat_usage_from_asr_usage(final_usage),
+                }
+                yield f"data: {json.dumps(usage_chunk, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            logger.exception(f"ASR Chat 流式转录失败: {exc}")
+            error = {
+                "error": {
+                    "message": str(exc),
+                    "type": "server_error",
+                    "code": 500,
+                }
+            }
+            yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
     async def transcription_stream_generator(
         self,
         request: TranscriptionRequest,
@@ -980,6 +1256,7 @@ class ASREngine(InferenceEngine):
         prompt: str = "",
         hotwords: str | list[str] | None = None,
         include_logprobs: bool = False,
+        top_logprobs: int = 0,
     ) -> AsyncGenerator[RealtimeTranscriptionResult, None]:
         """产出文本增量、可选 token logprobs 和最终 usage。"""
         if not audio_bytes:
@@ -1020,7 +1297,7 @@ class ASREngine(InferenceEngine):
         if include_logprobs:
             # vLLM 中 0 表示仅返回实际选中 token 的 log probability，
             # 不额外返回 top candidates，符合 Realtime transcription schema。
-            sampling_params.logprobs = 0
+            sampling_params.logprobs = max(0, int(top_logprobs))
 
         text_input_tokens = 0
         output_tokens = 0
@@ -1061,6 +1338,7 @@ class ASREngine(InferenceEngine):
                         visible_text=current_text,
                         token_ids=output.token_ids or [],
                         token_logprobs=output.logprobs,
+                        top_logprobs=top_logprobs,
                     )
                     if visible_logprobs[:previous_visible_logprob_count] != (
                         completed_logprobs[-previous_visible_logprob_count:]
@@ -1124,6 +1402,7 @@ class ASREngine(InferenceEngine):
         visible_text: str,
         token_ids: list[int],
         token_logprobs: FlatLogprobs | list[dict[int, Logprob]] | None,
+        top_logprobs: int = 0,
     ) -> list[dict[str, Any]]:
         """将 vLLM 累计 token logprobs 转换为可见转录文本的标准结构。"""
         if token_logprobs is None:
@@ -1136,14 +1415,43 @@ class ASREngine(InferenceEngine):
             candidates = token_logprobs[index]
             selected = candidates.get(token_id) if candidates is not None else None
             if selected is None:
-                raise RuntimeError(f"ASR 后端缺少 token {token_id} 的 logprob")
-            token = selected.decoded_token
-            if token is None:
+                # vLLM 在某些流式累计结果中只返回 top-N 候选，候选集合
+                # 可能暂时不包含实际 token。不能因此终止整个 SSE 响应；
+                # token 文本仍可由 tokenizer 还原，概率用 None 表示未知。
+                logger.warning(
+                    "ASR 后端未返回 token %s 的 logprob；将该 token 的概率标记为未知",
+                    token_id,
+                )
                 token = self.tokenizer.decode([token_id])
+                selected_logprob: float | None = None
+            else:
+                token = selected.decoded_token
+                if token is None:
+                    token = self.tokenizer.decode([token_id])
+                selected_logprob = max(selected.logprob, -9999.0)
+            if not token:
+                token = self.tokenizer.decode([token_id])
+            top_records: list[dict[str, Any]] = []
+            if top_logprobs > 0 and candidates is not None:
+                sorted_candidates = sorted(
+                    candidates.items(),
+                    key=lambda item: item[1].logprob,
+                    reverse=True,
+                )[:top_logprobs]
+                for candidate_id, candidate in sorted_candidates:
+                    candidate_token = candidate.decoded_token
+                    if candidate_token is None:
+                        candidate_token = self.tokenizer.decode([candidate_id])
+                    top_records.append({
+                        "token": candidate_token,
+                        "bytes": list(candidate_token.encode("utf-8", errors="replace")),
+                        "logprob": max(candidate.logprob, -9999.0),
+                    })
             records.append({
                 "token": token,
                 "bytes": list(token.encode("utf-8", errors="replace")),
-                "logprob": max(selected.logprob, -9999.0),
+                "logprob": selected_logprob,
+                "top_logprobs": top_records,
             })
 
         decoded_text = "".join(record["token"] for record in records)

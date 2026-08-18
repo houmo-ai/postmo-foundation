@@ -168,35 +168,35 @@ models:
 
 
 # ASR & ForcedAligned Models
-  HiModel_xh2_qwen3-asr_0.6b_b1_1chip_2cores_v1.3.0_20260522.gguf:
+  HiModel_xh2_qwen3-asr-0.6b_2k_1chip_2cores_v1.4.0_20260721.gguf:
     <<: *profile_asr_dummy_load
   
   HiModel_xh2_qwen3-asr-1.7b_2k_1chip_2cores_v1.4.0_20260721.gguf:
     <<: *profile_asr_dummy_load
 
-  HiModel-Whisper-medium-p256-8K-b1-2core-1d-xh2-v1.2.0-20260414145315.gguf:
+  HiModel_xh2_whisper-medium_1chip_2cores_v1.4.0_20260721.gguf:
     <<: *profile_asr_dummy_load
 
-  HiModel-whisper-large_v3_turbo_1chip_2cores_v1.2.0-20260420.gguf:
+  HiModel_xh2_whisper-large-v3-turbo_1chip_2cores_v1.4.0_20260721.gguf:
     <<: *profile_asr_dummy_load
   
   HiModel_xh2_glm-asr_1.9b_b1_1chip_2cores_v1.4.0_20260721.gguf:
     <<: *profile_asr_dummy_load
 
-  HiModel_xh2_qwen3-ForcedAligner_0.6b_2cores_v1.3.0_20260525.gguf:
+  HiModel_xh2_qwen3-forcealigner-0.6b_2k_1chip_2cores_v1.4.0_20260721.gguf:
     <<: *profile_forced_aligner
 
 
 # TTS Models
-  HiModel_xh2_cosyvoice3_0.5b_1chip_2cores_v1.1.0-20260409.gguf:
+  HiModel_xh2_cosyvoice3-0.5b-2512_256_2k_b1_1chip_2cores_v1.4.0_20260720.gguf:
     <<: *profile_tts
 
 
 # Embedding & Reranker Models
-  HiModel_xh2_qwen3-embedding_8b_256_8k_b1_1chip_2cores_v1.2.0_20260421.gguf:
+  HiModel_xh2_qwen3-embedding-8b_256_8k_b1_1chip_2cores_v1.4.0_20260720.gguf:
     <<: *profile_embedding
 
-  HiModel_xh2_qwen3-reranker_8b_256_8k_b1_1chip_2cores_v1.2.0_20260421.gguf:
+  HiModel_xh2_qwen3-reranker-8b_256_8k_b1_1chip_2cores_v1.4.0_20260720.gguf:
     <<: *profile_reranker_qwen3
 
   HiModel_xh2_bge-0.5b_0.5k_b10_1chip_2cores_v1.4.0_20260720.gguf:
