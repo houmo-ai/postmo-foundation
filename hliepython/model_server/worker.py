@@ -6,6 +6,7 @@ import importlib
 import io
 import wave
 import uuid
+import gc
 from http import HTTPStatus
 from collections.abc import AsyncGenerator
 from inspect import isawaitable
@@ -159,19 +160,48 @@ async def startup_event():
 async def shutdown_event():
     """关闭时清理资源"""
     global engine, SLOT_TRACKER
-    if engine:
+    current_engine = engine
+    engine = None
+    if current_engine:
         try:
-            engine = None
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
+            # 当前 vLLM shutdown() 会先关闭 EngineCore，再取消 output_handler。
+            # 两者之间存在竞争窗口，output_handler 可能读到 EngineCore 断开并
+            # 将正常卸载记录为 EngineDeadError。这里先停止输出任务再关核心。
+            backend_engine = getattr(current_engine, "engine", current_engine)
+            output_handler = getattr(backend_engine, "output_handler", None)
+            if isinstance(output_handler, asyncio.Task):
+                output_handler.cancel()
+                try:
+                    await output_handler
+                except asyncio.CancelledError:
+                    pass
+                setattr(backend_engine, "output_handler", None)
+
+            shutdown_fn = getattr(current_engine, "shutdown", None)
+            if not callable(shutdown_fn):
+                shutdown_fn = getattr(backend_engine, "shutdown", None)
+            if callable(shutdown_fn):
+                result = shutdown_fn()
+                if isawaitable(result):
+                    await result
             sync_logger.info(f"Worker {MODEL_NAME}:{PORT} 推理引擎关闭")
+        except Exception:
+            sync_logger.exception(f"Worker {MODEL_NAME}:{PORT} 推理引擎关闭失败")
         finally:
-            engine = None
-    if SLOT_TRACKER:
+            del current_engine
+
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            ipc_collect = getattr(torch.cuda, "ipc_collect", None)
+            if callable(ipc_collect):
+                ipc_collect()
+    except Exception:
+        sync_logger.exception(f"Worker {MODEL_NAME}:{PORT} CUDA 缓存清理失败")
+
+    if SLOT_TRACKER is not None:
         SLOT_TRACKER.shutdown()
         SLOT_TRACKER = None
 
@@ -783,8 +813,19 @@ def run_worker(
     logging_config=None,
     request_model_names=None,
 ):
-    import uvicorn
     global MODEL_NAME, ALLOWED_MODEL_NAMES, PORT, INSTANCE_CONFIG, logger, sync_logger
+
+    # vLLM 会在 worker 内启动 EngineCore 等后代进程。为每个 worker
+    # 建立独立进程组，主进程强制卸载时可以避免后代进程脱离并被 PID 1 接管。
+    if os.name == "posix":
+        try:
+            os.setsid()
+        except OSError:
+            get_sync_logger("worker").warning(
+                "无法为 worker 创建独立 session，卸载时将退化为单进程清理"
+            )
+
+    import uvicorn
 
     try:
         _, frontend_args, api_server_args, unknown_args = split_vllm_config(vllm_config or {})

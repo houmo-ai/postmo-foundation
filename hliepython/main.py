@@ -6,6 +6,7 @@ import multiprocessing
 import re
 import uuid
 import socket
+import signal
 from copy import deepcopy
 import httpx
 import uvicorn
@@ -152,6 +153,41 @@ class ModelLoadManager:
 
 
 MODEL_LOAD_MANAGER = ModelLoadManager()
+
+
+@main_app.on_event("shutdown")
+async def shutdown_main_event():
+    """主进程退出时清理所有模型 worker 及其底层推理进程。"""
+    _shutdown_all_workers()
+
+
+def _shutdown_all_workers() -> None:
+    """同步清理所有 worker，供生命周期回调和启动失败兜底共同使用。"""
+    # 复制端口列表，避免 unload_worker 修改全局映射时影响遍历。
+    target_ports = list(WORKER_PROCESS_MAP)
+    if not target_ports:
+        return
+
+    sync_logger.info(f"主进程退出，开始清理 {len(target_ports)} 个模型 worker")
+    for target_port in target_ports:
+        try:
+            unload_worker(port=target_port)
+        except Exception:
+            sync_logger.exception(f"清理模型 worker 失败: port={target_port}")
+    WORKERS[:] = [proc for proc in WORKERS if proc.is_alive()]
+    sync_logger.info("所有模型 worker 清理完成")
+
+
+def _check_main_port_available(port: int) -> None:
+    """在加载模型前确认主服务端口可绑定，避免端口冲突留下孤儿 worker。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("0.0.0.0", int(port)))
+        except OSError as exc:
+            raise RuntimeError(
+                f"主端口 {port} 已被占用，服务不会启动模型 worker: {exc}"
+            ) from exc
 
 
 async def validate_json_request(raw_request: Request):
@@ -1249,10 +1285,36 @@ def unload_worker(model_name: Optional[str] = None, port: Optional[int] = None):
         loaded_model = PORT_MODEL_MAP.pop(target_port, model_name)
 
         if proc is not None and proc.is_alive():
+            # 先只终止 worker，让 FastAPI shutdown 事件有机会调用
+            # vLLM engine.shutdown()。不能一开始就向整个进程组发送 SIGTERM，
+            # 否则 EngineCore 会和 worker 同时退出，output_handler 会把正常
+            # 的 EngineCore 关闭误报为 EngineDeadError。
+            process_group_id = None
+            if os.name == "posix" and proc.pid is not None:
+                try:
+                    process_group_id = os.getpgid(proc.pid)
+                    if process_group_id == os.getpgrp():
+                        process_group_id = None
+                except OSError:
+                    process_group_id = None
+
             proc.terminate()
             proc.join(timeout=10)
             if proc.is_alive():
-                proc.kill()
+                # 优雅关闭超时后，才清理 worker 及其 vLLM 后代进程。
+                if process_group_id is not None:
+                    try:
+                        os.killpg(process_group_id, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    proc.join(timeout=2)
+                if proc.is_alive() and process_group_id is not None:
+                    try:
+                        os.killpg(process_group_id, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                elif proc.is_alive():
+                    proc.kill()
                 proc.join(timeout=5)
 
         for request_model_name in list(MODEL_PORT_MAP):
@@ -1805,14 +1867,24 @@ def main():
         f"retention={APP_CONFIG.server.logging.retention}"
     )
 
-    start_workers(APP_CONFIG)
-    sync_logger.info(f"主进程启动: http://127.0.0.1:{RUNTIME_SETTINGS['main_port']}")
-    uvicorn.run(
-        main_app,
-        host="0.0.0.0",
-        port=RUNTIME_SETTINGS["main_port"],
-        log_level=RUNTIME_SETTINGS["log_level"],
-    )
+    main_port = int(RUNTIME_SETTINGS["main_port"])
+    _check_main_port_available(main_port)
+    try:
+        start_workers(APP_CONFIG)
+        sync_logger.info(f"主进程启动: http://127.0.0.1:{main_port}")
+        uvicorn.run(
+            main_app,
+            host="0.0.0.0",
+            port=main_port,
+            log_level=RUNTIME_SETTINGS["log_level"],
+        )
+    except Exception:
+        sync_logger.exception("主服务启动或运行失败")
+        raise
+    finally:
+        # Uvicorn 可能因端口占用、启动异常或外部停止而直接返回；不能只
+        # 依赖 FastAPI shutdown 事件，否则已启动的模型 worker 会继续运行。
+        _shutdown_all_workers()
 
 
 if __name__ == "__main__":

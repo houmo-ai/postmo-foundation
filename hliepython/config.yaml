@@ -16,8 +16,7 @@ models:
   #         #   enable-auto-tool-choice: true
   #         #   tool-call-parser: "qwen3_coder"
   #         api-server:
-  #           port: 7801
-  #           server-model-name: "Qwen3.5-0.8B"
+  #           port: 7802
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_qwen3.5-0.8b_w8a16_2cores_vit_448x448_v1.4.0_20260708.gguf"
 
