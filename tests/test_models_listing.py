@@ -14,6 +14,30 @@ MULTIMODAL_MODEL = (
     "HiModel_xh2_qwen3.5-0.8b_w8a16_256_256k_b1_1chip_2cores_"
     "v1.4.0_20260708_vit_448_448.gguf"
 )
+FORCED_ALIGNER_MODEL = (
+    "HiModel_xh2_qwen3-forcealigner-0.6b_2k_1chip_2cores_"
+    "v1.4.0_20260721.gguf"
+)
+FORCED_ALIGNER_MMPROJ = (
+    "mmproj_xh2_qwen3-forcealigner-0.6b_2cores_v1.4.0_20260721.gguf"
+)
+
+
+def test_scan_pairs_forcealigner_model_with_mmproj(tmp_path, monkeypatch):
+    main_model_path = tmp_path / FORCED_ALIGNER_MODEL
+    mmproj_path = tmp_path / FORCED_ALIGNER_MMPROJ
+    main_model_path.touch()
+    mmproj_path.touch()
+    runtime_dir = tmp_path / ".gguf_model_dirs" / main_model_path.stem
+    monkeypatch.setattr(main, "_ensure_gguf_runtime_dir", lambda _: runtime_dir)
+
+    model_paths = main.scan_available_models(str(tmp_path))
+
+    assert model_paths[FORCED_ALIGNER_MODEL] == str(runtime_dir)
+    assert main.AVAILABLE_MODEL_ADDITIONAL_CONFIG[FORCED_ALIGNER_MODEL] == {
+        "vit_model_name": str(mmproj_path)
+    }
+    assert main.AVAILABLE_MODEL_BASE_NAMES[FORCED_ALIGNER_MODEL] == FORCED_ALIGNER_MODEL
 
 
 def test_loaded_mmproj_model_replaces_main_model_in_model_list(monkeypatch):

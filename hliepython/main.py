@@ -64,7 +64,7 @@ _PARAM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[bBmM]", re.IGNORECASE)
 _BUILD_TIME_RE = re.compile(r"(\d{8}|\d{14})")
 _VIT_SPEC_RE = re.compile(r"vit_(\d+)(?:[_x](\d+))?", re.IGNORECASE)
 _MMPROJ_FAMILY_RE = re.compile(
-    r"qwen2\.5-vl|qwen3-vl|qwen3\.5|qwen3\.6|gemma4[-_]26b[-_]a4b|gemma4|qwen3[-_]asr|qwen3[-_]forcedaligner|glm-ocr",
+    r"qwen2\.5-vl|qwen3-vl|qwen3\.5|qwen3\.6|gemma4[-_]26b[-_]a4b|gemma4|qwen3[-_]asr|qwen3[-_]force(?:d)?aligner|glm-ocr",
     re.IGNORECASE,
 )
 _OPTIONAL_MMPROJ_VL_FAMILY_RE = re.compile(r"qwen3\.5|qwen3\.6", re.IGNORECASE)

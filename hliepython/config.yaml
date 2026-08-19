@@ -16,9 +16,33 @@ models:
   #         #   enable-auto-tool-choice: true
   #         #   tool-call-parser: "qwen3_coder"
   #         api-server:
-  #           port: 7802
+  #           port: 7801
   #       additional_config:
   #         "vit_model_name": "mmproj_xh2_qwen3.5-0.8b_w8a16_2cores_vit_448x448_v1.4.0_20260708.gguf"
+
+  # # GPT-OSS 模型
+  # - model_path: "HiModel_xh2_gpt-oss-20b_256_256k_b1_1chip_2cores_v1.4.0_20260708.gguf"
+  #   model_type: "llm"
+  #   instances:
+  #     - vllm_config:
+  #         serving:
+  #           enable-auto-tool-choice: true
+  #           tool-call-parser: "openai"
+  #         api-server:
+  #           port: 7802
+
+  # # Gemma4 模型
+  # - model_path: "HiModel_xh2_gemma4-e2b_320_128k_b1_1chip_2cores_v1.4.0_20260708.gguf"
+  #   model_type: "llm"
+  #   instances:
+  #     - vllm_config:
+  #         serving:
+  #           enable-auto-tool-choice: true
+  #           tool-call-parser: "gemma4"
+  #         api-server:
+  #           port: 7802
+  #       additional_config:
+  #         "vit_model_name": "mmproj_xh2_gemma4-e2b_320_2cores_v1.4.0_20260722.gguf"
 
   # # GLM-OCR 模型
   # - model_path: "HiModel_xh2_glm-ocr_0.9b_256_8k_b1_1chip_2cores_v1.4.0_20260707.gguf"
@@ -120,14 +144,15 @@ models:
 #                                                                                            #
 ##############################################################################################
 
-  # # whisper-turbo 模型
-  # - model_path: "HiModel-whisper-large_v3_turbo_1chip_2cores_v1.2.0-20260420.gguf"
+  # # whisper-medium 模型
+  # - model_path: "HiModel_xh2_whisper-medium_1chip_2cores_v1.4.0_20260721.gguf"
   #   model_type: "asr"
   #   instances:
   #     - vllm_config:
   #         engine:
   #           load-format: "dummy"
   #           no-enable-prefix-caching: true
+  #           max-num-batched-tokens: 2048
   #         api-server:
   #           port: 7803
 
@@ -145,7 +170,7 @@ models:
   #         "vit_model_name": "mmproj_xh2_qwen3-asr-0.6b_2cores_v1.4.0_20260721.gguf"
 
   # # Qwen3-ForcedAligner-0.6B 模型
-  # - model_path: "HiModel_xh2_qwen3-ForcedAligner_0.6b_2cores_v1.3.0_20260525.gguf"
+  # - model_path: "HiModel_xh2_qwen3-forcealigner-0.6b_2k_1chip_2cores_v1.4.0_20260721.gguf"
   #   model_type: "forced_aligner"
   #   instances:
   #     - vllm_config:
@@ -153,13 +178,12 @@ models:
   #           no-enable-prefix-caching: true
   #           load-format: "dummy"
   #           max-model-len: 411
-  #           load-format: "dummy"
   #           hf-overrides:
   #             architectures: ["Qwen3ASRForcedAlignerForTokenClassification"]
   #         api-server:
-  #           port: 7804
+  #           port: 7803
   #       additional_config:
-  #         "vit_model_name": "mmproj_xh2_qwen3-ForcedAligner_0.6b_2cores_v1.3.0_20260525.gguf"
+  #         "vit_model_name": "mmproj_xh2_qwen3-forcealigner-0.6b_2cores_v1.4.0_20260721.gguf"
 
 ##############################################################################################
 #                                                                                            #
@@ -173,7 +197,7 @@ models:
   #   instances:
   #     - vllm_config:
   #         api-server:
-  #           port: 7805
+  #           port: 7804
 
 ##############################################################################################
 #                                                                                            #
@@ -187,7 +211,7 @@ models:
   #   instances:
   #     - vllm_config:
   #         api-server:
-  #           port: 7806
+  #           port: 7805
 
   # # bge-m3 模型
   # - model_path: "HiModel_xh2_bge-0.5b_0.5k_b10_1chip_2cores_v1.4.0_20260720.gguf"
@@ -195,7 +219,7 @@ models:
   #   instances:
   #     - vllm_config:
   #         api-server:
-  #           port: 7806
+  #           port: 7805
 
   # # Qwen3-Reranker-8B 模型
   # - model_path: "HiModel_xh2_qwen3-reranker_8b_256_8k_b1_1chip_2cores_v1.2.0_20260421.gguf"
@@ -203,7 +227,7 @@ models:
   #   instances:
   #     - vllm_config:
   #         api-server:
-  #           port: 7807
+  #           port: 7806
   #         engine:
   #           hf-overrides: 
   #             "architectures": ["Qwen3ForSequenceClassification"]
@@ -216,7 +240,7 @@ models:
   #   instances:
   #     - vllm_config:
   #         api-server:
-  #           port: 7807
+  #           port: 7806
   #         serving:
   #           tool-call-parser: "hermes"
   #         engine:

@@ -48,6 +48,13 @@ profiles:
       engine:
         load-format: "dummy"
 
+  asr_whisper_dummy_load: &profile_asr_whisper_dummy_load
+    model_type: "asr"
+    vllm_config:
+      engine:
+        load-format: "dummy"
+        max-num-batched-tokens: 2048
+
   forced_aligner: &profile_forced_aligner
     model_type: "forced_aligner"
     vllm_config:
@@ -55,13 +62,7 @@ profiles:
         load-format: "dummy"
         hf-overrides:
           architectures: ["Qwen3ASRForcedAlignerForTokenClassification"]
-        enforce-eager: true
-        runner: "pooling"
         max-model-len: 411
-      serving:
-        trust-request-chat-template: true
-    additional_config:
-      worker_startup_timeout: 600
 
 
 # TTS Models
@@ -175,10 +176,10 @@ models:
     <<: *profile_asr_dummy_load
 
   HiModel_xh2_whisper-medium_1chip_2cores_v1.4.0_20260721.gguf:
-    <<: *profile_asr_dummy_load
+    <<: *profile_asr_whisper_dummy_load
 
   HiModel_xh2_whisper-large-v3-turbo_1chip_2cores_v1.4.0_20260721.gguf:
-    <<: *profile_asr_dummy_load
+    <<: *profile_asr_whisper_dummy_load
   
   HiModel_xh2_glm-asr_1.9b_b1_1chip_2cores_v1.4.0_20260721.gguf:
     <<: *profile_asr_dummy_load
