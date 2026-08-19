@@ -112,18 +112,18 @@ models:
   #         device_ids: [3]
   #         enable_cacheprompt: "True"
 
-  # # Qwen3.6-27B 模型
-  # - model_path: "HiModel_xh2_qwen3.6-27b_w4a8_256_128k_b1_1chip_2cores_v1.4.0_20260708.gguf"
-  #   model_type: "llm"
-  #   instances:
-  #     - vllm_config:
-  #         serving:
-  #           enable-auto-tool-choice: true
-  #           tool-call-parser: "qwen3_coder"
-  #         api-server:
-  #           port: 7804
-  #       additional_config:
-  #         "vit_model_name": "mmproj_xh2_qwen3.6-27b_w4a8_2cores_vit_448x448_v1.4.0_20260708.gguf"
+  # Qwen3.6-27B 模型
+  - model_path: "HiModel_xh2_qwen3.6-27b_w4a8_256_128k_b1_1chip_2cores_v1.4.0_20260708.gguf"
+    model_type: "llm"
+    instances:
+      - vllm_config:
+          serving:
+            enable-auto-tool-choice: true
+            tool-call-parser: "qwen3_coder"
+          api-server:
+            port: 7804
+        additional_config:
+          "vit_model_name": "mmproj_xh2_qwen3.6-27b_w4a8_2cores_vit_448x448_v1.4.0_20260708.gguf"
 
   # # Qwen3.6-35B-A3B 模型
   # - model_path: "HiModel_xh2_qwen3.6-35b-a3b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260716.gguf"

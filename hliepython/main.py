@@ -1104,9 +1104,12 @@ async def _build_req_body(request: Any, raw_request: Request) -> Dict[str, Any]:
     if request is None:
         req_body = dict(raw_body)
     elif hasattr(request, "model_dump"):
-        req_body = request.model_dump(mode="json", exclude_none=True)
+        # 请求会作为 JSON 转发给 worker，必须使用协议字段别名。OpenAI 的
+        # json_schema 模型在 Python 中将 `schema` 存为 `schema_`；若不启用
+        # by_alias，worker 二次校验时会认为必填的 `schema` 缺失。
+        req_body = request.model_dump(mode="json", exclude_none=True, by_alias=True)
     else:
-        req_body = request.dict(exclude_none=True)
+        req_body = request.dict(exclude_none=True, by_alias=True)
 
     if "server_config" in raw_body:
         req_body["server_config"] = raw_body["server_config"]
@@ -1382,7 +1385,50 @@ def _resolve_worker_url(req_body: Dict[str, Any], raw_request: Request) -> str:
     return f"http://127.0.0.1:{worker_port}{path}"
 
 
-async def _forward_non_stream(url: str, req_body: Dict[str, Any], raw_request: Request):
+def _rewrite_response_model(content: Any, requested_model: Optional[str]) -> Any:
+    """将上游响应中的模型名恢复为客户端请求使用的公开模型名。"""
+    if (
+        requested_model
+        and isinstance(content, dict)
+        and "model" in content
+    ):
+        content["model"] = requested_model
+    return content
+
+
+def _rewrite_sse_model_line(line: bytes, requested_model: Optional[str]) -> bytes:
+    """改写单行 SSE data JSON，同时保留原始换行符。"""
+    if not requested_model:
+        return line
+
+    payload_line = line.rstrip(b"\r\n")
+    line_ending = line[len(payload_line):]
+    if not payload_line.startswith(b"data:"):
+        return line
+
+    payload = payload_line[len(b"data:"):].strip()
+    if not payload or payload == b"[DONE]":
+        return line
+
+    try:
+        content = json.loads(payload)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return line
+
+    rewritten = _rewrite_response_model(content, requested_model)
+    return (
+        b"data: "
+        + json.dumps(rewritten, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        + line_ending
+    )
+
+
+async def _forward_non_stream(
+    url: str,
+    req_body: Dict[str, Any],
+    raw_request: Request,
+    response_model: Optional[str] = None,
+):
     path = raw_request.url.path
     async with httpx.AsyncClient(timeout=None) as client:
         upstream_task = asyncio.create_task(client.post(url, json=req_body, timeout=None))
@@ -1396,7 +1442,8 @@ async def _forward_non_stream(url: str, req_body: Dict[str, Any], raw_request: R
         resp = await upstream_task
         content_type = resp.headers.get("content-type", "")
         if "application/json" in content_type:
-            return JSONResponse(resp.json(), status_code=resp.status_code)
+            content = _rewrite_response_model(resp.json(), response_model)
+            return JSONResponse(content, status_code=resp.status_code)
 
         return StreamingResponse(
             iter([resp.content]),
@@ -1595,8 +1642,14 @@ async def _forward_multipart_stream(url: str, raw_request: Request):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-async def _forward_stream(url: str, request, raw_request: Request):
+async def _forward_stream(
+    url: str,
+    request,
+    raw_request: Request,
+    response_model: Optional[str] = None,
+):
     async def event_generator():
+        pending = b""
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream("POST", url, json=request, timeout=None) as resp:
                 if resp.status_code >= 400:
@@ -1610,7 +1663,16 @@ async def _forward_stream(url: str, request, raw_request: Request):
                         logger.warning(f"客户端断开流式连接，停止转发: {url}")
                         return
                     if chunk:
-                        yield chunk
+                        pending += chunk
+                        while b"\n" in pending:
+                            line, pending = pending.split(b"\n", maxsplit=1)
+                            yield _rewrite_sse_model_line(
+                                line + b"\n",
+                                response_model,
+                            )
+
+                if pending:
+                    yield _rewrite_sse_model_line(pending, response_model)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -1743,24 +1805,46 @@ async def unload_model(request: Request):
 async def create_chat_completion(request: ChatCompletionRequest, raw_request: Request):
     req_body = await _build_req_body(request=request, raw_request=raw_request)
     worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
+    requested_model = req_body.get("model")
 
     stream = bool(req_body.get("stream", False))
     if stream:
-        return await _forward_stream(worker_url, request=req_body, raw_request=raw_request)
+        return await _forward_stream(
+            worker_url,
+            request=req_body,
+            raw_request=raw_request,
+            response_model=requested_model,
+        )
 
-    return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+    return await _forward_non_stream(
+        worker_url,
+        req_body=req_body,
+        raw_request=raw_request,
+        response_model=requested_model,
+    )
 
 
 @main_app.post("/v1/responses", dependencies=[Depends(validate_json_request)])
 async def create_responses(request: ResponsesRequest, raw_request: Request):
     req_body = await _build_req_body(request=request, raw_request=raw_request)
     worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
+    requested_model = req_body.get("model")
 
     stream = bool(req_body.get("stream", False))
     if stream:
-        return await _forward_stream(worker_url, request=req_body, raw_request=raw_request)
+        return await _forward_stream(
+            worker_url,
+            request=req_body,
+            raw_request=raw_request,
+            response_model=requested_model,
+        )
 
-    return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+    return await _forward_non_stream(
+        worker_url,
+        req_body=req_body,
+        raw_request=raw_request,
+        response_model=requested_model,
+    )
 
 
 @main_app.post("/v1/embeddings", dependencies=[Depends(validate_json_request)])

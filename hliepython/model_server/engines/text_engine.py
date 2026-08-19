@@ -332,7 +332,9 @@ class TextEngine(InferenceEngine):
         return VllmChatCompletionRequest.model_validate(payload)
 
     def _to_vllm_responses_request(self, request: ResponsesRequest) -> ResponsesRequest:
-        payload = request.model_dump(mode="json", exclude_none=True)
+        # 保留 OpenAI 协议别名（尤其是 json_schema 的 `schema`，其内部字段名
+        # 为 `schema_`），确保二次 model_validate 不会丢失必填字段。
+        payload = request.model_dump(mode="json", exclude_none=True, by_alias=True)
         payload.pop("server_config", None)
         payload.pop("port", None)
         payload.setdefault("model", self.model_name)

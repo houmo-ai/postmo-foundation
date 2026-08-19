@@ -1,3 +1,5 @@
+import json
+
 from hliepython.config.app_config import AppConfig, ModelConfig, ModelInstanceConfig
 from hliepython import main
 
@@ -118,6 +120,41 @@ def test_all_served_model_names_are_instance_request_names():
     request_model_names = main._get_instance_request_model_names(MAIN_MODEL, instance_cfg)
 
     assert request_model_names == [MAIN_MODEL, "public-model-a", "public-model-b"]
+
+
+def test_non_stream_response_uses_requested_public_model_name():
+    response = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": MAIN_MODEL,
+        "choices": [],
+    }
+
+    rewritten = main._rewrite_response_model(response, MULTIMODAL_MODEL)
+
+    assert rewritten["model"] == MULTIMODAL_MODEL
+
+
+def test_stream_response_uses_requested_public_model_name():
+    upstream_chunk = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion.chunk",
+        "model": MAIN_MODEL,
+        "choices": [],
+    }
+    line = f"data: {json.dumps(upstream_chunk)}\r\n".encode()
+
+    rewritten_line = main._rewrite_sse_model_line(line, MULTIMODAL_MODEL)
+    rewritten_chunk = json.loads(rewritten_line[len(b"data: "):])
+
+    assert rewritten_chunk["model"] == MULTIMODAL_MODEL
+    assert rewritten_line.endswith(b"\r\n")
+
+
+def test_stream_done_marker_is_unchanged():
+    done = b"data: [DONE]\n"
+
+    assert main._rewrite_sse_model_line(done, MULTIMODAL_MODEL) == done
 
 
 def test_unload_worker_removes_port_from_all_aliases(monkeypatch):
