@@ -1387,12 +1387,16 @@ def _resolve_worker_url(req_body: Dict[str, Any], raw_request: Request) -> str:
 
 def _rewrite_response_model(content: Any, requested_model: Optional[str]) -> Any:
     """将上游响应中的模型名恢复为客户端请求使用的公开模型名。"""
-    if (
-        requested_model
-        and isinstance(content, dict)
-        and "model" in content
-    ):
+    if not requested_model or not isinstance(content, dict):
+        return content
+
+    if "model" in content:
         content["model"] = requested_model
+
+    # Responses API 的 SSE 事件将完整响应放在 response 字段中。
+    nested_response = content.get("response")
+    if isinstance(nested_response, dict) and "model" in nested_response:
+        nested_response["model"] = requested_model
     return content
 
 
@@ -1452,7 +1456,11 @@ async def _forward_non_stream(
         )
 
 
-async def _forward_multipart(url: str, raw_request: Request):
+async def _forward_multipart(
+    url: str,
+    raw_request: Request,
+    response_model: Optional[str] = None,
+):
     form = await raw_request.form()
     data: Dict[str, str] = {}
     files: list[tuple[str, tuple[str, bytes, str]]] = []
@@ -1478,7 +1486,8 @@ async def _forward_multipart(url: str, raw_request: Request):
 
     content_type = resp.headers.get("content-type", "")
     if "application/json" in content_type:
-        return JSONResponse(resp.json(), status_code=resp.status_code)
+        content = _rewrite_response_model(resp.json(), response_model)
+        return JSONResponse(content, status_code=resp.status_code)
 
     return Response(
         content=resp.content,
@@ -1542,6 +1551,7 @@ async def _forward_multipart_with_forced_alignment(
     raw_request: Request,
     req_body: Dict[str, Any],
 ):
+    requested_model = req_body.get("model")
     asr_req_body = _drop_timestamp_granularity_fields(req_body)
     asr_req_body["response_format"] = "json"
     asr_req_body["stream"] = False
@@ -1593,10 +1603,15 @@ async def _forward_multipart_with_forced_alignment(
 
     aligner_result.setdefault("usage", asr_result.get("usage"))
     aligner_result["text"] = aligner_result.get("text") or transcript_text
+    aligner_result = _rewrite_response_model(aligner_result, requested_model)
     return JSONResponse(aligner_result, status_code=aligner_status)
 
 
-async def _forward_multipart_stream(url: str, raw_request: Request):
+async def _forward_multipart_stream(
+    url: str,
+    raw_request: Request,
+    response_model: Optional[str] = None,
+):
     form = await raw_request.form()
     data: Dict[str, str] = {}
     files: list[tuple[str, tuple[str, bytes, str]]] = []
@@ -1618,6 +1633,7 @@ async def _forward_multipart_stream(url: str, raw_request: Request):
             data[key] = str(value)
 
     async def event_generator():
+        pending = b""
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream(
                 "POST",
@@ -1637,7 +1653,16 @@ async def _forward_multipart_stream(url: str, raw_request: Request):
                         logger.warning(f"客户端断开流式连接，停止转发: {url}")
                         return
                     if chunk:
-                        yield chunk
+                        pending += chunk
+                        while b"\n" in pending:
+                            line, pending = pending.split(b"\n", maxsplit=1)
+                            yield _rewrite_sse_model_line(
+                                line + b"\n",
+                                response_model,
+                            )
+
+                if pending:
+                    yield _rewrite_sse_model_line(pending, response_model)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -1851,7 +1876,12 @@ async def create_responses(request: ResponsesRequest, raw_request: Request):
 async def create_embeddings(request: EmbeddingRequest, raw_request: Request):
     req_body = await _build_req_body(request=request, raw_request=raw_request)
     worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
-    return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+    return await _forward_non_stream(
+        worker_url,
+        req_body=req_body,
+        raw_request=raw_request,
+        response_model=req_body.get("model"),
+    )
 
 
 @main_app.post("/score", dependencies=[Depends(validate_json_request)])
@@ -1859,7 +1889,12 @@ async def create_embeddings(request: EmbeddingRequest, raw_request: Request):
 async def create_score(raw_request: Request):
     req_body = await _build_req_body(request=None, raw_request=raw_request)
     worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
-    return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+    return await _forward_non_stream(
+        worker_url,
+        req_body=req_body,
+        raw_request=raw_request,
+        response_model=req_body.get("model"),
+    )
 
 
 @main_app.post("/rerank", dependencies=[Depends(validate_json_request)])
@@ -1868,21 +1903,36 @@ async def create_score(raw_request: Request):
 async def create_rerank(raw_request: Request):
     req_body = await _build_req_body(request=None, raw_request=raw_request)
     worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
-    return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+    return await _forward_non_stream(
+        worker_url,
+        req_body=req_body,
+        raw_request=raw_request,
+        response_model=req_body.get("model"),
+    )
 
 
 @main_app.post("/v1/images/generations", dependencies=[Depends(validate_json_request)])
 async def create_image_generation(raw_request: Request):
     req_body = await _build_req_body(request=None, raw_request=raw_request)
     worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
-    return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+    return await _forward_non_stream(
+        worker_url,
+        req_body=req_body,
+        raw_request=raw_request,
+        response_model=req_body.get("model"),
+    )
 
 
 @main_app.post("/v1/audio/speech", dependencies=[Depends(validate_json_request)])
 async def create_audio_speech(request: AudioSpeechRequest, raw_request: Request):
     req_body = await _build_req_body(request=request, raw_request=raw_request)
     worker_url = _resolve_worker_url(req_body=req_body, raw_request=raw_request)
-    return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+    return await _forward_non_stream(
+        worker_url,
+        req_body=req_body,
+        raw_request=raw_request,
+        response_model=req_body.get("model"),
+    )
 
 
 @main_app.post("/v1/audio/transcriptions")
@@ -1897,8 +1947,18 @@ async def create_audio_transcriptions(raw_request: Request):
 
         stream = bool(req_body.get("stream", False))
         if stream:
-            return await _forward_stream(worker_url, request=req_body, raw_request=raw_request)
-        return await _forward_non_stream(worker_url, req_body=req_body, raw_request=raw_request)
+            return await _forward_stream(
+                worker_url,
+                request=req_body,
+                raw_request=raw_request,
+                response_model=req_body.get("model"),
+            )
+        return await _forward_non_stream(
+            worker_url,
+            req_body=req_body,
+            raw_request=raw_request,
+            response_model=req_body.get("model"),
+        )
 
     req_body = await _build_audio_transcriptions_meta(raw_request=raw_request)
     if _should_use_forced_aligner(req_body):
@@ -1914,8 +1974,16 @@ async def create_audio_transcriptions(raw_request: Request):
 
     stream = bool(req_body.get("stream", False))
     if stream:
-        return await _forward_multipart_stream(worker_url, raw_request=raw_request)
-    return await _forward_multipart(worker_url, raw_request=raw_request)
+        return await _forward_multipart_stream(
+            worker_url,
+            raw_request=raw_request,
+            response_model=req_body.get("model"),
+        )
+    return await _forward_multipart(
+        worker_url,
+        raw_request=raw_request,
+        response_model=req_body.get("model"),
+    )
 
 
 def main():

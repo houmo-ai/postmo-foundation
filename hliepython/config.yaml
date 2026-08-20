@@ -32,17 +32,29 @@ models:
   #           port: 7802
 
   # # Gemma4 模型
-  # - model_path: "HiModel_xh2_gemma4-e2b_320_128k_b1_1chip_2cores_v1.4.0_20260708.gguf"
+  # - model_path: "HiModel_xh2_gemma4-26b-a4b_320_256k_b1_1chip_2cores_v1.4.0_20260709.gguf"
   #   model_type: "llm"
   #   instances:
   #     - vllm_config:
   #         serving:
   #           enable-auto-tool-choice: true
   #           tool-call-parser: "gemma4"
+  #           reasoning-parser: "gemma4"
+  #           default-chat-template-kwargs: 
+  #             enable_think: true
+  #         engine:
+  #           max-model-len: 262144
+  #           max-num-seqs: 1
+  #           no-enable-prefix-caching: true
+  #           max-num-batched-tokens: 262144
+  #           max-logprobs: 50
   #         api-server:
   #           port: 7802
   #       additional_config:
-  #         "vit_model_name": "mmproj_xh2_gemma4-e2b_320_2cores_v1.4.0_20260722.gguf"
+  #         "vit_model_name": "mmproj_xh2_gemma4-26b-a4b_2cores_vit_768x2520_v1.4.0_20260709.gguf"
+  #         enable_cacheprompt: "True"
+  #         checkpoint_max_count: 40
+  #         checkpoint_storage_device: false
 
   # # GLM-OCR 模型
   # - model_path: "HiModel_xh2_glm-ocr_0.9b_256_8k_b1_1chip_2cores_v1.4.0_20260707.gguf"
@@ -70,60 +82,20 @@ models:
   #       additional_config:
   #         enable_cacheprompt: "False"
 
-  # - model_path: "Qwen3.6-27B_mtp"
-  #   model_type: "llm"    # llm、embedding、asr、tts
+  # # Qwen3.6-27B 模型
+  # - model_path: "HiModel_xh2_qwen3.6-27b_w4a8_256_128k_b1_1chip_2cores_v1.4.0_20260708.gguf"
+  #   model_type: "llm"
   #   instances:
   #     - vllm_config:
-  #         engine:
-  #           max-model-len: 262144
-  #           max-num-seqs: 1
-  #           no-enable-prefix-caching: true
-  #           max-num-batched-tokens: 262144
-  #           speculative-config:
-  #             model: "/home/ywh/workspace/models/v1.4.0/Qwen3.6-27B_mtp"
-  #             method: "mtp"
-  #             num_speculative_tokens: 5
   #         serving:
   #           enable-auto-tool-choice: true
   #           tool-call-parser: "qwen3_coder"
+  #           # reasoning-parser: "qwen3"
   #         api-server:
-  #           trust-request-chat-template: true
-  #           port: 7802
+  #           port: 7804
   #       additional_config:
-  #         device_ids: [1]
-  #         enable_cacheprompt: "False"
-  #     - vllm_config:
-  #         engine:
-  #           max-model-len: 262144
-  #           max-num-seqs: 1
-  #           no-enable-prefix-caching: true
-  #           max-num-batched-tokens: 262144
-  #           speculative-config:
-  #             model: "/home/ywh/workspace/models/v1.4.0/Qwen3.6-27B_mtp"
-  #             method: "mtp"
-  #             num_speculative_tokens: 5
-  #         serving:
-  #           enable-auto-tool-choice: true
-  #           tool-call-parser: "qwen3_coder"
-  #         api-server:
-  #           trust-request-chat-template: true
-  #           port: 7803
-  #       additional_config:
-  #         device_ids: [3]
   #         enable_cacheprompt: "True"
-
-  # Qwen3.6-27B 模型
-  - model_path: "HiModel_xh2_qwen3.6-27b_w4a8_256_128k_b1_1chip_2cores_v1.4.0_20260708.gguf"
-    model_type: "llm"
-    instances:
-      - vllm_config:
-          serving:
-            enable-auto-tool-choice: true
-            tool-call-parser: "qwen3_coder"
-          api-server:
-            port: 7804
-        additional_config:
-          "vit_model_name": "mmproj_xh2_qwen3.6-27b_w4a8_2cores_vit_448x448_v1.4.0_20260708.gguf"
+  #         "vit_model_name": "mmproj_xh2_qwen3.6-27b_w4a8_2cores_vit_448x448_v1.4.0_20260708.gguf"
 
   # # Qwen3.6-35B-A3B 模型
   # - model_path: "HiModel_xh2_qwen3.6-35b-a3b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260716.gguf"

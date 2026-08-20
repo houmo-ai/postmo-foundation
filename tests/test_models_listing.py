@@ -135,6 +135,28 @@ def test_non_stream_response_uses_requested_public_model_name():
     assert rewritten["model"] == MULTIMODAL_MODEL
 
 
+def test_responses_stream_nested_response_uses_requested_public_model_name():
+    event = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp-test",
+            "model": MAIN_MODEL,
+        },
+    }
+
+    rewritten = main._rewrite_response_model(event, MULTIMODAL_MODEL)
+
+    assert rewritten["response"]["model"] == MULTIMODAL_MODEL
+
+
+def test_response_without_model_is_unchanged():
+    response = {"object": "list", "data": []}
+
+    rewritten = main._rewrite_response_model(response, MULTIMODAL_MODEL)
+
+    assert rewritten == response
+
+
 def test_stream_response_uses_requested_public_model_name():
     upstream_chunk = {
         "id": "chatcmpl-test",
@@ -155,6 +177,22 @@ def test_stream_done_marker_is_unchanged():
     done = b"data: [DONE]\n"
 
     assert main._rewrite_sse_model_line(done, MULTIMODAL_MODEL) == done
+
+
+def test_responses_stream_line_rewrites_nested_response_model():
+    event = {
+        "type": "response.created",
+        "response": {"model": MAIN_MODEL},
+    }
+    data_line = f"data: {json.dumps(event)}\n".encode()
+
+    rewritten_data_line = main._rewrite_sse_model_line(
+        data_line,
+        MULTIMODAL_MODEL,
+    )
+    rewritten_event = json.loads(rewritten_data_line[len(b"data: "):])
+
+    assert rewritten_event["response"]["model"] == MULTIMODAL_MODEL
 
 
 def test_unload_worker_removes_port_from_all_aliases(monkeypatch):
