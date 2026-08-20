@@ -5,8 +5,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 ENV LANG=C.UTF-8
 
-ENV http_proxy=
-ENV https_proxy=
+ENV http_proxy=http://10.65.36.14:7897
+ENV https_proxy=http://10.65.36.14:7897
 
 # Updata apt source to tuna source
 RUN echo "deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu noble main restricted universe multiverse" > /etc/apt/sources.list && \
@@ -170,16 +170,17 @@ COPY houmo/${hliepython} /houmo/temp/${hliepython}
 RUN pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
 # 安装后摩版本 vllm
-RUN cd /houmo/temp && unzip -q ${hlievllm} && cd ${hlievllm%.zip} && \
+# RUN cd /houmo/temp && unzip -q ${hlievllm} && cd ${hlievllm%.zip} && \
+RUN cd /houmo/temp && unzip -q ${hlievllm} && cd HLIEvLLM && \
     VLLM_TARGET_DEVICE=cpu pip install -e . \
         --extra-index-url https://download.pytorch.org/whl/cpu \
-        -i https://mirrors.aliyun.com/pypi/simple/
+        -i https://mirrors.aliyun.com/pypi/simple/ -v
 
 # 安装vllm-houmo 推理插件包
 RUN cd /houmo/temp && \
     VLLM_TARGET_DEVICE=houmo pip3 install ${hlievllm_plugin} --no-build-isolation \
         --extra-index-url https://download.pytorch.org/whl/cpu \
-        -i https://mirrors.aliyun.com/pypi/simple/
+        -i https://mirrors.aliyun.com/pypi/simple/ -v
 
 # 基于 release tar.gz 安装 hliepython，本步骤不重复解析依赖，避免覆盖已安装的 vllm/torch 环境
 RUN cd /houmo/temp && \
