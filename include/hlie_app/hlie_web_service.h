@@ -5,6 +5,7 @@
 
 
 #include "hlie_base/hlie_base.h"
+#include "hlie_app/http/hlie_http_route_provider.h"
 #include "httplib.h"
 #include "server/server-http.h"
 
@@ -13,11 +14,11 @@ namespace httplib {
 }
 HLIE_NAMESPACE_BEGIN
 
-class HLIEWorkflow;
-
 class HLIE_API HLIEWebService {
 public:
-    explicit HLIEWebService(const std::shared_ptr<HLIEWorkflow>& workflow);
+    HLIEWebService(std::shared_ptr<IHLIEHttpRouteProvider> route_provider,
+                   std::shared_ptr<IHLIEWebServiceStateProvider> state_provider,
+                   std::shared_ptr<IHLIEAuthPolicy> auth_policy);
     ~HLIEWebService() = default;
 
     void init(int n_threads_http);
@@ -34,7 +35,9 @@ public:
     void stop();
 
 private:
-    std::shared_ptr<HLIEWorkflow> workflow_;
+    std::shared_ptr<IHLIEHttpRouteProvider> route_provider_;
+    std::shared_ptr<IHLIEWebServiceStateProvider> state_provider_;
+    std::shared_ptr<IHLIEAuthPolicy> auth_policy_;
     std::shared_ptr<httplib::Server> web_server_;
     int port_ = 0;
 

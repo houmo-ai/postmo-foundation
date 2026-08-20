@@ -166,6 +166,8 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     {
         const auto mem_est = model_info.get_estimated_mem();
         estimated_mem_mb_ = mem_est;
+        reservation_id_ = model_info.get_device_reservation_id();
+        reservation_owned_externally_ = reservation_id_ != 0;
         LOG_INFO("LLM memory estimate for {} is {}MB", model_info.get_model_name(), mem_est);
         if (!devices.empty()) {
             if (!HlieUtil::is_valid_devices(devices)) {
@@ -184,17 +186,30 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
                 return -1;
             }
 
-            if (device_service_->acquire_mem_on_devices(devices_, mem_est, false, false, model_info.get_model_name()) < 0) {
-                return -1;
+            if (reservation_id_ != 0) {
+                if (!device_service_->reservation_matches(reservation_id_, devices_, mem_est, model_key_)) {
+                    LOG_ERROR("LLM reservation {} does not match model/devices", reservation_id_);
+                    return -1;
+                }
+            } else {
+                const auto reservation = device_service_->reserve_mem_on_devices(
+                    devices_, mem_est, false, model_key_);
+                if (!reservation) {
+                    return -1;
+                }
+                reservation_id_ = reservation->id;
             }
 
             HlieUtil::set_env("HOUMO_DEVICE_ID", devices);
             LOG_INFO("LLM acquire_mem_on_devices using model specific device: {}", devices);
         } else {
-            if (device_service_->acquire_mem_on_device_count(model_info.get_device_num(), mem_est, devices_, false,
-                                                             model_info.get_model_name()) < 0) {
+            const auto reservation = device_service_->reserve_mem_on_device_count(
+                model_info.get_device_num(), mem_est, model_key_);
+            if (!reservation) {
                 return -1;
             }
+            reservation_id_ = reservation->id;
+            devices_ = reservation->devices;
 
             devices = HlieUtil::join_devices(devices_);
             HlieUtil::set_env("HOUMO_DEVICE_ID", devices);
@@ -202,7 +217,7 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
         }
     }
 
-    if (const auto log_level = config_service->get_string("log", "level", "debug"); log_level == "debug") {
+    if (const auto log_level = config_service->get_string("log", "level", "debug", true); log_level == "debug") {
         common_log_set_verbosity_thold(4);
     } else if (log_level == "info") {
         common_log_set_verbosity_thold(3);
@@ -229,10 +244,25 @@ int LLModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     llama_server_routes_ = std::make_shared<server_routes>(params_, *llama_server_);
     LOG_INFO("LLM start to load model");
     if (!llama_server_->load_model(params_)) {
-        if (device_service_) {
-            const auto mem_est = estimated_mem_mb_ > 0 ? estimated_mem_mb_ : HLIEModelInfo::estimate_mem(model_key_);
-            device_service_->release_mem_on_devices(devices_, mem_est);
+        if (device_service_ && reservation_id_ != 0 &&
+            !reservation_owned_externally_) {
+            (void)device_service_->release_reservation(reservation_id_);
         }
+        reservation_id_ = 0;
+        reservation_owned_externally_ = false;
+        devices_.clear();
+        return -1;
+    }
+
+    if (reservation_id_ == 0 ||
+        (!reservation_owned_externally_ &&
+         !device_service_->commit_reservation(reservation_id_))) {
+        LOG_ERROR("LLM failed to commit device reservation {}", reservation_id_);
+        if (reservation_id_ != 0 && !reservation_owned_externally_) {
+            (void)device_service_->release_reservation(reservation_id_);
+        }
+        reservation_id_ = 0;
+        reservation_owned_externally_ = false;
         devices_.clear();
         return -1;
     }
@@ -274,11 +304,13 @@ void LLModelService::stop() {
         worker_thread_.reset();
     }
 
+    if (reservation_id_ != 0 && device_service_ &&
+        !reservation_owned_externally_) {
+        (void)device_service_->release_reservation(reservation_id_);
+    }
+    reservation_id_ = 0;
+    reservation_owned_externally_ = false;
     if (!devices_.empty()) {
-        if (device_service_) {
-            const auto mem_est = estimated_mem_mb_ > 0 ? estimated_mem_mb_ : HLIEModelInfo::estimate_mem(model_key_);
-            device_service_->release_mem_on_devices(devices_, mem_est);
-        }
         devices_.clear();
     }
 

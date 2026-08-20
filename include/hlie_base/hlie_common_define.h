@@ -85,6 +85,15 @@ inline json format_error_response_ex(const std::string& message, const error_typ
         };
 }
 
+inline json format_rate_limit_response(const std::string& message, const int ret = 80008) {
+    return json{
+        {"code", 429},
+        {"message", message},
+        {"type", "rate_limit_error"},
+        {"ret", ret},
+    };
+}
+
 // generator-like API for HTTP response generation
 struct server_res_generator_light : server_http_res {
     server_res_generator_light() = default;

@@ -1,8 +1,11 @@
 #include "hlie_app/hlie_whisper_model_service.h"
+#include "hlie_app/runtime/hlie_cancellation_metrics.h"
 
 #include "hlie_app/hlie_device_service.h"
 #include "hlie_app/hlie_model_info.h"
 #include "hlie_base/hlie_common_define.h"
+#include "hlie_base/hlie_config_service.h"
+#include "hlie_base/hlie_exception.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
 #define MINIAUDIO_IMPLEMENTATION
@@ -317,7 +320,12 @@ namespace {
 
 int WhisperModelService::init(const std::string& model_dir, const HLIEModelInfo& model_info,
                               const std::shared_ptr<HLIEDeviceService>& device_service) {
-    blocking_queue_ = std::make_shared<HLIEBlockingQueue<QueueItem>>();
+    const auto& config = Singleton<HLIEConfigService>::instance();
+    const auto max_queued = static_cast<size_t>(std::clamp(
+        config->get_int("admission", "whisper_max_queued", 8, true), 1, 1024));
+    queue_wait_timeout_ms_ = std::clamp(
+        config->get_int("admission", "queue_wait_timeout_ms", 30000, true), 100, 3600000);
+    blocking_queue_ = std::make_shared<HLIEBlockingQueue<QueueItem>>(max_queued);
 
     // whisper init
     struct whisper_context_params cparams = whisper_context_default_params();
@@ -329,8 +337,12 @@ int WhisperModelService::init(const std::string& model_dir, const HLIEModelInfo&
     cparams.dtw_aheads_preset = WHISPER_AHEADS_MEDIUM;
 
     device_service_ = device_service;
+    model_key_ = model_info.model_key_.empty() ? HLIEModelInfo::build_model_key(model_info) : model_info.model_key_;
+    reservation_id_ = model_info.get_device_reservation_id();
+    reservation_owned_externally_ = reservation_id_ != 0;
 
     auto devices = model_info.get_devices();
+    const int required_mem_mb = model_info.get_estimated_mem() > 0 ? model_info.get_estimated_mem() : 1200;
 
     {
         if (!devices.empty()) {
@@ -344,24 +356,33 @@ int WhisperModelService::init(const std::string& model_dir, const HLIEModelInfo&
                 return -1;
             }
 
-            constexpr int required_mem_mb = 1200;
-            if (device_service_->acquire_mem_on_devices(devices_, required_mem_mb) < 0) {
-                return -1;
+            if (reservation_id_ != 0) {
+                if (!device_service_->reservation_matches(reservation_id_, devices_, required_mem_mb, model_key_)) {
+                    LOG_ERROR("Whisper reservation {} does not match model/devices", reservation_id_);
+                    return -1;
+                }
+            } else {
+                const auto reservation = device_service_->reserve_mem_on_devices(
+                    devices_, required_mem_mb, false, model_key_);
+                if (!reservation) {
+                    return -1;
+                }
+                reservation_id_ = reservation->id;
             }
             acquired_mem_mb_ = required_mem_mb;
 
             HlieUtil::set_env("HLIEWHISPER_DEVICE_ID", std::to_string(devices_.at(0)));
             LOG_INFO("Whisper using model specific device: {}", devices_.at(0));
         } else {
-            uint32_t device;
-            constexpr int required_mem_mb = 11000;
-            if (device_service_->acquire_mem(required_mem_mb, device) < 0) {
+            const auto reservation = device_service_->reserve_mem(required_mem_mb, model_key_);
+            if (!reservation) {
                 return -1;
             }
-            devices_.push_back(device);
+            reservation_id_ = reservation->id;
+            devices_ = reservation->devices;
             acquired_mem_mb_ = required_mem_mb;
-            HlieUtil::set_env("HLIEWHISPER_DEVICE_ID", std::to_string(device));
-            LOG_INFO("Whisper using model specific device: {}", device);
+            HlieUtil::set_env("HLIEWHISPER_DEVICE_ID", std::to_string(devices_.front()));
+            LOG_INFO("Whisper using model specific device: {}", devices_.front());
         }
     }
 
@@ -372,16 +393,34 @@ int WhisperModelService::init(const std::string& model_dir, const HLIEModelInfo&
     LOG_INFO("whisper_init_from_file_with_params done");
     if (whisper_ctx_ == nullptr) {
         fprintf(stderr, "error: failed to initialize whisper context\n");
-        if (device_service_ && acquired_mem_mb_ > 0) {
-            device_service_->release_mem_on_devices(devices_, acquired_mem_mb_);
-            acquired_mem_mb_ = 0;
-            devices_.clear();
+        if (device_service_ && reservation_id_ != 0 &&
+            !reservation_owned_externally_) {
+            (void)device_service_->release_reservation(reservation_id_);
         }
+        reservation_id_ = 0;
+        reservation_owned_externally_ = false;
+        acquired_mem_mb_ = 0;
+        devices_.clear();
         return 3;
     }
 
+    if (reservation_id_ == 0 ||
+        (!reservation_owned_externally_ &&
+         !device_service_->commit_reservation(reservation_id_))) {
+        LOG_ERROR("Whisper failed to commit device reservation {}", reservation_id_);
+        if (reservation_id_ != 0 && !reservation_owned_externally_) {
+            (void)device_service_->release_reservation(reservation_id_);
+        }
+        reservation_id_ = 0;
+        reservation_owned_externally_ = false;
+        whisper_free(whisper_ctx_);
+        whisper_ctx_ = nullptr;
+        devices_.clear();
+        acquired_mem_mb_ = 0;
+        return -1;
+    }
+
     default_params_ = params_;
-    model_key_ = model_info.model_key_;
 
     return 0;
 }
@@ -404,13 +443,41 @@ void WhisperModelService::process() {
         while (!should_stop_) {
             const auto [request, promise] = blocking_queue_->pop(); // 阻塞直到有数据或队列关闭
             if (should_stop_) {
+                WhisperResult result;
+                result.success = false;
+                result.error_message = "Whisper service is stopping";
+                result.predicted_ms = 0;
+                promise->set_value(std::move(result));
                 break; // 防止 stop() 后仍有残留任务
             }
 
+            bool backend_started = false;
+            bool backend_completion_recorded = false;
             try {
                 auto start = std::chrono::steady_clock::now();
+                auto stop = request.control.stop_observation();
+                if (stop.reason == HLIEQueuedRequestStopReason::NONE) {
+                    if (!request.control.is_cancelled() && request.control.is_expired()) {
+                        request.control.expire();
+                    }
+                    stop = request.control.stop_observation();
+                }
+                if (stop.reason != HLIEQueuedRequestStopReason::NONE) {
+                    WhisperResult result;
+                    result.success = false;
+                    result.error_message = stop.reason == HLIEQueuedRequestStopReason::DEADLINE
+                        ? "Whisper inference queue wait deadline exceeded"
+                        : "Whisper inference request cancelled while queued";
+                    promise->set_value(std::move(result));
+                    continue;
+                }
+                backend_started = true;
                 auto transcription_result = transcription(request);
                 auto end = std::chrono::steady_clock::now();
+                HLIECancellationMetrics::instance().observe_backend_completion(
+                    HLIEBackendCancellationLane::WHISPER,
+                    request.control.observe_for_completion(), end);
+                backend_completion_recorded = true;
                 // 构造结果
                 WhisperResult result;
                 result.result = transcription_result;
@@ -421,6 +488,11 @@ void WhisperModelService::process() {
                 // 通知调用者
                 promise->set_value(result);
             } catch (const std::exception& e) {
+                if (backend_started && !backend_completion_recorded) {
+                    HLIECancellationMetrics::instance().observe_backend_completion(
+                        HLIEBackendCancellationLane::WHISPER,
+                        request.control.observe_for_completion());
+                }
                 // 错误处理
                 WhisperResult result;
                 result.success = false;
@@ -429,32 +501,42 @@ void WhisperModelService::process() {
             }
         }
     } catch (const std::runtime_error&) {
-        LOG_WARN("WhisperModelService process exited");
+        LOG_INFO("WhisperModelService worker loop exited");
     }
 }
 
 void WhisperModelService::stop() {
-    if (!worker_thread_) {
-        return;
-    }
-
     should_stop_ = true;
     if (blocking_queue_) {
         blocking_queue_->close(); // 通知队列关闭，唤醒可能阻塞的 pop()
     }
 
-    if (worker_thread_->joinable()) {
+    if (worker_thread_ && worker_thread_->joinable()) {
         worker_thread_->join();
     }
     worker_thread_.reset();
-    whisper_free(whisper_ctx_);
-    whisper_ctx_ = nullptr;
+    if (blocking_queue_) {
+        while (auto pending = blocking_queue_->try_pop()) {
+            WhisperResult result;
+            result.success = false;
+            result.error_message = "Whisper service stopped before request execution";
+            result.predicted_ms = 0;
+            pending->promise->set_value(std::move(result));
+        }
+    }
+    if (whisper_ctx_) {
+        whisper_free(whisper_ctx_);
+        whisper_ctx_ = nullptr;
+    }
 
-    if (device_service_ && acquired_mem_mb_ > 0) {
+    if (device_service_ && reservation_id_ != 0 &&
+        !reservation_owned_externally_) {
         LOG_INFO("Whisper release devices mem: devices={}, mem={}MB",
                  HlieUtil::join_devices(devices_), acquired_mem_mb_);
-        device_service_->release_mem_on_devices(devices_, acquired_mem_mb_);
+        (void)device_service_->release_reservation(reservation_id_);
     }
+    reservation_id_ = 0;
+    reservation_owned_externally_ = false;
     devices_.clear();
     acquired_mem_mb_ = 0;
 }
@@ -579,14 +661,14 @@ std::string WhisperModelService::handle_stream(
         std::unique_lock lock(whisper_mtx_, std::defer_lock);
         while (!lock.try_lock()) {
             if (request.should_stop && request.should_stop()) {
-                LOG_WARN("Whisper websocket transcription cancelled while waiting for the model lock");
+                LOG_DEBUG("Whisper websocket transcription cancelled while waiting for the model lock");
                 return "HLIECpp-FAILED-888";
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         if (whisper_full(whisper_ctx_, wparams, request.pcmf32.data(), request.pcmf32.size()) != 0) {
             if (request.should_stop && request.should_stop()) {
-                LOG_WARN("Whisper websocket transcription aborted");
+                LOG_INFO("Whisper websocket transcription aborted");
             }
             return "HLIECpp-FAILED-888";
         }
@@ -605,17 +687,45 @@ std::future<WhisperResult> WhisperModelService::transcription_async(const Whispe
     // 创建队列项
     QueueItem item;
     item.request = request;
+    if (item.request.control.deadline.time_since_epoch().count() == 0) {
+        item.request.control.deadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(queue_wait_timeout_ms_);
+    }
     item.promise = promise;
 
-    if (blocking_queue_) {
-        blocking_queue_->push(item);
+    if (!blocking_queue_ || !blocking_queue_->try_push(item)) {
+        throw InferenceQueueFullException("Whisper inference queue is full");
     }
 
     return future;
 }
 
-WhisperResult WhisperModelService::transcription_sync(const WhisperRequest& request) const {
-    auto future = transcription_async(request);
+WhisperResult WhisperModelService::transcription_sync(
+    const WhisperRequest& request,
+    const std::function<bool()>& should_stop) const {
+    auto queued_request = request;
+    if (queued_request.control.deadline.time_since_epoch().count() == 0) {
+        queued_request.control.deadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(queue_wait_timeout_ms_);
+    }
+    auto future = transcription_async(queued_request);
+    while (future.wait_for(std::chrono::milliseconds(25)) != std::future_status::ready) {
+        if (should_stop && should_stop()) {
+            queued_request.control.cancel();
+            return {.result = {}, .success = false,
+                    .error_message = "Whisper inference request cancelled while queued", .predicted_ms = 0};
+        }
+        if (queued_request.control.is_cancelled()) {
+            queued_request.control.cancel();
+            return {.result = {}, .success = false,
+                    .error_message = "Whisper inference request cancelled while queued", .predicted_ms = 0};
+        }
+        if (queued_request.control.is_expired()) {
+            queued_request.control.expire();
+            return {.result = {}, .success = false,
+                    .error_message = "Whisper inference queue wait deadline exceeded", .predicted_ms = 0};
+        }
+    }
     return future.get();
 }
 
@@ -694,7 +804,7 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
                 request_params.language = "auto";
             }
 
-            LOG_WARN("processing '{}' ({} samples, {} sec), {} threads, {} processors, lang = {}, task = {}, {}timestamps = {} ...\n",
+            LOG_INFO("processing '{}' ({} samples, {} sec), {} threads, {} processors, lang = {}, task = {}, {}timestamps = {} ...\n",
                      filename.c_str(), int(pcmf32.size()), float(pcmf32.size()) / WHISPER_SAMPLE_RATE, request_params.n_threads,
                      request_params.n_processors, request_params.language.c_str(), request_params.translate ? "translate" : "transcribe",
                      request_params.tinydiarize ? "tdrz = 1, " : "", request_params.no_timestamps ? 0 : 1);
@@ -720,16 +830,15 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
                 wparams.progress_callback_user_data = &user_data;
             }*/
 
-            // tell whisper to abort if the HTTP connection closed
-            wparams.abort_callback = [](void* user_data) {
-                // user_data is a pointer to our Request
-                auto req_ptr = static_cast<const httplib::Request*>(user_data);
-                return req_ptr->is_connection_closed();
-            };
-
-            wparams.abort_callback_user_data = (void*)&req;
-
             WhisperRequest whisper_request;
+            // The backend outlives the HTTP handler after a client disconnect.
+            // Its abort callback must therefore reference request-owned shared
+            // cancellation state, never the stack-bound httplib::Request.
+            wparams.abort_callback = [](void* user_data) {
+                const auto* cancelled = static_cast<const std::atomic<bool>*>(user_data);
+                return cancelled && cancelled->load();
+            };
+            wparams.abort_callback_user_data = whisper_request.control.cancelled.get();
             whisper_request.params = wparams;
             whisper_request.output_params = request_params;
             whisper_request.filename = filename;
@@ -737,13 +846,25 @@ void WhisperModelService::handle_transcriptions(const httplib::Request& req, htt
             whisper_request.pcmf32s = pcmf32s;
             whisper_request.n_processors = request_params.n_processors;
 
-            if (auto [results, success, error_message, predicted_ms] = transcription_sync(whisper_request); !success) {
+            const auto connection_closed = req.is_connection_closed;
+            if (auto [results, success, error_message, predicted_ms] =
+                    transcription_sync(whisper_request, connection_closed); !success) {
                 // handle failure or early abort
                 if (req.is_connection_closed()) {
                     // log client disconnect
                     fprintf(stderr, "client disconnected, aborted processing\n");
                     res.status = 499; // Client Closed Request (nginx convention)
                     res.set_content(R"({"error":"client disconnected"})", "application/json");
+                    return;
+                }
+                if (error_message.find("cancelled") != std::string::npos) {
+                    res.status = 499;
+                    res.set_content(R"({"error":"request cancelled while queued"})", "application/json");
+                    return;
+                }
+                if (error_message.find("deadline") != std::string::npos) {
+                    res.status = 504;
+                    res.set_content(R"({"error":"inference queue wait deadline exceeded"})", "application/json");
                     return;
                 }
                 LOG_ERROR("failed to process audio");

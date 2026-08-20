@@ -7,8 +7,8 @@
 #include <cfloat>
 
 #include "hlie_base/hlie_blocking_queue.h"
+#include "hlie_app/asr/hlie_asr_realtime_contract.h"
 #include "hlie_model_service.h"
-#include "hlie_ws_service.h"
 #include "httplib.h"
 #include "json.hpp"
 #include "server/server-http.h"
@@ -92,6 +92,7 @@ HLIE_NAMESPACE_BEGIN
  * 生图请求消息体
  */
 struct WhisperRequest {
+    HLIEQueuedRequestControl control;
     struct whisper_full_params params;
     whisper_params output_params;
     std::string filename;
@@ -104,7 +105,7 @@ struct WhisperResult {
     std::string result;
     bool success = false;
     std::string error_message;
-    int64_t predicted_ms;
+    int64_t predicted_ms = 0;
 };
 
 class WhisperModelService final : public IHLIEModelService {
@@ -147,7 +148,8 @@ public:
 
 private:
     std::future<WhisperResult> transcription_async(const WhisperRequest& request) const;
-    WhisperResult transcription_sync(const WhisperRequest& request) const;
+    WhisperResult transcription_sync(const WhisperRequest& request,
+                                      const std::function<bool()>& should_stop = {}) const;
 
     std::string transcription(const WhisperRequest& request) const;
     mutable std::mutex whisper_mtx_;

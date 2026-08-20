@@ -3,6 +3,7 @@
 
 #include <exception>
 #include <string>
+#include <utility>
 
 #include "hlie_base/hlie_base.h"
 
@@ -72,6 +73,15 @@ public:
 class ResourceException final : public WebServerException {
 public:
     using WebServerException::WebServerException;
+};
+
+class InferenceQueueFullException final : public std::exception {
+public:
+    explicit InferenceQueueFullException(std::string message) : message_(std::move(message)) {}
+    [[nodiscard]] const char* what() const noexcept override { return message_.c_str(); }
+
+private:
+    std::string message_;
 };
 
 /**

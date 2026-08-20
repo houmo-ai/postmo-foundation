@@ -1,4 +1,4 @@
-#include "hlie_app/hlie_model_residency_manager.h"
+#include "hlie_core/resource/hlie_model_residency_manager.h"
 
 #include <catch_amalgamated.hpp>
 
@@ -6,16 +6,14 @@ namespace {
 
 using namespace hm_HLIE;
 
-HLIEModelRegistry::ModelInstance resident(const std::string& key, const std::time_t access,
-                                          const std::time_t loaded, const std::uint64_t hits = 0) {
-    HLIEModelInfo info;
-    info.build_sd("sd", "", "", "clip", "", "", "");
-    HLIEModelRegistry::ModelInstance instance;
-    instance.key = key;
-    instance.meta.name = "alias-" + key;
-    instance.meta.status = SERVER_MODEL_STATUS_LOADED;
-    instance.meta.port = 7900;
-    instance.model_info = std::move(info);
+HLIEModelRuntimeSnapshot resident(const std::string& key, const std::time_t access,
+                                  const std::time_t loaded, const std::uint64_t hits = 0) {
+    HLIEModelRuntimeSnapshot instance;
+    instance.identity.model_key = key;
+    instance.identity.model_name = "model-" + key;
+    instance.identity.display_name = "alias-" + key;
+    instance.state = HLIEModelLifecycleState::Ready;
+    instance.port = 7900;
     instance.last_access_time = access;
     instance.last_load_time = loaded;
     instance.hit_count = hits;

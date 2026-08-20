@@ -43,6 +43,56 @@ TEST_CASE("Registry upsert creates stable metadata snapshots", "[model-registry]
     CHECK(snapshot->estimated_mem_mb == 2048);
 }
 
+TEST_CASE("Registry publishes an SDK-free lifecycle snapshot",
+          "[model-registry][p1][core-snapshot]") {
+    HLIEModelRegistry registry;
+    registry.upsert(make_instance("model-a"));
+
+    auto snapshot = registry.get_runtime_snapshot("alias-model-a");
+    REQUIRE(snapshot);
+    CHECK(snapshot->identity.model_key == "model-a");
+    CHECK(snapshot->identity.model_name == "sd3");
+    CHECK(snapshot->identity.display_name == "alias-model-a");
+    CHECK(snapshot->identity.backend_id == "sd");
+    CHECK(snapshot->state == HLIEModelLifecycleState::Unloaded);
+    CHECK(snapshot->generation == 0);
+    CHECK(snapshot->estimated_mem_mb == 2048);
+
+    const auto ticket = registry.try_begin_loading_ticket("model-a");
+    REQUIRE(ticket);
+    snapshot = registry.get_runtime_snapshot("model-a");
+    REQUIRE(snapshot);
+    CHECK(snapshot->state == HLIEModelLifecycleState::Starting);
+    CHECK(snapshot->generation == ticket->generation);
+    CHECK(hlie_model_state_is_loading(snapshot->state));
+    CHECK(hlie_model_state_protects_reservation(snapshot->state));
+
+    REQUIRE(registry.mark_loaded_if_current(*ticket, 7902));
+    snapshot = registry.get_runtime_snapshot("model-a");
+    REQUIRE(snapshot);
+    CHECK(snapshot->state == HLIEModelLifecycleState::Ready);
+    CHECK(snapshot->port == 7902);
+    CHECK(hlie_model_state_is_ready(snapshot->state));
+
+    REQUIRE(registry.update_status_if_current(
+        *ticket, SERVER_MODEL_STATUS_SLEEPING, 7902));
+    snapshot = registry.get_runtime_snapshot("model-a");
+    REQUIRE(snapshot);
+    CHECK(snapshot->state == HLIEModelLifecycleState::Sleeping);
+    CHECK(hlie_model_state_protects_reservation(snapshot->state));
+
+    REQUIRE(registry.mark_failed_if_current(*ticket, 17));
+    snapshot = registry.get_runtime_snapshot("model-a");
+    REQUIRE(snapshot);
+    CHECK(snapshot->state == HLIEModelLifecycleState::Failed);
+    CHECK(snapshot->failure_code == 17);
+    CHECK_FALSE(hlie_model_state_protects_reservation(snapshot->state));
+
+    const auto all = registry.get_all_runtime_snapshots();
+    REQUIRE(all.size() == 1);
+    CHECK(all.front().identity.model_key == "model-a");
+}
+
 TEST_CASE("Registry registration captures memory through the production entry point", "[model-registry][registration]") {
     HLIEModelInfo info;
     info.build_sd("sd", "vae", "t5", "clip", "clip-l", "mmdit", "0");
@@ -104,7 +154,8 @@ TEST_CASE("Discovery registration preserves an existing runtime instance", "[mod
     HLIEModelRegistry registry;
     REQUIRE(registry.register_model_if_absent(original, 3072));
     REQUIRE(registry.mark_loaded("sd3", 7902));
-    REQUIRE(registry.begin_request("sd3"));
+    const auto request_ticket = registry.begin_request_ticket("sd3");
+    REQUIRE(request_ticket);
 
     HLIEModelInfo rediscovered;
     rediscovered.build_sd("sd", "new-vae", "new-t5", "new-clip", "new-clip-l", "new-mmdit", "1");
@@ -117,7 +168,7 @@ TEST_CASE("Discovery registration preserves an existing runtime instance", "[mod
     CHECK(snapshot->active_requests == 1);
     CHECK(snapshot->estimated_mem_mb == 3072);
     CHECK(snapshot->model_info.get_devices() == "0");
-    registry.end_request("sd3");
+    registry.end_request(*request_ticket);
 }
 
 TEST_CASE("Exact multimodal variants are reused without overwriting runtime state",
@@ -202,11 +253,12 @@ TEST_CASE("Registry state transitions preserve request invariants", "[model-regi
     HLIEModelRegistry registry;
     registry.upsert(make_instance("model-a"));
 
-    CHECK_FALSE(registry.begin_request("model-a"));
+    CHECK_FALSE(registry.begin_request_ticket("model-a"));
     REQUIRE(registry.mark_loading("model-a"));
-    CHECK_FALSE(registry.begin_request("model-a"));
+    CHECK_FALSE(registry.begin_request_ticket("model-a"));
     REQUIRE(registry.mark_loaded("model-a", 7902));
-    REQUIRE(registry.begin_request("model-a"));
+    const auto request_ticket = registry.begin_request_ticket("model-a");
+    REQUIRE(request_ticket);
 
     auto snapshot = registry.get_instance_snapshot("model-a");
     REQUIRE(snapshot);
@@ -216,8 +268,8 @@ TEST_CASE("Registry state transitions preserve request invariants", "[model-regi
     CHECK(snapshot->hit_count == 1);
     CHECK(snapshot->last_load_time > 0);
 
-    registry.end_request("model-a");
-    registry.end_request("model-a");
+    registry.end_request(*request_ticket);
+    registry.end_request(*request_ticket);
     REQUIRE(registry.mark_unloaded("model-a"));
     snapshot = registry.get_instance_snapshot("model-a");
     REQUIRE(snapshot);
@@ -230,15 +282,17 @@ TEST_CASE("Registry eviction gate excludes active and new requests", "[model-reg
     HLIEModelRegistry registry;
     registry.upsert(make_instance("model-a", SERVER_MODEL_STATUS_LOADED));
 
-    REQUIRE(registry.begin_request("model-a"));
+    const auto first_request = registry.begin_request_ticket("model-a");
+    REQUIRE(first_request);
     CHECK_FALSE(registry.try_begin_eviction("model-a"));
-    registry.end_request("model-a");
+    registry.end_request(*first_request);
 
     REQUIRE(registry.try_begin_eviction("model-a"));
-    CHECK_FALSE(registry.begin_request("model-a"));
+    CHECK_FALSE(registry.begin_request_ticket("model-a"));
     registry.abort_eviction("model-a");
-    CHECK(registry.begin_request("model-a"));
-    registry.end_request("model-a");
+    const auto second_request = registry.begin_request_ticket("model-a");
+    REQUIRE(second_request);
+    registry.end_request(*second_request);
 }
 
 TEST_CASE("Registry request accounting is thread-safe", "[model-registry][concurrency]") {
@@ -251,8 +305,8 @@ TEST_CASE("Registry request accounting is thread-safe", "[model-registry][concur
     for (int thread = 0; thread < thread_count; ++thread) {
         workers.emplace_back([&] {
             for (int request = 0; request < requests_per_thread; ++request) {
-                if (registry.begin_request("model-a")) {
-                    registry.end_request("model-a");
+                if (const auto request_ticket = registry.begin_request_ticket("model-a")) {
+                    registry.end_request(*request_ticket);
                 }
             }
         });
@@ -302,4 +356,101 @@ TEST_CASE("Registry prepares an isolated device snapshot", "[model-registry]") {
     CHECK(prepared->get_devices() == "2,3");
     CHECK(registry.get_instance_snapshot("model-a")->model_info.get_devices() == "2,3");
     CHECK_FALSE(registry.prepare_model_info_with_devices("missing", "0"));
+}
+
+TEST_CASE("Registry records subprocess failure without advertising a loaded model", "[model-registry]") {
+    HLIEModelRegistry registry;
+    registry.upsert(make_instance("model-a"));
+    REQUIRE(registry.mark_loading("model-a"));
+    REQUIRE(registry.mark_failed("model-a", 17));
+
+    const auto snapshot = registry.get_instance_snapshot("model-a");
+    REQUIRE(snapshot);
+    CHECK(snapshot->meta.status == SERVER_MODEL_STATUS_UNLOADED);
+    CHECK(snapshot->meta.exit_code == 17);
+    CHECK(snapshot->meta.is_failed());
+
+    REQUIRE(registry.try_begin_loading("model-a"));
+    CHECK(registry.get_instance_snapshot("model-a")->meta.exit_code == 0);
+}
+
+TEST_CASE("Registry rejects stale worker callbacks from an older generation",
+          "[model-registry][generation][worker-supervisor]") {
+    HLIEModelRegistry registry;
+    registry.upsert(make_instance("model-a"));
+
+    const auto first = registry.try_begin_loading_ticket("model-a");
+    REQUIRE(first);
+    REQUIRE(registry.mark_loaded_if_current(*first, 7902));
+    REQUIRE(registry.mark_unloaded_if_current(*first));
+
+    const auto second = registry.try_begin_loading_ticket("model-a");
+    REQUIRE(second);
+    REQUIRE(second->generation > first->generation);
+    CHECK_FALSE(second->token == first->token);
+
+    CHECK_FALSE(registry.mark_loaded_if_current(*first, 7902));
+    CHECK_FALSE(registry.mark_unloaded_if_current(*first));
+    CHECK_FALSE(registry.mark_failed_if_current(*first, 17));
+
+    const auto loading = registry.get_instance_snapshot("model-a");
+    REQUIRE(loading);
+    CHECK(loading->meta.status == SERVER_MODEL_STATUS_LOADING);
+    CHECK(loading->generation == second->generation);
+
+    REQUIRE(registry.mark_loaded_if_current(*second, 7903));
+    CHECK_FALSE(registry.mark_failed_if_current(*first, 23));
+    const auto loaded = registry.get_instance_snapshot("model-a");
+    REQUIRE(loaded);
+    CHECK(loaded->meta.status == SERVER_MODEL_STATUS_LOADED);
+    CHECK(loaded->meta.port == 7903);
+    CHECK(loaded->meta.exit_code == 0);
+}
+
+TEST_CASE("Registry launch token is required in addition to generation",
+          "[model-registry][generation][launch-ticket]") {
+    HLIEModelRegistry registry;
+    registry.upsert(make_instance("model-a"));
+
+    const auto ticket = registry.try_begin_loading_ticket("model-a");
+    REQUIRE(ticket);
+    auto forged = *ticket;
+    forged.token = "wrong-token";
+
+    CHECK_FALSE(registry.is_current_launch(forged));
+    CHECK_FALSE(registry.mark_loaded_if_current(forged, 7902));
+    REQUIRE(registry.is_current_launch(*ticket));
+    REQUIRE(registry.mark_loaded_if_current(*ticket, 7902));
+}
+
+TEST_CASE("Stale request lease cannot decrement a reloaded generation",
+          "[model-registry][generation][request-lease]") {
+    HLIEModelRegistry registry;
+    registry.upsert(make_instance("model-a"));
+
+    const auto first = registry.try_begin_loading_ticket("model-a");
+    REQUIRE(first);
+    REQUIRE(registry.mark_loaded_if_current(*first, 7902));
+    const auto stale_request = registry.begin_request_ticket("model-a");
+    REQUIRE(stale_request);
+
+    REQUIRE(registry.mark_failed_if_current(*first, 37));
+    const auto second = registry.try_begin_loading_ticket("model-a");
+    REQUIRE(second);
+    REQUIRE(registry.mark_loaded_if_current(*second, 7903));
+    const auto current_request = registry.begin_request_ticket("model-a");
+    REQUIRE(current_request);
+
+    registry.end_request(*stale_request);
+    auto snapshot = registry.get_instance_snapshot("model-a");
+    REQUIRE(snapshot);
+    CHECK(snapshot->generation == second->generation);
+    CHECK(snapshot->active_requests == 1);
+    CHECK_FALSE(registry.try_begin_eviction("model-a"));
+
+    registry.end_request(*current_request);
+    snapshot = registry.get_instance_snapshot("model-a");
+    REQUIRE(snapshot);
+    CHECK(snapshot->active_requests == 0);
+    CHECK(registry.try_begin_eviction("model-a"));
 }

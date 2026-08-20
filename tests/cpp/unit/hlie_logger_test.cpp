@@ -1,6 +1,5 @@
 #include <catch_amalgamated.hpp>
 
-#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -9,8 +8,6 @@
 #include <vector>
 
 #include <spdlog/spdlog.h>
-#include <zlib.h>
-
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -21,6 +18,7 @@
 #endif
 
 #include "hlie_base/hlie_logger.h"
+#include "hlie_base/hlie_gzip.h"
 
 namespace {
     namespace fs = std::filesystem;
@@ -50,17 +48,8 @@ namespace {
     }
 
     std::string decompress_gzip(const fs::path& path) {
-        const auto name = path.string();
-        gzFile file = gzopen(name.c_str(), "rb");
-        REQUIRE(file != nullptr);
         std::string output;
-        std::array<char, 4096> buffer{};
-        int count = 0;
-        while ((count = gzread(file, buffer.data(), static_cast<unsigned>(buffer.size()))) > 0) {
-            output.append(buffer.data(), static_cast<std::size_t>(count));
-        }
-        REQUIRE(count == 0);
-        REQUIRE(gzclose(file) == Z_OK);
+        REQUIRE(hm_HLIE::detail::read_gzip_file(path, output));
         return output;
     }
 

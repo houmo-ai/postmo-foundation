@@ -1,4 +1,5 @@
 #include "hlie_app/hlie_sd_model_service.h"
+#include "hlie_app/runtime/hlie_cancellation_metrics.h"
 
 #include "base64.hpp"
 #include "hlie_app/hlie_model_info.h"
@@ -42,7 +43,12 @@ namespace {
 
 
 int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& model_info, const std::shared_ptr<HLIEDeviceService>& device_service) {
-    blocking_queue_ = std::make_shared<HLIEBlockingQueue<QueueItem>>();
+    const auto& config = Singleton<HLIEConfigService>::instance();
+    const auto max_queued = static_cast<size_t>(std::clamp(
+        config->get_int("admission", "sd_max_queued", 2, true), 1, 128));
+    queue_wait_timeout_ms_ = std::clamp(
+        config->get_int("admission", "queue_wait_timeout_ms", 30000, true), 100, 3600000);
+    blocking_queue_ = std::make_shared<HLIEBlockingQueue<QueueItem>>(max_queued);
 
     params_ = std::make_shared<SDParams>();
     params_->houmo_mmdit_path = model_info.get_mmdit_model();
@@ -68,6 +74,10 @@ int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     }
 
     device_service_ = device_service;
+    reservation_id_ = model_info.get_device_reservation_id();
+    reservation_owned_externally_ = reservation_id_ != 0;
+    const std::string model_key = model_info.model_key_.empty() ? HLIEModelType::SD3 : model_info.model_key_;
+    const int required_mem_mb = model_info.get_estimated_mem() > 0 ? model_info.get_estimated_mem() : 11000;
     auto devices = model_info.get_devices();
 
     {
@@ -82,20 +92,31 @@ int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
                 return -1;
             }
 
-            if (device_service_->acquire_mem_on_devices(devices_, 11000) < 0) {
-                return -1;
+            if (reservation_id_ != 0) {
+                if (!device_service_->reservation_matches(reservation_id_, devices_, required_mem_mb, model_key)) {
+                    LOG_ERROR("SD reservation {} does not match model/devices", reservation_id_);
+                    return -1;
+                }
+            } else {
+                const auto reservation = device_service_->reserve_mem_on_devices(
+                    devices_, required_mem_mb, false, model_key);
+                if (!reservation) {
+                    return -1;
+                }
+                reservation_id_ = reservation->id;
             }
 
             params_->hm_sd_device = devices_.at(0);
             LOG_INFO("SD using model specific device: {}", params_->hm_sd_device);
         } else {
-            uint32_t device;
-            if (device_service_->acquire_mem(11000, device) < 0) {
+            const auto reservation = device_service_->reserve_mem(required_mem_mb, model_key);
+            if (!reservation) {
                 return -1;
             }
-            devices_.push_back(device);
-            params_->hm_sd_device = device;
-            LOG_INFO("SD using model specific device: {}", device);
+            reservation_id_ = reservation->id;
+            devices_ = reservation->devices;
+            params_->hm_sd_device = devices_.front();
+            LOG_INFO("SD using model specific device: {}", devices_.front());
         }
     }
 
@@ -186,14 +207,30 @@ int SDModelService::init(const std::string& model_dir, const HLIEModelInfo& mode
     sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
     if (!sd_ctx) {
         LOG_ERROR("Failed to init sd_ctx");
-        if (device_service_) {
-            device_service_->release_mem_on_devices(devices_, 11000);
+        if (device_service_ && reservation_id_ != 0 &&
+            !reservation_owned_externally_) {
+            (void)device_service_->release_reservation(reservation_id_);
         }
+        reservation_id_ = 0;
+        reservation_owned_externally_ = false;
         devices_.clear();
         return -1;
     }
 
     sd_ctx_t_ = std::shared_ptr<sd_ctx_t>(sd_ctx, free_sd_ctx);
+    if (reservation_id_ == 0 ||
+        (!reservation_owned_externally_ &&
+         !device_service_->commit_reservation(reservation_id_))) {
+        LOG_ERROR("SD failed to commit device reservation {}", reservation_id_);
+        sd_ctx_t_.reset();
+        if (reservation_id_ != 0 && !reservation_owned_externally_) {
+            (void)device_service_->release_reservation(reservation_id_);
+        }
+        reservation_id_ = 0;
+        reservation_owned_externally_ = false;
+        devices_.clear();
+        return -1;
+    }
     return 0;
 }
 
@@ -214,13 +251,41 @@ void SDModelService::process() {
         while (!should_stop_) {
             const auto [request, promise] = blocking_queue_->pop(); // 阻塞直到有数据或队列关闭
             if (should_stop_) {
+                ImagesResult result;
+                result.success = false;
+                result.error_message = "Stable Diffusion service is stopping";
+                result.predicted_ms = 0;
+                promise->set_value(std::move(result));
                 break; // 防止 stop() 后仍有残留任务
             }
 
+            bool backend_started = false;
+            bool backend_completion_recorded = false;
             try {
                 auto start = std::chrono::steady_clock::now();
+                auto stop = request.control.stop_observation();
+                if (stop.reason == HLIEQueuedRequestStopReason::NONE) {
+                    if (!request.control.is_cancelled() && request.control.is_expired()) {
+                        request.control.expire();
+                    }
+                    stop = request.control.stop_observation();
+                }
+                if (stop.reason != HLIEQueuedRequestStopReason::NONE) {
+                    ImagesResult result;
+                    result.success = false;
+                    result.error_message = stop.reason == HLIEQueuedRequestStopReason::DEADLINE
+                        ? "Stable Diffusion queue wait deadline exceeded"
+                        : "Stable Diffusion request cancelled while queued";
+                    promise->set_value(std::move(result));
+                    continue;
+                }
+                backend_started = true;
                 auto image_result = generate_image(request);
                 auto end = std::chrono::steady_clock::now();
+                HLIECancellationMetrics::instance().observe_backend_completion(
+                    HLIEBackendCancellationLane::STABLE_DIFFUSION,
+                    request.control.observe_for_completion(), end);
+                backend_completion_recorded = true;
                 // 构造结果
                 ImagesResult result;
                 result.image = image_result;
@@ -231,6 +296,11 @@ void SDModelService::process() {
                 // 通知调用者
                 promise->set_value(result);
             } catch (const std::exception& e) {
+                if (backend_started && !backend_completion_recorded) {
+                    HLIECancellationMetrics::instance().observe_backend_completion(
+                        HLIEBackendCancellationLane::STABLE_DIFFUSION,
+                        request.control.observe_for_completion());
+                }
                 // 错误处理
                 ImagesResult result;
                 result.success = false;
@@ -239,29 +309,37 @@ void SDModelService::process() {
             }
         }
     } catch (const std::runtime_error&) {
-        LOG_WARN("SDModelService process exited");
+        LOG_INFO("SDModelService worker loop exited");
     }
 }
 
 void SDModelService::stop() {
-    if (!worker_thread_) {
-        return;
-    }
-
     should_stop_ = true;
     if (blocking_queue_) {
         blocking_queue_->close(); // 通知队列关闭，唤醒可能阻塞的 pop()
     }
 
-    if (worker_thread_->joinable()) {
+    if (worker_thread_ && worker_thread_->joinable()) {
         worker_thread_->join();
     }
     worker_thread_.reset();
+    if (blocking_queue_) {
+        while (auto pending = blocking_queue_->try_pop()) {
+            ImagesResult result;
+            result.success = false;
+            result.error_message = "Stable Diffusion service stopped before request execution";
+            result.predicted_ms = 0;
+            pending->promise->set_value(std::move(result));
+        }
+    }
     sd_ctx_t_.reset();
 
-    if (device_service_) {
-        device_service_->release_mem_on_devices(devices_, 11000);
+    if (device_service_ && reservation_id_ != 0 &&
+        !reservation_owned_externally_) {
+        (void)device_service_->release_reservation(reservation_id_);
     }
+    reservation_id_ = 0;
+    reservation_owned_externally_ = false;
     devices_.clear();
 }
 
@@ -296,17 +374,45 @@ std::future<ImagesResult> SDModelService::generate_image_async(const ImagesReque
     // 创建队列项
     QueueItem item;
     item.request = request;
+    if (item.request.control.deadline.time_since_epoch().count() == 0) {
+        item.request.control.deadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(queue_wait_timeout_ms_);
+    }
     item.promise = promise;
 
-    if (blocking_queue_) {
-        blocking_queue_->push(item);
+    if (!blocking_queue_ || !blocking_queue_->try_push(item)) {
+        throw InferenceQueueFullException("Stable Diffusion inference queue is full");
     }
 
     return future;
 }
 
-ImagesResult SDModelService::generate_image_sync(const ImagesRequest& request) const {
-    auto future = generate_image_async(request);
+ImagesResult SDModelService::generate_image_sync(
+    const ImagesRequest& request,
+    const std::function<bool()>& should_stop) const {
+    auto queued_request = request;
+    if (queued_request.control.deadline.time_since_epoch().count() == 0) {
+        queued_request.control.deadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(queue_wait_timeout_ms_);
+    }
+    auto future = generate_image_async(queued_request);
+    while (future.wait_for(std::chrono::milliseconds(25)) != std::future_status::ready) {
+        if (should_stop && should_stop()) {
+            queued_request.control.cancel();
+            return {.image = {}, .success = false,
+                    .error_message = "Stable Diffusion request cancelled while queued", .predicted_ms = 0};
+        }
+        if (queued_request.control.is_cancelled()) {
+            queued_request.control.cancel();
+            return {.image = {}, .success = false,
+                    .error_message = "Stable Diffusion request cancelled while queued", .predicted_ms = 0};
+        }
+        if (queued_request.control.is_expired()) {
+            queued_request.control.expire();
+            return {.image = {}, .success = false,
+                    .error_message = "Stable Diffusion queue wait deadline exceeded", .predicted_ms = 0};
+        }
+    }
     return future.get();
 }
 
@@ -347,7 +453,8 @@ server_http_res_ptr SDModelService::handle_image_generations(const server_http_r
         if (images_request.guidance_scale < 1.0) {
             throw CommonException(5, "Guidance scale must be greater than 1.0 .");
         }
-        if (auto [image, success, error_message, predicted_ms] = generate_image_sync(images_request); success) {
+        auto generation_result = generate_image_sync(images_request, req.should_stop);
+        if (auto& [image, success, error_message, predicted_ms] = generation_result; success) {
             nlohmann::ordered_json response;
 
             int png_len;
@@ -368,6 +475,21 @@ server_http_res_ptr SDModelService::handle_image_generations(const server_http_r
             response["timings"] = nlohmann::json::object({{"predicted_ms", predicted_ms}});
             auto res = std::make_unique<server_res_generator_light>();
             res->ok(response);
+            return res;
+        }
+
+        if (generation_result.error_message.find("cancelled") != std::string::npos) {
+            auto res = std::make_unique<server_http_res>();
+            res->status = 499;
+            res->content_type = MIMETYPE_JSON;
+            res->data = R"({"error":"request cancelled while queued"})";
+            return res;
+        }
+        if (generation_result.error_message.find("deadline") != std::string::npos) {
+            auto res = std::make_unique<server_http_res>();
+            res->status = 504;
+            res->content_type = MIMETYPE_JSON;
+            res->data = R"({"error":"inference queue wait deadline exceeded"})";
             return res;
         }
 

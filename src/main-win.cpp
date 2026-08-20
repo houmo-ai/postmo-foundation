@@ -273,6 +273,7 @@ int main(const int argc, char** argv) {
         if (err == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT &&
             config_service->get_args().find("--config") != config_service->get_args().end()) {
             SetEnvironmentVariableA("HLIECPP_STANDALONE_MODE", "1");
+            _putenv_s("HLIECPP_STANDALONE_MODE", "1");
             printf("========HLIECpp Standalone Config Mode======== \n");
             return run();
         }

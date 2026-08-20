@@ -6,7 +6,7 @@
 #include <regex>
 #include <utility>
 
-#include "hlie_app/hlie_model_family_registry.h"
+#include "hlie_core/backend/hlie_model_family_registry.h"
 
 HLIE_NAMESPACE_BEGIN
 
@@ -173,6 +173,27 @@ void HLIEModelInfo::set_service_kind(const std::string& service_kind) {
     }
     is_llm_ = service_kind_ != "sd";
     infer_role_from_name();
+}
+
+HLIEModelSpec HLIEModelInfo::to_model_spec() const {
+    HLIEModelSpec spec;
+    spec.identity.model_key = model_key_;
+    spec.identity.model_name = model_name_;
+    spec.identity.display_name = model_name_;
+    spec.identity.model_path = model_path_;
+    spec.identity.projector_path = mm_proj_path_;
+    spec.identity.backend_id = service_kind_;
+    spec.backend_alias = service_kind_;
+    spec.legacy_model_type = model_type_;
+    spec.model_family = model_family_;
+    spec.architecture = architecture_;
+    spec.capabilities = capabilities_;
+    spec.role = role_;
+    spec.context_size = context_size_;
+    spec.batch_size = batch_num_;
+    spec.required_device_count = device_num_;
+    spec.is_llm = is_llm_;
+    return spec;
 }
 
 std::string HLIEModelInfo::parse_mmproj_vl_spec(const std::string& name) {

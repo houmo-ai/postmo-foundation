@@ -20,6 +20,7 @@ class HLIETokenizer;
 class HLIECosyVoiceModel;
 
 struct CosyVoiceRequest {
+    HLIEQueuedRequestControl control;
     std::string content;
     std::string prompt_text;
     std::string prompt_wav_path;
@@ -30,7 +31,7 @@ struct CosyVoiceResult {
     bool success = false;
     std::vector<float> wav;
     std::string error_message;
-    int64_t predicted_ms;
+    int64_t predicted_ms = 0;
 };
 
 /**
@@ -127,7 +128,8 @@ public:
 
 private:
     std::future<CosyVoiceResult> speech_async(const CosyVoiceRequest& request) const;
-    CosyVoiceResult speech_sync(const CosyVoiceRequest& request) const;
+    CosyVoiceResult speech_sync(const CosyVoiceRequest& request,
+                                const std::function<bool()>& should_stop = {}) const;
 
     std::vector<float> speech(const CosyVoiceRequest& request);
 

@@ -1,13 +1,21 @@
 #include "hlie_app/hlie_process_manager.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
+#include <cerrno>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
 
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
+
+#ifndef _WIN32
+extern char** environ;
+#endif
 
 #ifdef _WIN32
 #pragma comment(lib, "Advapi32.lib")
@@ -16,6 +24,17 @@
 HLIE_NAMESPACE_BEGIN
 
 namespace {
+    bool is_sensitive_process_option(const std::string& option) {
+        std::string lowered = option;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](const unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+        return lowered.find("token") != std::string::npos ||
+               lowered.find("api-key") != std::string::npos ||
+               lowered.find("password") != std::string::npos ||
+               lowered.find("secret") != std::string::npos;
+    }
+
     std::vector<int> parse_process_device_ids(const std::vector<std::string>& args) {
         for (size_t i = 0; i + 1 < args.size(); ++i) {
             if (args[i] != "--device_id") {
@@ -102,17 +121,27 @@ HLIEProcessManager::~HLIEProcessManager() {
 }
 
 ProcessID HLIEProcessManager::create_process(const std::string& exe_path,
-    const std::vector<std::string>& args, const std::vector<std::string>& model_names, const int instance_id) {
+    const std::vector<std::string>& args, const std::vector<std::string>& model_names,
+    const int instance_id, const HLIEModelLaunchTicket& launch_ticket) {
     std::lock_guard lock(mutex_);
-
 #ifdef _WIN32
     // Windows: 构造命令行，程序路径用双引号包起来，防止路径里有空格
     std::stringstream ss;
+    std::stringstream display_ss;
     ss << quote_windows_argument(exe_path);
+    display_ss << quote_windows_argument(exe_path);
+    bool redact_next = false;
     for (const auto& arg : args) {
         ss << " " << quote_windows_argument(arg);
+        display_ss << " " << quote_windows_argument(redact_next ? "<redacted>" : arg);
+        if (redact_next) {
+            redact_next = false;
+        } else {
+            redact_next = is_sensitive_process_option(arg);
+        }
     }
     std::string cmd_line = ss.str();
+    const std::string display_cmd_line = display_ss.str();
     const auto exe_directory = std::filesystem::path(exe_path).parent_path().string();
     char inherited_working_directory[MAX_PATH] = {};
     if (const DWORD size = GetEnvironmentVariableA("HLIECPP_WORKING_DIR", inherited_working_directory, MAX_PATH);
@@ -157,7 +186,7 @@ ProcessID HLIEProcessManager::create_process(const std::string& exe_path,
 
     if (!ok) {
         const DWORD error = GetLastError();
-        LOG_ERROR("Failed to CreateProcessA with cmd {}, error {} ({})", cmd_line, error, windows_error_message(error));
+        LOG_ERROR("Failed to CreateProcessA with cmd {}, error {} ({})", display_cmd_line, error, windows_error_message(error));
         return 0;
     }
 
@@ -168,67 +197,73 @@ ProcessID HLIEProcessManager::create_process(const std::string& exe_path,
         if (!GetExitCodeProcess(pi.hProcess, &exit_code)) {
             exit_code = GetLastError();
         }
-        LOG_ERROR("Child process PID[{}] exited immediately with code {}, cmd {}", pi.dwProcessId, exit_code, cmd_line);
+        LOG_ERROR("Child process PID[{}] exited immediately with code {}, cmd {}", pi.dwProcessId, exit_code, display_cmd_line);
         CloseHandle(pi.hProcess);
         return 0;
     }
 
     LOG_INFO("Created child process PID[{}] instance_id[{}] cwd={} exe_dir={} cmd={}",
-             pi.dwProcessId, instance_id, working_directory, exe_directory, cmd_line);
+             pi.dwProcessId, instance_id, working_directory, exe_directory, display_cmd_line);
 
     ProcessInfo info;
     info.uuid = HlieUtil::uuid();
     info.process_handle = pi.hProcess;
     info.process_id = pi.dwProcessId;
-    info.params = cmd_line;
+    info.params = display_cmd_line;
     info.model_names = model_names;
     info.device_ids = parse_process_device_ids(args);
     info.instance_id = instance_id;
     info.start_time = time(nullptr);
     info.is_running = true;
+    info.launch_ticket = launch_ticket;
 
     processes_[info.process_id] = info;
 
     return info.process_id;
 
 #else
-    // Linux: fork + execvp
-    pid_t pid = fork();
-    if (pid < 0) {
-        return 0;
-    } else if (pid == 0) {
-        // 子进程
-        LOG_INFO("Child process, ready to run with path: {}", exe_path);
-        std::vector<char*> argv;
-        argv.push_back(const_cast<char*>(exe_path.c_str()));
-        for (auto& arg : args) {
-            LOG_INFO("arg: {}", arg);
-            argv.push_back(const_cast<char*>(arg.c_str()));
+    // Build argv entirely in the parent and use posix_spawnp. Running logging
+    // or allocator-backed C++ code in a post-fork child can deadlock when the
+    // parent process has multiple threads.
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 2);
+    argv.push_back(const_cast<char*>(exe_path.c_str()));
+    bool redact_next = false;
+    for (const auto& arg : args) {
+        LOG_DEBUG("child arg: {}", redact_next ? "<redacted>" : arg);
+        if (redact_next) {
+            redact_next = false;
+        } else {
+            redact_next = is_sensitive_process_option(arg);
         }
-
-        argv.push_back(nullptr);
-        const int error_code = execvp(exe_path.c_str(), argv.data());
-        perror("execvp failed");
-        if (error_code != 0) {
-            LOG_ERROR("Child process, failed to run with path: {}", exe_path);
-        }
-        _exit(error_code);
-    } else {
-        // 父进程
-        ProcessInfo info;
-        info.pid = pid;
-        info.uuid = HlieUtil::uuid();
-        info.process_id = pid;
-        info.model_names = model_names;
-        info.device_ids = parse_process_device_ids(args);
-        info.instance_id = instance_id;
-        info.start_time = time(nullptr);
-        info.is_running = true;
-
-        processes_[pid] = info;
-
-        return pid;
+        argv.push_back(const_cast<char*>(arg.c_str()));
     }
+    argv.push_back(nullptr);
+
+    pid_t pid = INVALID_PID;
+    const int spawn_error = posix_spawnp(
+        &pid, exe_path.c_str(), nullptr, nullptr, argv.data(), environ);
+    if (spawn_error != 0) {
+        LOG_ERROR("Failed to posix_spawnp Worker path={}, error={} ({})",
+                  exe_path, spawn_error, std::strerror(spawn_error));
+        return 0;
+    }
+
+    ProcessInfo info;
+    info.pid = pid;
+    info.uuid = HlieUtil::uuid();
+    info.process_id = pid;
+    info.model_names = model_names;
+    info.device_ids = parse_process_device_ids(args);
+    info.instance_id = instance_id;
+    info.start_time = time(nullptr);
+    info.is_running = true;
+    info.launch_ticket = launch_ticket;
+
+    processes_[pid] = info;
+    LOG_INFO("Created child process PID[{}] instance_id[{}] path={}",
+             pid, instance_id, exe_path);
+    return pid;
 #endif
 }
 
@@ -254,8 +289,14 @@ bool HLIEProcessManager::terminate_process(ProcessID pid) {
         return false;
     }
 
-    // 等待子进程退出
-    WaitForSingleObject(info.process_handle, 5000 /*ms*/);
+    // Do not remove the process record until termination is confirmed.
+    const DWORD wait_result = WaitForSingleObject(info.process_handle, 5000 /*ms*/);
+    if (wait_result != WAIT_OBJECT_0) {
+        LOG_ERROR("Timed out or failed waiting for terminated process PID[{}], wait_result={}, error={}",
+                  info.process_id, wait_result, GetLastError());
+        info.is_running = true;
+        return false;
+    }
 
     // 更新状态并清理句柄
     info.is_running = false;
@@ -264,19 +305,41 @@ bool HLIEProcessManager::terminate_process(ProcessID pid) {
 
     // 从表中移除
     processes_.erase(it);
+    process_cv_.notify_all();
     return true;
 
 #else
-    // 先发 SIGTERM，再等待一会；不行再 SIGKILL
+    const auto wait_nointr = [](const pid_t child, int* status, const int options) {
+        pid_t result;
+        do {
+            result = waitpid(child, status, options);
+        } while (result < 0 && errno == EINTR);
+        return result;
+    };
+    const auto confirmed_absent = [](const pid_t child) {
+        if (kill(child, 0) == 0) {
+            return false;
+        }
+        return errno == ESRCH;
+    };
+
+    // Send SIGTERM first, then fall back to SIGKILL. The process record and
+    // reservation owner must remain live unless exit is positively confirmed.
     bool success = false;
 
-    if (kill(info.pid, SIGTERM) == 0) {
+    if (kill(info.pid, SIGTERM) == 0 || errno == ESRCH) {
         // 非阻塞等待
         for (int i = 0; i < 50; ++i) { // 总计 ~500ms
             int status = 0;
-            pid_t r = waitpid(info.pid, &status, WNOHANG);
+            const pid_t r = wait_nointr(info.pid, &status, WNOHANG);
             if (r == info.pid) {
                 success = true;
+                break;
+            }
+            if (r < 0) {
+                if (errno == ECHILD && confirmed_absent(info.pid)) {
+                    success = true;
+                }
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -284,18 +347,65 @@ bool HLIEProcessManager::terminate_process(ProcessID pid) {
     }
 
     if (!success) {
-        // 强制杀
-        kill(info.pid, SIGKILL);
-        // 等到退出
+        if (kill(info.pid, SIGKILL) != 0 && errno != ESRCH) {
+            LOG_ERROR("Failed to SIGKILL child process PID[{}], error={} ({})",
+                      info.pid, errno, std::strerror(errno));
+            return false;
+        }
         int status = 0;
-        (void)waitpid(info.pid, &status, 0);
-        success = true;
+        const pid_t r = wait_nointr(info.pid, &status, 0);
+        success = r == info.pid ||
+                  (r < 0 && errno == ECHILD && confirmed_absent(info.pid));
+        if (!success) {
+            LOG_ERROR("Failed to confirm child process exit PID[{}], waitpid_result={}, error={} ({})",
+                      info.pid, r, errno, std::strerror(errno));
+            return false;
+        }
     }
 
     info.is_running = false;
     processes_.erase(it);
+    process_cv_.notify_all();
     return success;
 #endif
+}
+
+std::optional<HLIEProcessManager::ProcessInfo> HLIEProcessManager::get_process(
+    const ProcessID pid) {
+    monitor_processes();
+    std::lock_guard lock(mutex_);
+    const auto it = processes_.find(pid);
+    return it == processes_.end() ? std::nullopt
+                                  : std::optional<ProcessInfo>{it->second};
+}
+
+bool HLIEProcessManager::mark_expected_exit(const ProcessID pid, const bool expected) {
+    std::lock_guard lock(mutex_);
+    const auto it = processes_.find(pid);
+    if (it == processes_.end()) {
+        return false;
+    }
+    it->second.expected_exit = expected;
+    return true;
+}
+
+bool HLIEProcessManager::wait_for_exit(const ProcessID pid,
+                                       const std::chrono::milliseconds timeout) {
+    const auto non_negative_timeout = timeout < std::chrono::milliseconds::zero()
+        ? std::chrono::milliseconds::zero()
+        : timeout;
+    const auto deadline = std::chrono::steady_clock::now() + non_negative_timeout;
+    while (true) {
+        monitor_processes();
+        std::unique_lock lock(mutex_);
+        if (processes_.find(pid) == processes_.end()) {
+            return true;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        process_cv_.wait_for(lock, std::chrono::milliseconds(25));
+    }
 }
 
 bool HLIEProcessManager::terminate_all() {
@@ -357,7 +467,7 @@ void HLIEProcessManager::erase_model(const std::string& model_name) {
 
         // Todo:: 如果进程已经没有模型了，可以考虑关闭
         if (process.model_names.empty()) {
-            LOG_INFO("process {} has no models, consider terminating", pid);
+            LOG_DEBUG("process {} has no registered models", pid);
         }
 
         break;
@@ -418,6 +528,7 @@ void HLIEProcessManager::monitor_processes() {
         auto& info = kv.second;
         if (!info.process_handle) {
             info.is_running = false;
+            exit_events_.push_back({info, -1});
             to_remove.push_back(kv.first);
             continue;
         }
@@ -427,17 +538,28 @@ void HLIEProcessManager::monitor_processes() {
             LOG_ERROR("Failed to query child process PID[{}] instance_id[{}], error {} ({})",
                       info.process_id, info.instance_id, error, windows_error_message(error));
             // 无法获取，认为已结束
-            info.is_running = false;
-            CloseHandle(info.process_handle);
-            info.process_handle = nullptr;
-            to_remove.push_back(kv.first);
+            if (WaitForSingleObject(info.process_handle, 0) == WAIT_OBJECT_0) {
+                info.is_running = false;
+                CloseHandle(info.process_handle);
+                info.process_handle = nullptr;
+                exit_events_.push_back({info, -static_cast<int>(error)});
+                to_remove.push_back(kv.first);
+            } else {
+                info.is_running = true;
+            }
         } else {
             info.is_running = (code == STILL_ACTIVE);
             if (!info.is_running) {
-                LOG_ERROR("Child process PID[{}] instance_id[{}] exited with code {}, cmd {}",
-                          info.process_id, info.instance_id, code, info.params);
+                if (info.expected_exit) {
+                    LOG_INFO("Child process PID[{}] instance_id[{}] completed expected exit with code {}",
+                             info.process_id, info.instance_id, code);
+                } else {
+                    LOG_WARN("Child process PID[{}] instance_id[{}] exited unexpectedly with code {}, cmd {}",
+                             info.process_id, info.instance_id, code, info.params);
+                }
                 CloseHandle(info.process_handle);
                 info.process_handle = nullptr;
+                exit_events_.push_back({info, static_cast<int>(code)});
                 to_remove.push_back(kv.first);
             }
         }
@@ -445,29 +567,63 @@ void HLIEProcessManager::monitor_processes() {
     for (auto pid : to_remove) {
         processes_.erase(pid);
     }
+    if (!to_remove.empty()) {
+        process_cv_.notify_all();
+    }
 #else
     std::vector<ProcessID> to_remove;
     for (auto& kv : processes_) {
         auto& info = kv.second;
         int status = 0;
-        pid_t r = waitpid(info.pid, &status, WNOHANG);
+        pid_t r;
+        do {
+            r = waitpid(info.pid, &status, WNOHANG);
+        } while (r < 0 && errno == EINTR);
         if (r == 0) {
             // 仍在运行
             info.is_running = true;
         } else if (r == info.pid) {
             // 已退出
             info.is_running = false;
+            const int exit_code = WIFEXITED(status) ? WEXITSTATUS(status)
+                : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
+            exit_events_.push_back({info, exit_code});
             to_remove.push_back(kv.first);
         } else {
-            // waitpid 出错，认为已终止
-            info.is_running = false;
-            to_remove.push_back(kv.first);
+            const int wait_error = errno;
+            bool confirmed_exit = false;
+            if (wait_error == ECHILD) {
+                confirmed_exit = kill(info.pid, 0) != 0 && errno == ESRCH;
+            }
+            if (confirmed_exit) {
+                info.is_running = false;
+                exit_events_.push_back({info, -1});
+                to_remove.push_back(kv.first);
+            } else {
+                info.is_running = true;
+                LOG_ERROR("waitpid failed for live child PID[{}], error={} ({})",
+                          info.pid, wait_error, std::strerror(wait_error));
+            }
         }
     }
     for (auto pid : to_remove) {
         processes_.erase(pid);
     }
+    if (!to_remove.empty()) {
+        process_cv_.notify_all();
+    }
 #endif
+}
+
+std::vector<HLIEProcessManager::ProcessExitEvent> HLIEProcessManager::drain_exit_events() {
+    std::lock_guard lock(mutex_);
+    std::vector<ProcessExitEvent> events;
+    events.reserve(exit_events_.size());
+    while (!exit_events_.empty()) {
+        events.push_back(std::move(exit_events_.front()));
+        exit_events_.pop_front();
+    }
+    return events;
 }
 
 void HLIEProcessManager::cleanup_terminated_processes() {

@@ -131,10 +131,10 @@ namespace {
 #ifdef _WIN32
             char current_dir[MAX_PATH] = {};
             GetCurrentDirectoryA(MAX_PATH, current_dir);
-            LOG_INFO("HAL loader context: current_dir={}, HOUMO_SDK_PATH={}, HOUMO_DRV_PATH={}, TCIM_RUNTIME_PATH={}", current_dir,
-                     std::getenv("HOUMO_SDK_PATH") ? std::getenv("HOUMO_SDK_PATH") : "<unset>",
-                     std::getenv("HOUMO_DRV_PATH") ? std::getenv("HOUMO_DRV_PATH") : "<unset>",
-                     std::getenv("TCIM_RUNTIME_PATH") ? std::getenv("TCIM_RUNTIME_PATH") : "<unset>");
+            LOG_DEBUG("HAL loader context: current_dir={}, HOUMO_SDK_PATH={}, HOUMO_DRV_PATH={}, TCIM_RUNTIME_PATH={}", current_dir,
+                      std::getenv("HOUMO_SDK_PATH") ? std::getenv("HOUMO_SDK_PATH") : "<unset>",
+                      std::getenv("HOUMO_DRV_PATH") ? std::getenv("HOUMO_DRV_PATH") : "<unset>",
+                      std::getenv("TCIM_RUNTIME_PATH") ? std::getenv("TCIM_RUNTIME_PATH") : "<unset>");
 
             std::vector<std::string> base_paths = {
                 std::getenv("HOUMO_SDK_PATH") ? std::getenv("HOUMO_SDK_PATH") : "",
@@ -159,7 +159,7 @@ namespace {
                 for (const auto& path : candidate_paths) {
                     const DWORD attributes = GetFileAttributesA(path.c_str());
                     if (attributes == INVALID_FILE_ATTRIBUTES) {
-                        LOG_INFO("HAL candidate does not exist: {}", path);
+                        LOG_DEBUG("HAL candidate does not exist: {}", path);
                         continue;
                     }
 
@@ -202,7 +202,7 @@ namespace {
                 const auto path = dir / library_name();
                 std::error_code error;
                 if (!std::filesystem::exists(path, error) || error) {
-                    LOG_INFO("custom HAL candidate does not exist: {}", path.string());
+                    LOG_DEBUG("custom HAL candidate does not exist: {}", path.string());
                     continue;
                 }
 
@@ -300,11 +300,16 @@ namespace {
 
 int HLIEDeviceService::init() {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
+    const int pending_ttl_sec = std::clamp(
+        config_services->get_int("resource", "pending_reservation_ttl_sec", 300, true),
+        30, 3600);
+    reservation_ledger_.set_pending_ttl(std::chrono::seconds(pending_ttl_sec));
     auto devices_str = config_services->get_string("server", "devices", "0", true);
 
     LOG_INFO("Begin to init devices with config [{}]", devices_str);
 
     devices_.clear();
+    reservation_ledger_.reset();
 
     // 1. parse config ids
     std::vector<int> config_devices;
@@ -368,6 +373,7 @@ int HLIEDeviceService::init() {
         info.exclusive = false;
 
         devices_.emplace(dev, info);
+        reservation_ledger_.update_observation({dev, mem.mem_total, mem.mem_used, mem.mem_avail});
 
         LOG_INFO("device {} ready: total {}MB used {}MB avail {}MB", dev, mem.mem_total, mem.mem_used, mem.mem_avail);
     }
@@ -385,11 +391,11 @@ int HLIEDeviceService::init() {
 int HLIEDeviceService::acquire_mem(uint32_t size, uint32_t& out_device, bool dry_run, bool allow_capacity_limit,
                                    const std::string& model_name) {
     std::unique_lock lock(mutex_);
-    LOG_INFO("acquire_mem");
+    LOG_DEBUG("acquire_mem: requested_mb={}, model={}", size, model_name);
     for (auto [dev, _] : devices_) {
         refresh_device_usage(dev);
     }
-    LOG_INFO("acquire_mem refresh_device_usage done");
+    LOG_DEBUG("acquire_mem device observation refresh completed");
 
     switch (mode_) {
     case MemApplyMode::PreferIdleCard:
@@ -401,6 +407,175 @@ int HLIEDeviceService::acquire_mem(uint32_t size, uint32_t& out_device, bool dry
     default:
         return -1;
     }
+}
+
+std::optional<HLIEDeviceReservation> HLIEDeviceService::reserve_mem(
+    const uint32_t size, const std::string& model_key, const uint64_t generation,
+    const bool allow_capacity_limit) {
+    std::lock_guard lock(mutex_);
+    for (const auto& [device_id, _] : devices_) {
+        refresh_device_usage(device_id);
+    }
+
+    HLIEDeviceReservationRequest request;
+    request.model_key = model_key;
+    request.generation = generation;
+    request.total_mb = size;
+    request.device_count = 1;
+    request.allow_single_device_capacity_limit = allow_capacity_limit;
+    auto reservation = reservation_ledger_.reserve(request);
+    if (reservation) {
+        LOG_INFO("reserved device memory: reservation={}, model={}, device={}, total={}MB",
+                 reservation->id, model_key, reservation->devices.front(), size);
+    }
+    return reservation;
+}
+
+std::optional<HLIEDeviceReservation> HLIEDeviceService::reserve_mem_on_devices(
+    const std::vector<int>& devices, const uint32_t total_size, const bool exclusive,
+    const std::string& model_key, const uint64_t generation) {
+    if (devices.empty()) {
+        return std::nullopt;
+    }
+
+    std::lock_guard lock(mutex_);
+    for (const int device_id : devices) {
+        refresh_device_usage(device_id);
+    }
+
+    std::set<int> unique(devices.begin(), devices.end());
+    HLIEDeviceReservationRequest request;
+    request.model_key = model_key;
+    request.generation = generation;
+    request.total_mb = total_size;
+    request.device_count = unique.size();
+    request.requested_devices.assign(unique.begin(), unique.end());
+    request.exclusive = exclusive;
+    request.allow_single_device_capacity_limit = unique.size() == 1;
+    auto reservation = reservation_ledger_.reserve(request);
+    if (reservation) {
+        LOG_INFO("reserved device memory: reservation={}, model={}, devices={}, total={}MB",
+                 reservation->id, model_key, HlieUtil::join_devices(reservation->devices), total_size);
+    }
+    return reservation;
+}
+
+std::optional<HLIEDeviceReservation> HLIEDeviceService::reserve_mem_on_device_count(
+    const size_t device_count, const uint32_t total_size, const std::string& model_key,
+    const uint64_t generation) {
+    if (device_count == 0) {
+        return std::nullopt;
+    }
+
+    std::lock_guard lock(mutex_);
+    for (const auto& [device_id, _] : devices_) {
+        refresh_device_usage(device_id);
+    }
+
+    HLIEDeviceReservationRequest request;
+    request.model_key = model_key;
+    request.generation = generation;
+    request.total_mb = total_size;
+    request.device_count = device_count;
+    request.allow_single_device_capacity_limit = device_count == 1;
+    auto reservation = reservation_ledger_.reserve(request);
+    if (reservation) {
+        LOG_INFO("reserved device memory: reservation={}, model={}, devices={}, total={}MB",
+                 reservation->id, model_key, HlieUtil::join_devices(reservation->devices), total_size);
+    }
+    return reservation;
+}
+
+std::optional<HLIEDeviceReservation> HLIEDeviceService::reserve_resources(
+    const HLIEDeviceReservationRequest& request) {
+    if (!request.requested_devices.empty()) {
+        return reserve_mem_on_devices(
+            request.requested_devices, static_cast<std::uint32_t>(request.total_mb),
+            request.exclusive, request.model_key, request.generation);
+    }
+    if (request.device_count == 1) {
+        return reserve_mem(static_cast<std::uint32_t>(request.total_mb), request.model_key,
+                           request.generation,
+                           request.allow_single_device_capacity_limit);
+    }
+    return reserve_mem_on_device_count(
+        request.device_count, static_cast<std::uint32_t>(request.total_mb),
+        request.model_key, request.generation);
+}
+
+bool HLIEDeviceService::commit_reservation(const HLIEDeviceReservationId reservation_id) {
+    const bool committed = reservation_ledger_.commit(reservation_id);
+    if (committed) {
+        LOG_INFO("committed device reservation {}", reservation_id);
+    } else {
+        LOG_ERROR("failed to commit device reservation {}", reservation_id);
+    }
+    return committed;
+}
+
+bool HLIEDeviceService::bind_reservation(const HLIEDeviceReservationId reservation_id,
+                                         const std::string& model_key,
+                                         const uint64_t generation) {
+    const bool bound = reservation_ledger_.bind(reservation_id, model_key, generation);
+    if (bound) {
+        LOG_INFO("bound device reservation {} to model={} generation={}",
+                 reservation_id, model_key, generation);
+    } else {
+        LOG_ERROR("failed to bind device reservation {} to model={} generation={}",
+                  reservation_id, model_key, generation);
+    }
+    return bound;
+}
+
+bool HLIEDeviceService::rollback_reservation(const HLIEDeviceReservationId reservation_id) {
+    const bool rolled_back = reservation_ledger_.rollback(reservation_id);
+    if (rolled_back) {
+        LOG_INFO("rolled back device reservation {}", reservation_id);
+    }
+    return rolled_back;
+}
+
+bool HLIEDeviceService::release_reservation(const HLIEDeviceReservationId reservation_id) {
+    const bool released = reservation_ledger_.release(reservation_id);
+    if (released) {
+        LOG_INFO("released device reservation {}", reservation_id);
+    }
+    return released;
+}
+
+std::vector<HLIEDeviceReservation> HLIEDeviceService::rollback_expired_pending_reservations(
+    const std::unordered_set<HLIEDeviceReservationId>& protected_reservations) {
+    auto expired = reservation_ledger_.rollback_expired_pending(protected_reservations);
+    for (const auto& reservation : expired) {
+        LOG_WARN("rolled back expired pending device reservation: reservation={}, model={}, generation={}",
+                 reservation.id, reservation.model_key, reservation.generation);
+    }
+    return expired;
+}
+
+std::vector<HLIEDeviceReservation> HLIEDeviceService::get_reservations() const {
+    return reservation_ledger_.reservations();
+}
+
+std::optional<HLIEDeviceReservation> HLIEDeviceService::get_reservation(
+    const HLIEDeviceReservationId reservation_id) const {
+    return reservation_ledger_.get(reservation_id);
+}
+
+bool HLIEDeviceService::reservation_matches(const HLIEDeviceReservationId reservation_id,
+                                            const std::vector<int>& devices,
+                                            const uint32_t total_size,
+                                            const std::string& model_key) const {
+    // Startup may reserve from a conservative pre-resolution estimate and
+    // later resolve a smaller context/preset-specific requirement. Retaining
+    // that over-reservation is safe; only an undersized or differently owned
+    // reservation must be rejected.
+    return reservation_ledger_.covers(
+        reservation_id, devices, total_size, model_key);
+}
+
+std::vector<HLIEDeviceLedgerSnapshot> HLIEDeviceService::get_ledger_snapshots() const {
+    return reservation_ledger_.snapshots();
 }
 
 server_http_res_ptr HLIEDeviceService::acquire_mem(const server_http_req& req) {
@@ -415,7 +590,7 @@ server_http_res_ptr HLIEDeviceService::acquire_mem(const server_http_req& req) {
 
     uint32_t device;
     if (acquire_mem(size, device) < 0) {
-        LOG_ERROR("acquire_mem failed");
+        LOG_WARN("device memory request rejected: requested_mb={}", size);
         res->error("acquire_mem failed");
         return res;
     }
@@ -453,12 +628,12 @@ int HLIEDeviceService::acquire_mem_on_devices(const std::vector<int>& devices, c
         auto& info = it->second;
 
         if (info.exclusive && info.mem_used > 0) {
-            LOG_ERROR("device {} already exclusive occupied", dev);
+            LOG_WARN("device {} already has an exclusive reservation", dev);
             return -1;
         }
 
         if (!check_mem_available(dev, per_card, allow_capacity_limit, model_name)) {
-            LOG_ERROR("device {} insufficient mem for shard {}MB", dev, per_card);
+            LOG_WARN("device {} has insufficient memory for shard {}MB", dev, per_card);
             return -1;
         }
     }
@@ -511,8 +686,8 @@ int HLIEDeviceService::acquire_mem_on_device_count(const size_t device_count, co
     }
 
     if (out_devices.size() != device_count) {
-        LOG_ERROR("model {} cannot acquire {} configured devices with {}MB required per device",
-                  model_name, device_count, per_device);
+        LOG_WARN("model {} cannot acquire {} configured devices with {}MB required per device",
+                 model_name, device_count, per_device);
         out_devices.clear();
         return -1;
     }
@@ -632,6 +807,7 @@ void HLIEDeviceService::refresh_device_usage(uint32_t device) {
         it->second.mem_used = mem.mem_used;
         it->second.mem_avail = mem.mem_avail;
         it->second.mem_total = mem.mem_total;
+        reservation_ledger_.update_observation({static_cast<int>(device), mem.mem_total, mem.mem_used, mem.mem_avail});
     } else {
         LOG_WARN("refresh_device_usage: failed to query device {}", device);
     }

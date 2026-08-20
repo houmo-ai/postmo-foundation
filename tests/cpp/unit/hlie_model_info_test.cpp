@@ -37,6 +37,35 @@ TEST_CASE("ModelInfo parses routing identity without opening a GGUF", "[model-in
     CHECK(info.get_role() == HLIEModelRole::Chat);
 }
 
+TEST_CASE("ModelInfo projects an SDK-free core model spec", "[model-info][p1][core-spec]") {
+    HLIEModelInfo info;
+    REQUIRE(info.parse_identity_from_gguf_filename(
+                "HiModel_xh2_qwen3-asr_0.6b_32k_b2_2chips_v1.3.0.gguf") == 0);
+
+    const auto spec = info.to_model_spec();
+    CHECK(spec.identity.model_key == info.model_key_);
+    CHECK(spec.identity.model_name == info.get_model_name());
+    CHECK(spec.identity.model_path == info.get_model_path());
+    CHECK(spec.backend_alias == "llm");
+    CHECK(spec.model_family == "qwen3-asr");
+    CHECK(spec.role == HLIEModelRole::Asr);
+    CHECK(spec.capabilities.audio);
+    CHECK(spec.context_size == 32 * 1024);
+    CHECK(spec.batch_size == 2);
+    CHECK(spec.required_device_count == 2);
+}
+
+TEST_CASE("ModelInfo memory estimation delegates pure policy without changing fallbacks",
+          "[model-info][p1][memory]") {
+    HLIEModelInfo empty;
+    CHECK(empty.get_estimated_mem() == 0);
+
+    HLIEModelInfo qwen;
+    REQUIRE(qwen.parse_identity_from_gguf_filename(
+                "HiModel_xh2_qwen3_8b_v1.2.0.gguf") == 0);
+    CHECK(qwen.get_estimated_mem() == 10240);
+}
+
 TEST_CASE("ModelInfo infers model roles from deployment identities", "[model-info][role]") {
     struct Case {
         const char* filename;

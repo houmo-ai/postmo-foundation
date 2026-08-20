@@ -1,4 +1,4 @@
-#include "hlie_app/hlie_ws_service.h"
+#include "hlie_app/asr/hlie_asr_realtime_contract.h"
 
 #include <catch_amalgamated.hpp>
 

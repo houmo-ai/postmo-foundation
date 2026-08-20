@@ -1,4 +1,4 @@
-#include "hlie_app/hlie_model_family_registry.h"
+#include "hlie_core/backend/hlie_model_family_registry.h"
 
 #include <catch_amalgamated.hpp>
 

@@ -1,4 +1,4 @@
-#include "hlie_gzip.h"
+#include "hlie_base/hlie_gzip.h"
 
 #include <algorithm>
 #include <array>
@@ -438,6 +438,28 @@ bool gzip_log_file(const fs::path& source, const int compression_level,
         }
         return false;
     }
+}
+
+bool read_gzip_file(const fs::path& source, std::string& output) noexcept {
+    output.clear();
+    const auto source_name = source.string();
+    gzFile file = gzopen(source_name.c_str(), "rb");
+    if (file == nullptr) {
+        return false;
+    }
+
+    std::array<char, 4096> buffer{};
+    int count = 0;
+    while ((count = gzread(file, buffer.data(),
+                           static_cast<unsigned>(buffer.size()))) > 0) {
+        output.append(buffer.data(), static_cast<std::size_t>(count));
+    }
+    const int close_result = gzclose(file);
+    if (count != 0 || close_result != Z_OK) {
+        output.clear();
+        return false;
+    }
+    return true;
 }
 
 } // namespace hm_HLIE::detail

@@ -39,7 +39,7 @@
 #include "spdlog/sinks/base_sink.h"
 #include "spdlog/sinks/daily_file_sink.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
-#include "hlie_gzip.h"
+#include "hlie_base/hlie_gzip.h"
 
 HLIE_NAMESPACE_BEGIN
 

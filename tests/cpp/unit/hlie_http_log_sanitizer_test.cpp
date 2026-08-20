@@ -39,13 +39,15 @@ TEST_CASE("HTTP log sanitizer redacts request and response base64 fields") {
 
 TEST_CASE("HTTP log sanitizer recursively redacts common credential fields") {
     const std::string body =
-        R"({"authorization":"Bearer SECRET","nested":{"api_key":"KEY","password":"PASS"},"max_tokens":32})";
+        R"({"authorization":"Bearer SECRET","nested":{"api_key":"KEY","password":"PASS","launch_token":"WORKER","token":"GENERIC"},"max_tokens":32})";
     const auto summary =
         http_log::summarize_body(body, "application/json", http_log::BodyDirection::request);
 
     CHECK(summary.find("SECRET") == std::string::npos);
     CHECK(summary.find("KEY") == std::string::npos);
     CHECK(summary.find("PASS") == std::string::npos);
+    CHECK(summary.find("WORKER") == std::string::npos);
+    CHECK(summary.find("GENERIC") == std::string::npos);
     CHECK(summary.find("\"max_tokens\":32") != std::string::npos);
 }
 

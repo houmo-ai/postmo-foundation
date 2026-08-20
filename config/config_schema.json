@@ -68,6 +68,73 @@
         }
       }
     },
+    "admission": {
+      "description": "Bounded inference request admission queues.",
+      "keys": {
+        "llm_max_in_flight": {
+          "type": "integer",
+          "description": "Maximum admitted LLM requests including streams, clamped to 1-4096."
+        },
+        "qwen3_tts_max_in_flight": {
+          "type": "integer",
+          "description": "Maximum admitted Qwen3-TTS requests including streams, clamped to 1-64."
+        },
+        "control_plane_reserved_threads": {
+          "type": "integer",
+          "description": "HTTP worker threads reserved from LLM/TTS admission so control-plane callbacks and probes can still run."
+        },
+        "queue_wait_timeout_ms": {
+          "type": "integer",
+          "description": "Maximum time a Whisper, TTS, or Stable Diffusion request may wait in a service queue, clamped to 100-3600000 ms."
+        },
+        "whisper_max_queued": {
+          "type": "integer",
+          "description": "Maximum queued Whisper requests, clamped to 1-1024."
+        },
+        "tts_max_queued": {
+          "type": "integer",
+          "description": "Maximum queued CosyVoice/TTS requests, clamped to 1-1024."
+        },
+        "sd_max_queued": {
+          "type": "integer",
+          "description": "Maximum queued Stable Diffusion requests, clamped to 1-128."
+        }
+      }
+    },
+    "resource": {
+      "description": "Transactional hardware resource reservation settings.",
+      "keys": {
+        "pending_reservation_ttl_sec": {
+          "type": "integer",
+          "description": "Age after which an ownerless pending device reservation may be rolled back, clamped to 30-3600 seconds. Active loading owners and live workers are never expired blindly."
+        }
+      }
+    },
+    "worker_supervisor": {
+      "description": "Subprocess liveness and READY-state convergence.",
+      "keys": {
+        "poll_interval_ms": {
+          "type": "integer",
+          "description": "Child process liveness polling interval, clamped to 100-10000 ms."
+        },
+        "ready_timeout_sec": {
+          "type": "integer",
+          "description": "Maximum time a live child may remain LOADING before termination, clamped to 5-3600 seconds."
+        },
+        "graceful_shutdown_timeout_ms": {
+          "type": "integer",
+          "description": "Maximum time to wait for a dynamic worker to exit after accepting the internal shutdown request, clamped to 100-60000 ms."
+        },
+        "shutdown_response_grace_ms": {
+          "type": "integer",
+          "description": "Worker-side delay before stopping the HTTP server so the shutdown acknowledgement can be flushed, clamped to 0-2000 ms."
+        },
+        "port_probe_attempts": {
+          "type": "integer",
+          "description": "Maximum consecutive instance ports to probe before rejecting a dynamic worker launch, clamped to 1-4096."
+        }
+      }
+    },
     "replica": {
       "description": "Multi-process replica scheduling settings.",
       "keys": {

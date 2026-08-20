@@ -105,6 +105,7 @@ struct SDParams {
  * 生图请求消息体
  */
 struct ImagesRequest {
+    HLIEQueuedRequestControl control;
     int num;
     std::string prompt;
     int width = 512;
@@ -119,7 +120,7 @@ struct ImagesResult {
     std::shared_ptr<sd_image_t> image;
     bool success = false;
     std::string error_message;
-    int64_t predicted_ms;
+    int64_t predicted_ms = 0;
 };
 
 class SDModelService final : public IHLIEModelService {
@@ -155,7 +156,8 @@ public:
 
 private:
     std::future<ImagesResult> generate_image_async(const ImagesRequest& request) const;
-    ImagesResult generate_image_sync(const ImagesRequest& request) const;
+    ImagesResult generate_image_sync(const ImagesRequest& request,
+                                     const std::function<bool()>& should_stop = {}) const;
 
     std::shared_ptr<sd_image_t> generate_image(const ImagesRequest& request) const;
 

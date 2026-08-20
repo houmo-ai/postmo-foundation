@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <server/index.html.hpp>
@@ -16,7 +17,6 @@
 #include <server/server-common.h>
 #include <server/server-http.h>
 
-#include "hlie_app/hlie_workflow.h"
 #include "hlie_app/util/hlie_http_log_sanitizer.h"
 #include "hlie_base/hlie_common_define.h"
 #include "hlie_base/hlie_config_service.h"
@@ -75,6 +75,12 @@ namespace {
         int ret = -1;
         try {
             std::rethrow_exception(ep);
+        } catch (const InferenceQueueFullException& e) {
+            const std::string request_id = res.has_header("X-Request-ID") ? res.get_header_value("X-Request-ID") : "null";
+            const auto formatted_error = format_rate_limit_response(e.what());
+            LOG_WARN("[Request-{}] inference admission rejected: {}", request_id, formatted_error.dump());
+            res_error(res, formatted_error);
+            return;
         } catch (const WebServerException& e) {
             message = e.get_err_msg();
             ret = e.get_ret_code();
@@ -142,7 +148,7 @@ namespace {
                     if (!sink.write(chunk.data(), chunk.size())) {
                         return false;
                     }
-                    LOG_DEBUG("http: streamed chunk: {}", chunk.c_str());
+                    LOG_TRACE("http: streamed chunk bytes={}", chunk.size());
                 }
                 if (!has_next) {
                     sink.done();
@@ -363,6 +369,7 @@ namespace {
             "replica.count",
             "replica.max_instances_per_device",
             "replica.startup_delay_sec",
+            "resource.pending_reservation_ttl_sec",
             "server.port",
         };
 
@@ -731,9 +738,13 @@ namespace {
     }
 } // namespace
 
-HLIEWebService::HLIEWebService(const std::shared_ptr<HLIEWorkflow>& workflow) {
-    workflow_ = workflow;
-}
+HLIEWebService::HLIEWebService(
+    std::shared_ptr<IHLIEHttpRouteProvider> route_provider,
+    std::shared_ptr<IHLIEWebServiceStateProvider> state_provider,
+    std::shared_ptr<IHLIEAuthPolicy> auth_policy)
+    : route_provider_(std::move(route_provider)),
+      state_provider_(std::move(state_provider)),
+      auth_policy_(std::move(auth_policy)) {}
 
 void HLIEWebService::init(int n_threads_http) {
     initialize_config_schema(Singleton<HLIEConfigService>::instance()->get_config_path());
@@ -791,7 +802,10 @@ void HLIEWebService::init(int n_threads_http) {
 int HLIEWebService::run(const std::string& host_name, int port) {
     const auto& config_services = Singleton<HLIEConfigService>::instance();
     const auto& args = config_services->get_args();
-    if (const auto cfg_port = config_services->get_int("server", "port", -1); cfg_port < 0) {
+    // Keep the listener on the same env-first port used by Workflow and the
+    // dynamic Worker preflight. Otherwise HLIE__SERVER__PORT changes the
+    // control-plane bookkeeping while the HTTP socket still binds sys.cfg.
+    if (const auto cfg_port = config_services->get_int("server", "port", -1, true); cfg_port < 0) {
         if (args.find("--port") != args.end()) {
             try {
                 port = std::stoi(args.at("--port"));
@@ -818,8 +832,8 @@ int HLIEWebService::run(const std::string& host_name, int port) {
         return -1;
     }
 
-    HLIE_CHECK_NULL_RETURN(workflow_, -1);
-    workflow_->set_server_port(port);
+    HLIE_CHECK_NULL_RETURN(state_provider_, -1);
+    state_provider_->set_server_port(port);
     port_ = port;
 
     worker_thread_ = std::make_unique<std::thread>([this] {
@@ -909,6 +923,13 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
         error_type error;
         try {
             return func(req);
+        } catch (const InferenceQueueFullException& e) {
+            auto res = std::make_unique<server_http_res>();
+            const auto error_data = format_rate_limit_response(e.what());
+            res->status = 429;
+            res->data = safe_json_to_str({{"error", error_data}});
+            LOG_WARN("Inference admission rejected: {}", res->data);
+            return res;
         } catch (const std::invalid_argument& e) {
             // treat invalid_argument as invalid request (400)
             error = ERROR_TYPE_INVALID_REQUEST;
@@ -938,19 +959,13 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 }
 
 void HLIEWebService::register_routers() const {
-    HLIE_CHECK_NULL(workflow_);
+    HLIE_CHECK_NULL(route_provider_);
 
-    const auto& routes = workflow_->get_route_configs();
+    const auto routes = route_provider_->get_route_configs();
 
     for (const auto& [paths, method, handler, require_model, model_type, ori_handler] : routes) {
-        // 检查是否需要特定模型服务
-        if (require_model) {
-            if (const auto model_service = workflow_->get_model_service(model_type); !model_service) {
-                LOG_WARN("route {} and related - required model service not available", paths[0]);
-            } else if (model_service->get_state() != SERVER_STATE_READY) {
-                LOG_WARN("route {} and related - model service not ready", paths[0]);
-            }
-        }
+        (void)require_model;
+        (void)model_type;
 
         // 注册路由
         if (method == GET) {
@@ -1024,6 +1039,23 @@ httplib::Server::HandlerResponse HLIEWebService::pre_routing_handler(const httpl
 
 bool HLIEWebService::middleware_server_state(const httplib::Request& req, httplib::Response& res) const {
     LOG_TRACE("middleware_server_state called for path: {}", req.path);
+    static const std::unordered_set<std::string> draining_control_endpoints = {
+        "/live", "/livez", "/health", "/v1/health", "/ready", "/readyz",
+        "/metrics", "/hlie/v1/metrics", "/models/status",
+        "/internal/worker/shutdown",
+    };
+    if (state_provider_ && state_provider_->is_draining() &&
+        draining_control_endpoints.find(req.path) == draining_control_endpoints.end()) {
+        res.status = 503;
+        res.set_content(
+            safe_json_to_str(json{{"error", {
+                {"message", "Service is draining"},
+                {"type", "unavailable_error"},
+                {"code", 503},
+            }}}),
+            "application/json; charset=utf-8");
+        return false;
+    }
     bool ready = is_ready.load();
     if (!ready) {
 #ifdef LLAMA_BUILD_WEBUI
@@ -1054,12 +1086,19 @@ bool HLIEWebService::middleware_server_state(const httplib::Request& req, httpli
 }
 
 bool HLIEWebService::middleware_validate_api_key(const httplib::Request& req, httplib::Response& res) const {
-    HLIE_CHECK_NULL_RETURN(workflow_, 0);
+    HLIE_CHECK_NULL_RETURN(state_provider_, 0);
+    HLIE_CHECK_NULL_RETURN(auth_policy_, 0);
     static const std::unordered_set<std::string> public_endpoints = {
+        "/live",
+        "/livez",
+        "/ready",
+        "/readyz",
         "/health",
         "/v1/health",
+        "/models/status",
         "/models",
         "/v1/models",
+        "/internal/worker/shutdown",
         "/",
         "/index.html",
         "/bundle.js",
@@ -1071,7 +1110,7 @@ bool HLIEWebService::middleware_validate_api_key(const httplib::Request& req, ht
         return true;
     }
 
-    const int state = workflow_->get_model_service_state();
+    const int state = state_provider_->get_model_service_state();
     const auto request_id = HlieUtil::uuid();
     res.set_header("X-Request-ID", request_id);
     LOG_INFO("Request[{}] come in, current state[0: LOADING_MODEL 1:READY]: {}", request_id, state);
@@ -1085,7 +1124,7 @@ bool HLIEWebService::middleware_validate_api_key(const httplib::Request& req, ht
     }
 
     // If API key is not set, skip validation
-    if (workflow_->get_api_keys().empty()) {
+    if (!auth_policy_->authentication_enabled()) {
         return true;
     }
 
@@ -1103,7 +1142,7 @@ bool HLIEWebService::middleware_validate_api_key(const httplib::Request& req, ht
     }
 
     // validate the API key
-    if (std::find(workflow_->get_api_keys().begin(), workflow_->get_api_keys().end(), req_api_key) != workflow_->get_api_keys().end()) {
+    if (auth_policy_->authorize_api_key(req_api_key)) {
         return true; // API key is valid
     }
 

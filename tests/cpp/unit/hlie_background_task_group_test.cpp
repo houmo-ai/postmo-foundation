@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <stdexcept>
 #include <thread>
 
 #include "hlie_app/util/hlie_background_task_group.h"
@@ -53,4 +54,11 @@ TEST_CASE("Background task group reaps completed callbacks on the next launch", 
 
     release_second.store(true);
     tasks.stop_and_join();
+}
+
+TEST_CASE("Background task group contains callback exceptions", "[background-task-group]") {
+    BackgroundTaskGroup tasks;
+    REQUIRE(tasks.launch([] { throw std::runtime_error("expected test exception"); }));
+    tasks.stop_and_join();
+    CHECK(tasks.tracked_task_count() == 0);
 }

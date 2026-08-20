@@ -7,6 +7,7 @@
 #include "hlie_app/hlie_config_bundle_validator.h"
 #include "hlie_app/hlie_process_manager.h"
 #include "hlie_app/hlie_replica_config.h"
+#include "hlie_app/runtime/hlie_worker_port_allocator.h"
 #include "hlie_app/hlie_web_service.h"
 #include "hlie_app/hlie_workflow.h"
 #include "hlie_base/hlie_config_service.h"
@@ -16,10 +17,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <thread>
 #include <vector>
 
 #ifndef _WIN32
@@ -271,6 +274,90 @@ namespace {
         return "0";
     }
 
+#ifndef _WIN32
+    std::string current_executable_path() {
+        std::error_code error;
+        const auto path = std::filesystem::read_symlink("/proc/self/exe", error);
+        if (!error && path.is_absolute()) {
+            return path.string();
+        }
+        return "./bin/HLIECpp";
+    }
+
+    std::string resolve_linux_log_location(
+        const HLIEConfigService* config_services,
+        const std::shared_ptr<spdlog::logger>& bootstrap_logger) {
+        const std::string requested = config_services->get_string(
+            "log", "location", "/var/log/HLIECpp", true);
+        const auto is_writable_directory = [](const std::filesystem::path& path) {
+            std::error_code error;
+            std::filesystem::create_directories(path, error);
+            return !error && access(path.string().c_str(), W_OK) == 0;
+        };
+        if (!requested.empty() && is_writable_directory(requested)) {
+            return requested;
+        }
+
+        std::filesystem::path fallback;
+        if (const char* state_home = std::getenv("XDG_STATE_HOME"); state_home && *state_home) {
+            fallback = std::filesystem::path(state_home) / "HLIECpp" / "logs";
+        } else if (const char* home = std::getenv("HOME"); home && *home) {
+            fallback = std::filesystem::path(home) / ".local" / "state" / "HLIECpp" / "logs";
+        } else {
+            std::error_code error;
+            fallback = std::filesystem::temp_directory_path(error) / "HLIECpp" / "logs";
+        }
+        if (!is_writable_directory(fallback)) {
+            bootstrap_logger->error(
+                "Neither configured nor per-user log directory is writable: configured={}, fallback={}",
+                requested, fallback.string());
+            return requested;
+        }
+        bootstrap_logger->warn(
+            "Configured log directory is not writable; using per-user fallback: configured={}, fallback={}, uid={}",
+            requested, fallback.string(), static_cast<unsigned long long>(geteuid()));
+        HlieUtil::set_env("HLIE__LOG__LOCATION", fallback.string());
+        return fallback.string();
+    }
+#endif
+
+    bool preflight_dynamic_worker_port(const HLIEConfigService* config_services,
+                                       const std::unordered_map<std::string, std::string>& args) {
+        if (args.find("--launch_generation") == args.end()) {
+            return true;
+        }
+        const auto instance_it = args.find("--instance_id");
+        if (instance_it == args.end()) {
+            LOG_ERROR("Dynamic worker launch is missing --instance_id");
+            return false;
+        }
+
+        const int instance_id = HlieUtil::parse_natural_num(instance_it->second, false);
+        if (instance_id <= 0) {
+            LOG_ERROR("Dynamic worker instance_id is invalid: {}", instance_it->second);
+            return false;
+        }
+        int master_port = config_services->get_int("server", "port", -1, true);
+        if (master_port < 0) {
+            const auto port_it = args.find("--port");
+            try {
+                master_port = port_it == args.end() ? 7901 : std::stoi(port_it->second);
+            } catch (const std::exception&) {
+                master_port = 7901;
+            }
+        }
+        const auto worker_port = static_cast<long long>(master_port) + instance_id;
+        if (worker_port <= 0 || worker_port > 65535 ||
+            !HLIEWorkerPortAllocator::is_tcp_port_available(static_cast<int>(worker_port))) {
+            LOG_ERROR("Dynamic worker port preflight failed: master_port={}, instance_id={}, port={}",
+                      master_port, instance_id, worker_port);
+            return false;
+        }
+        LOG_INFO("Dynamic worker port preflight passed: instance_id={}, port={}",
+                 instance_id, worker_port);
+        return true;
+    }
+
     void set_process_devices_override(const std::string& devices) {
         HlieUtil::set_env("HLIE__SERVER__DEVICES", devices);
     }
@@ -375,7 +462,7 @@ namespace {
             }
         }
 
-        const auto tcim_log_level = config_services->get_int("log", "tcim_level", 2);
+        const auto tcim_log_level = config_services->get_int("log", "tcim_level", 2, true);
         HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(tcim_log_level));
         HlieUtil::set_env("TCIM_BACKEND", "Xh2HalBackend");
         HLIERkPerformance::apply_for_process();
@@ -387,44 +474,123 @@ namespace {
 
 int HLIEAppController::run() {
     HLIE_CHECK_NULL_RETURN(workflow_, -1);
+    if (stop_requested_.load(std::memory_order_acquire)) {
+        LOG_DEBUG("Application run skipped because shutdown was requested");
+        return 0;
+    }
     if (zero_load_) {
         LOG_WARN("Service starting in Zero-Load Model.");
     }
     // Zero-load still needs workflow-level background services such as model
     // discovery and residency management. Individual model services are
     // guarded inside HLIEWorkflow::run().
-    workflow_->run();
+    if (!workflow_->run()) {
+        const bool shutdown_requested =
+            stop_requested_.load(std::memory_order_acquire);
+        if (shutdown_requested) {
+            LOG_DEBUG("Workflow startup was superseded by shutdown");
+        } else {
+            LOG_ERROR("Workflow failed to enter running state");
+        }
+        stop();
+        return shutdown_requested ? 0 : -1;
+    }
 
-    HLIE_CHECK_NULL_RETURN(web_service_, -1);
-    web_service_->register_routers();
-    if (web_service_->run() < 0) {
-        LOG_ERROR("web service failed to run");
+    if (!web_service_) {
+        LOG_ERROR("Web service is unavailable");
+        stop();
         return -1;
     }
-    balancer_client_.start(HLIEBalancerConfig::load(), web_service_->get_port(),
-                           instance_id_from_args(Singleton<HLIEConfigService>::instance()->get_args()));
 
-    is_running_.store(true);
+    // Lifecycle holds the Running-to-Serving gate while these externally
+    // visible resources are published. A concurrent stop either wins before
+    // this callback or waits until all three publications are coherent.
+    const bool serving_published = workflow_->publish_serving([this] {
+        web_service_->register_routers();
+        if (web_service_->run() < 0) {
+            LOG_ERROR("Web service failed to run");
+            return false;
+        }
+        balancer_client_.start(
+            HLIEBalancerConfig::load(), web_service_->get_port(),
+            instance_id_from_args(
+                Singleton<HLIEConfigService>::instance()->get_args()));
+        is_running_.store(true, std::memory_order_release);
+        if (stop_requested_.load(std::memory_order_acquire)) {
+            is_running_.store(false, std::memory_order_release);
+            return false;
+        }
+        return true;
+    });
+    if (!serving_published) {
+        const bool shutdown_requested =
+            stop_requested_.load(std::memory_order_acquire);
+        if (shutdown_requested) {
+            LOG_DEBUG("Serving publication was superseded by shutdown");
+        } else {
+            LOG_ERROR("Application failed to publish serving state");
+        }
+        stop();
+        return shutdown_requested ? 0 : -1;
+    }
 
     std::unique_lock lock(mutex_);
-    cv_.wait(lock, [this] { return !is_running_.load(); });
+    cv_.wait(lock, [this] {
+        return !is_running_.load(std::memory_order_acquire);
+    });
+    lock.unlock();
+
+    if (worker_shutdown_requested_.load() && !stop_started_.load()) {
+        const int response_grace_ms = std::clamp(
+            Singleton<HLIEConfigService>::instance()->get_int(
+                "worker_supervisor", "shutdown_response_grace_ms", 200, true),
+            0, 2000);
+        std::this_thread::sleep_for(std::chrono::milliseconds(response_grace_ms));
+    }
+    stop();
     return 0;
 }
 
 void HLIEAppController::stop() {
-    balancer_client_.stop();
+    stop_requested_.store(true, std::memory_order_release);
+    if (stop_started_.exchange(true)) {
+        std::unique_lock lock(stop_completion_mutex_);
+        stop_completion_cv_.wait(lock, [this] {
+            return stop_completed_.load(std::memory_order_acquire);
+        });
+        return;
+    }
 
     if (workflow_) {
-        workflow_->stop();
+        workflow_->begin_draining();
     }
+
+    // Draining waits for any in-flight serving publication. Publish the local
+    // stopped state only after that gate closes so run() cannot overwrite it.
+    is_running_.store(false, std::memory_order_release);
+    cv_.notify_all();
+
+    balancer_client_.stop();
 
     if (web_service_) {
         web_service_->stop();
     }
 
+    if (workflow_) {
+        workflow_->stop();
+    }
+
     Singleton<HLIEProcessManager>::instance()->terminate_all();
-    is_running_.store(false);
-    cv_.notify_one();
+
+    stop_completed_.store(true, std::memory_order_release);
+    stop_completion_cv_.notify_all();
+}
+
+void HLIEAppController::request_stop_after_response() {
+    worker_shutdown_requested_.store(true);
+    stop_requested_.store(true, std::memory_order_release);
+    is_running_.store(false, std::memory_order_release);
+    cv_.notify_all();
 }
 
 
@@ -494,7 +660,7 @@ int HLIEWinAppController::initialize() {
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
 
     const auto datetime = HlieUtil::get_datetime_str();
-    HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(config_services->get_int("log", "tcim_level", 2)));
+    HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(config_services->get_int("log", "tcim_level", 2, true)));
     const auto tcim_fallback_directory = managed_log_config.retention_days == 0
                                              ? std::filesystem::path(log_location)
                                              : HLIELogger::current_date_directory(log_location);
@@ -507,7 +673,7 @@ int HLIEWinAppController::initialize() {
     }
 
     const std::string log_file_name = "hlie-llm-" + instance_id + ".log";
-    const auto log_level = config_services->get_string("log", "level", "debug");
+    const auto log_level = config_services->get_string("log", "level", "debug", true);
     const auto logger = HLIELogger::init_managed_default_logger(log_location, log_file_name, "HLIE", log_level,
                                                                 managed_log_config);
     HLIE_CHECK_NULL_RETURN(logger, -1);
@@ -540,8 +706,12 @@ int HLIEWinAppController::initialize() {
         LOG_ERROR("initialize_ex failed: instance_id={}, program_path={}", instance_id, program_path);
         return -3;
     }
+    if (!preflight_dynamic_worker_port(config_services, args)) {
+        return -4;
+    }
 
     workflow_ = std::make_shared<HLIEWorkflow>();
+    workflow_->set_process_shutdown_callback([this] { request_stop_after_response(); });
     if (auto res = workflow_->initialize(cur_model, program_path); res < 0) {
         LOG_ERROR("workflow initialize failed: instance_id={}, result={}", instance_id, res);
         return -1;
@@ -550,9 +720,12 @@ int HLIEWinAppController::initialize() {
         LOG_INFO("workflow initialize succeeded: instance_id={}, result={}, zero_load={}", instance_id, res, zero_load_);
     }
 
-    web_service_ = std::make_shared<HLIEWebService>(workflow_);
+    web_service_ = std::make_shared<HLIEWebService>(
+        std::static_pointer_cast<IHLIEHttpRouteProvider>(workflow_),
+        std::static_pointer_cast<IHLIEWebServiceStateProvider>(workflow_),
+        std::static_pointer_cast<IHLIEAuthPolicy>(workflow_));
 
-    const auto n_threads_http = workflow_->cacl_thread_num();
+    const auto n_threads_http = workflow_->calculate_http_thread_count();
     web_service_->init(n_threads_http);
 
     return 0;
@@ -601,14 +774,14 @@ int HLIELinuxAppController::initialize() {
         return -5;
     }
 
-    const std::string log_location = config_services->get_string("log", "location", "/var/log/HLIECpp");
+    const std::string log_location = resolve_linux_log_location(config_services, bootstrap_logger);
     const auto managed_log_config = load_managed_log_config(config_services);
     const auto boot_logger = HLIELogger::create_managed_logger(log_location, "service_boot-" + instance_id + ".log",
                                                                HLIE_BOOT, "debug", managed_log_config);
     HLIE_CHECK_NULL_RETURN(boot_logger, -6);
 
     const auto datetime = HlieUtil::get_datetime_str();
-    HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(config_services->get_int("log", "tcim_level", 2)));
+    HlieUtil::set_env("TCIM_LOG_LEVEL", std::to_string(config_services->get_int("log", "tcim_level", 2, true)));
     const auto tcim_fallback_directory = managed_log_config.retention_days == 0
                                              ? std::filesystem::path(log_location)
                                              : HLIELogger::current_date_directory(log_location);
@@ -621,7 +794,7 @@ int HLIELinuxAppController::initialize() {
     }
 
     const std::string log_file_name = "hlie-llm-" + instance_id + ".log";
-    const auto log_level = config_services->get_string("log", "level", "debug");
+    const auto log_level = config_services->get_string("log", "level", "debug", true);
     const auto logger = HLIELogger::init_managed_default_logger(log_location, log_file_name, "HLIE", log_level,
                                                                 managed_log_config);
     HLIE_CHECK_NULL_RETURN(logger, -1);
@@ -635,9 +808,13 @@ int HLIELinuxAppController::initialize() {
     HLIE_CHECK_NULL_RETURN(access_logger, -6);
 
     spdlog::flush_every(std::chrono::seconds(10));
-    const auto program_path = "./bin/HLIECpp";
+    const auto program_path = current_executable_path();
+    boot_logger->info("Linux executable path: {}", program_path);
     if (initialize_ex( program_path) < 0) {
         return -3;
+    }
+    if (!preflight_dynamic_worker_port(config_services, args)) {
+        return -4;
     }
 
     const std::string cur_model = config_services->get_string("model", "cur_model", "", instance_id != "0");
@@ -647,15 +824,19 @@ int HLIELinuxAppController::initialize() {
     }
 
     workflow_ = std::make_shared<HLIEWorkflow>();
+    workflow_->set_process_shutdown_callback([this] { request_stop_after_response(); });
     if (const auto res = workflow_->initialize(cur_model, program_path); res < 0) {
         return -1;
     } else {
         zero_load_ = 8 == res;
     }
 
-    web_service_ = std::make_shared<HLIEWebService>(workflow_);
+    web_service_ = std::make_shared<HLIEWebService>(
+        std::static_pointer_cast<IHLIEHttpRouteProvider>(workflow_),
+        std::static_pointer_cast<IHLIEWebServiceStateProvider>(workflow_),
+        std::static_pointer_cast<IHLIEAuthPolicy>(workflow_));
 
-    const auto n_threads_http = workflow_->cacl_thread_num();
+    const auto n_threads_http = workflow_->calculate_http_thread_count();
     web_service_->init(n_threads_http);
 
     return 0;

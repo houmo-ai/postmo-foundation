@@ -27,13 +27,21 @@ public:
     virtual void stop();
 
 protected:
+    void request_stop_after_response();
+
     std::shared_ptr<HLIEWorkflow> workflow_;
     std::shared_ptr<HLIEWebService> web_service_;
     HLIEBalancerClient balancer_client_;
     std::atomic<bool> is_running_{false};
     std::mutex mutex_;
     std::condition_variable cv_;
-    bool zero_load_;
+    std::atomic<bool> stop_started_{false};
+    std::atomic<bool> stop_completed_{false};
+    std::mutex stop_completion_mutex_;
+    std::condition_variable stop_completion_cv_;
+    std::atomic<bool> stop_requested_{false};
+    std::atomic<bool> worker_shutdown_requested_{false};
+    bool zero_load_{false};
 };
 
 

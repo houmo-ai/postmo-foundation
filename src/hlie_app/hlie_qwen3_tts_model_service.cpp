@@ -174,6 +174,8 @@ int Qwen3TTSModelService::init(const std::string& model_dir,
 
     const int required_devices = model_info.get_device_num();
     const int required_mem_mb = model_info.get_estimated_mem();
+    reservation_id_ = model_info.get_device_reservation_id();
+    reservation_owned_externally_ = reservation_id_ != 0;
     std::string device_spec = model_info.get_devices();
     if (!device_spec.empty()) {
         if (!HlieUtil::is_valid_devices(device_spec) ||
@@ -187,15 +189,29 @@ int Qwen3TTSModelService::init(const std::string& model_dir,
             devices_.clear();
             return -1;
         }
-        if (device_service_->acquire_mem_on_devices(
-                devices_, required_mem_mb, false, false, model_info.get_model_name()) < 0) {
-            devices_.clear();
+        if (reservation_id_ != 0) {
+            if (!device_service_->reservation_matches(reservation_id_, devices_, required_mem_mb, model_key_)) {
+                LOG_ERROR("Qwen3-TTS reservation {} does not match model/devices", reservation_id_);
+                devices_.clear();
+                return -1;
+            }
+        } else {
+            const auto reservation = device_service_->reserve_mem_on_devices(
+                devices_, required_mem_mb, false, model_key_);
+            if (!reservation) {
+                devices_.clear();
+                return -1;
+            }
+            reservation_id_ = reservation->id;
+        }
+    } else {
+        const auto reservation = device_service_->reserve_mem_on_device_count(
+            required_devices, required_mem_mb, model_key_);
+        if (!reservation) {
             return -1;
         }
-    } else if (device_service_->acquire_mem_on_device_count(
-                   required_devices, required_mem_mb, devices_, false,
-                   model_info.get_model_name()) < 0) {
-        return -1;
+        reservation_id_ = reservation->id;
+        devices_ = reservation->devices;
     }
     acquired_mem_mb_ = required_mem_mb;
 
@@ -204,7 +220,25 @@ int Qwen3TTSModelService::init(const std::string& model_dir,
     if (model_->load_model(model_path_) < 0 || !model_->ready()) {
         LOG_ERROR("Qwen3TTSModelService failed to load {}", model_path_);
         model_.reset();
-        device_service_->release_mem_on_devices(devices_, acquired_mem_mb_);
+        if (!reservation_owned_externally_) {
+            (void)device_service_->release_reservation(reservation_id_);
+        }
+        reservation_id_ = 0;
+        reservation_owned_externally_ = false;
+        acquired_mem_mb_ = 0;
+        devices_.clear();
+        return -1;
+    }
+    if (reservation_id_ == 0 ||
+        (!reservation_owned_externally_ &&
+         !device_service_->commit_reservation(reservation_id_))) {
+        LOG_ERROR("Qwen3TTSModelService failed to commit reservation {}", reservation_id_);
+        model_.reset();
+        if (reservation_id_ != 0 && !reservation_owned_externally_) {
+            (void)device_service_->release_reservation(reservation_id_);
+        }
+        reservation_id_ = 0;
+        reservation_owned_externally_ = false;
         acquired_mem_mb_ = 0;
         devices_.clear();
         return -1;
@@ -236,11 +270,14 @@ void Qwen3TTSModelService::stop() {
     stopped_ = true;
     state_.store(SERVER_STATE_LOADING_MODEL);
     model_.reset();
-    if (device_service_ && acquired_mem_mb_ > 0 && !devices_.empty()) {
+    if (device_service_ && reservation_id_ != 0 &&
+        !reservation_owned_externally_) {
         LOG_INFO("Qwen3TTSModelService release devices mem: devices={}, mem={}MB",
                  HlieUtil::join_devices(devices_), acquired_mem_mb_);
-        device_service_->release_mem_on_devices(devices_, acquired_mem_mb_);
+        (void)device_service_->release_reservation(reservation_id_);
     }
+    reservation_id_ = 0;
+    reservation_owned_externally_ = false;
     devices_.clear();
     acquired_mem_mb_ = 0;
 }

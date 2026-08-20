@@ -12,7 +12,8 @@
 #include "hlie_base/hlie_gguf_util.h"
 #include "hlie_base/hlie_logger.h"
 #include "hlie_base/hlie_util.h"
-#include "hlie_app/hlie_model_family_registry.h"
+#include "hlie_app/hlie_model_memory_estimator.h"
+#include "hlie_core/backend/hlie_model_family_registry.h"
 #include "json.hpp"
 #include "log.h"
 
@@ -474,29 +475,12 @@ int HLIEModelInfo::estimate_mem(const std::string& model_name) {
         return 0;
     }
 
-    if (const int empirical_mem = estimate_empirical_mem(model_name); empirical_mem > 0) {
-        return empirical_mem;
-    }
-
-    const std::string name = to_lower(model_name);
-
-    if (name.find("qwen2.5") != std::string::npos) {
-        return 8192;
-    }
-
-    if (name.find("qwen3") != std::string::npos) {
-        return 10240;
-    }
-
-    if (name.find("gte") != std::string::npos || name.find("bge") != std::string::npos) {
-        return 1536;
-    }
-
-    if (name.find("whisper") != std::string::npos) {
-        return 2048;
-    }
-
-    return 4096;
+    HLIEModelSpec spec;
+    spec.identity.model_name = model_name;
+    spec.backend_alias = "llm";
+    return HLIEModelMemoryEstimator::estimate(
+        spec,
+        HLIEModelMemoryObservation{estimate_empirical_mem(model_name), 0, 0, 0}).total_mb;
 }
 
 int HLIEModelInfo::estimate_empirical_mem(const std::string& model_name) {
@@ -590,12 +574,16 @@ int HLIEModelInfo::estimate_mem_from_gguf(const std::string& model_path, const i
 
         uint32_t block_count = 0;
         uint32_t ctx_train = 0;
+        uint32_t embedding_length = 0;
+        uint32_t head_count = 0;
         uint32_t head_count_kv = 0;
         uint32_t key_length = 0;
         uint32_t value_length = 0;
         if (!prefix.empty()) {
             get_u32_key(ctx, prefix + "block_count", block_count);
             get_u32_key(ctx, prefix + "context_length", ctx_train);
+            get_u32_key(ctx, prefix + "embedding_length", embedding_length);
+            get_u32_key(ctx, prefix + "attention.head_count", head_count);
             get_u32_key(ctx, prefix + "attention.head_count_kv", head_count_kv);
             get_u32_key(ctx, prefix + "attention.key_length", key_length);
             get_u32_key(ctx, prefix + "attention.value_length", value_length);
@@ -603,16 +591,30 @@ int HLIEModelInfo::estimate_mem_from_gguf(const std::string& model_path, const i
 
         const uint32_t runtime_ctx = context_size > 0 ? static_cast<uint32_t>(context_size) : ctx_train;
         const uint32_t runtime_batch = batch_num > 0 ? static_cast<uint32_t>(batch_num) : 1;
+        if (key_length == 0 && head_count > 0) {
+            key_length = embedding_length / head_count;
+        }
+        if (value_length == 0) {
+            value_length = key_length;
+        }
         const double kv_cache_bytes = static_cast<double>(runtime_batch) * runtime_ctx * block_count * head_count_kv *
             (key_length + value_length) * 2.0;
 
         constexpr double kLoadUpperFactor = 1.9;
-        const double estimate_bytes = base_weight_bytes * kLoadUpperFactor;
+        constexpr double kKvSafetyFactor = 1.15;
+        constexpr double kMiB = 1024.0 * 1024.0;
+        const double runtime_workspace_bytes = std::max(256.0 * kMiB, base_weight_bytes * 0.05) +
+            static_cast<double>(runtime_batch) * 64.0 * kMiB;
+        // Keep the historical 1.9x load upper bound and add runtime allocations
+        // that scale with context and parallel slots. The old calculation
+        // computed KV bytes but accidentally discarded them.
+        const double estimate_bytes = base_weight_bytes * kLoadUpperFactor +
+            kv_cache_bytes * kKvSafetyFactor + runtime_workspace_bytes;
         const int estimate_mb = bytes_to_mb_ceil(estimate_bytes);
 
-        LOG_INFO("GGUF memory estimate for {}: size_label={}, file_type={}, weight_bits={}, param_weight={}MB, tensor={}MB, kv_cache={}MB, load_upper={}MB",
+        LOG_INFO("GGUF memory estimate for {}: size_label={}, file_type={}, weight_bits={}, param_weight={}MB, tensor={}MB, kv_cache={}MB, workspace={}MB, total={}MB",
                  model_path, size_label, file_type, weight_bits, bytes_to_mb_ceil(param_weight_bytes), bytes_to_mb_ceil(tensor_bytes),
-                 bytes_to_mb_ceil(kv_cache_bytes), estimate_mb);
+                 bytes_to_mb_ceil(kv_cache_bytes), bytes_to_mb_ceil(runtime_workspace_bytes), estimate_mb);
 
         gguf_free(ctx);
         return estimate_mb;
@@ -624,10 +626,29 @@ int HLIEModelInfo::estimate_mem_from_gguf(const std::string& model_path, const i
 }
 
 int HLIEModelInfo::get_estimated_mem() const {
-    if (const int empirical_mem = estimate_empirical_mem(model_name_); empirical_mem > 0) {
-        return empirical_mem;
+    const int empirical_mem = estimate_empirical_mem(model_name_);
+    int companion_mb = 0;
+
+    if (!mm_proj_path_.empty()) {
+        std::error_code error;
+        const auto projector_bytes = std::filesystem::file_size(mm_proj_path_, error);
+        if (!error && projector_bytes > 0) {
+            constexpr double kProjectorLoadFactor = 1.35;
+            constexpr double kProjectorWorkspaceMb = 128.0;
+            companion_mb = static_cast<int>(std::ceil(
+                static_cast<double>(projector_bytes) * kProjectorLoadFactor / (1024.0 * 1024.0) +
+                kProjectorWorkspaceMb));
+        }
     }
-    return estimated_mem_mb_ > 0 ? estimated_mem_mb_ : estimate_mem(model_name_);
+
+    return HLIEModelMemoryEstimator::estimate(
+        to_model_spec(),
+        HLIEModelMemoryObservation{
+            empirical_mem,
+            0,
+            estimated_mem_mb_,
+            companion_mb,
+        }).total_mb;
 }
 
 void HLIEModelInfo::build_llm(const std::string& model_path, const std::string& model_type, const int context_size, const int cores,

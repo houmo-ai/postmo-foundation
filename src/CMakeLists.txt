@@ -202,4 +202,5 @@ endif ()
 target_compile_features(${TARGET}-demo-lenovo-14B PRIVATE cxx_std_17)
 
 add_subdirectory(hlie_base)
+add_subdirectory(hlie_core)
 add_subdirectory(hlie_app)

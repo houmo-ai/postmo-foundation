@@ -8,246 +8,336 @@
 #include "hlie_app/hlie_qwen3_tts_model_service.h"
 #include "hlie_app/hlie_sd_model_service.h"
 #include "hlie_app/hlie_whisper_model_service.h"
+#include "hlie_base/hlie_logger.h"
 
 HLIE_NAMESPACE_BEGIN
 
 namespace {
     template <typename ServiceT>
-    void stop_and_reset(std::shared_ptr<ServiceT>& service) {
-        if (service) {
-            service->stop();
+    bool stop_service_noexcept(const std::shared_ptr<ServiceT>& service) noexcept {
+        if (!service) {
+            return true;
         }
-        service.reset();
+
+        try {
+            service->stop();
+            return true;
+        } catch (const std::exception& error) {
+            LOG_ERROR("Model service stop threw: {}", error.what());
+        } catch (...) {
+            LOG_ERROR("Model service stop threw an unknown exception");
+        }
+        return false;
     }
 
     template <typename ServiceT, typename CreateFn>
-    bool load_service(std::shared_ptr<ServiceT>& service,
+    bool load_service(HLIEServiceSlot<ServiceT>& slot,
                       CreateFn create_service,
                       const std::string& model_dir,
                       const HLIEModelInfo& model_info,
-                      const std::shared_ptr<HLIEDeviceService>& device_service) {
-        // Loading must not replace a live service silently. Call detach/stop/reset first.
-        if (service) {
+                      const std::shared_ptr<HLIEDeviceService>& device_service,
+                      const bool start_after_init) {
+        const auto ticket = slot.begin_load();
+        if (!ticket) {
             return false;
         }
 
-        service = create_service();
-        if (!service || service->init(model_dir, model_info, device_service) < 0) {
-            stop_and_reset(service);
-            return false;
-        }
-        return true;
-    }
+        std::shared_ptr<ServiceT> candidate;
+        try {
+            candidate = create_service();
+            if (!candidate || candidate->init(model_dir, model_info, device_service) < 0) {
+                (void)slot.fail_load(*ticket);
+                stop_service_noexcept(candidate);
+                return false;
+            }
 
-    template <typename ServiceT, typename LoadFn>
-    bool start_service(std::shared_ptr<ServiceT>& service,
-                       LoadFn load,
-                       const std::string& model_dir,
-                       const HLIEModelInfo& model_info,
-                       const std::shared_ptr<HLIEDeviceService>& device_service) {
-        if (!load(model_dir, model_info, device_service)) {
-            return false;
+            if (start_after_init) {
+                candidate->run();
+            }
+
+            if (!slot.publish(*ticket, candidate)) {
+                stop_service_noexcept(candidate);
+                return false;
+            }
+            return true;
+        } catch (...) {
+            (void)slot.fail_load(*ticket);
+            stop_service_noexcept(candidate);
+            throw;
         }
-        service->run();
-        return true;
     }
 } // namespace
 
 std::shared_ptr<IHLIEModelService> HLIEModelServiceManager::get_by_type(const std::string& type) const {
     if (type == HLIEModelType::LLM) {
-        return llm_model_service_;
+        return llm_model_service_.snapshot();
     }
     if (type == HLIEModelType::SD) {
-        return sd_model_service_;
+        return sd_model_service_.snapshot();
     }
     if (type == HLIEModelType::WHISPER) {
-        return whisper_model_service_;
+        return whisper_model_service_.snapshot();
     }
     if (type == HLIEModelType::COSYVOICE || type == HLIEModelType::TTS) {
-        return cosy_voice_model_service_;
+        return cosy_voice_model_service_.snapshot();
     }
     if (type == HLIEModelType::QWEN3_TTS) {
-        return qwen3_tts_model_service_;
+        return qwen3_tts_model_service_.snapshot();
     }
     if (type == HLIEModelType::DOCUMENT) {
-        return document_pipeline_service_;
+        return document_pipeline_service_.snapshot();
     }
     return nullptr;
 }
 
+std::optional<std::string> HLIEModelServiceManager::model_key_by_type(
+    const std::string& type) const {
+    if (type == HLIEModelType::LLM) {
+        const auto service = llm();
+        return service ? std::optional<std::string>{service->get_model_key()}
+                       : std::nullopt;
+    }
+    if (type == HLIEModelType::SD) {
+        return sd() ? std::optional<std::string>{HLIEModelType::SD3}
+                    : std::nullopt;
+    }
+    if (type == HLIEModelType::WHISPER) {
+        const auto service = whisper();
+        return service ? std::optional<std::string>{service->get_model_key()}
+                       : std::nullopt;
+    }
+    if (type == HLIEModelType::COSYVOICE || type == HLIEModelType::TTS) {
+        const auto service = cosyvoice();
+        return service ? std::optional<std::string>{service->get_model_key()}
+                       : std::nullopt;
+    }
+    if (type == HLIEModelType::QWEN3_TTS) {
+        const auto service = qwen3_tts();
+        return service ? std::optional<std::string>{service->get_model_key()}
+                       : std::nullopt;
+    }
+    return std::nullopt;
+}
+
+bool HLIEModelServiceManager::load_by_model_info(
+    const std::string& model_dir,
+    const HLIEModelInfo& model_info,
+    const std::shared_ptr<HLIEDeviceService>& device_service) {
+    switch (HLIEModelServiceFactory::service_kind(model_info)) {
+    case ModelServiceKind::Whisper:
+        return load_whisper(model_dir, model_info, device_service);
+    case ModelServiceKind::CosyVoice:
+        return load_cosyvoice(model_dir, model_info, device_service);
+    case ModelServiceKind::Qwen3TTS:
+        return load_qwen3_tts(model_dir, model_info, device_service);
+    case ModelServiceKind::SD:
+        return load_sd(model_dir, model_info, device_service);
+    case ModelServiceKind::Document:
+    case ModelServiceKind::LLM:
+    default:
+        if (!load_llm(model_dir, model_info, device_service)) {
+            return false;
+        }
+        if (DocumentPipelineService::supports_document_layout(model_dir, model_info) &&
+            !load_document_pipeline(model_dir, model_info, device_service)) {
+            (void)stop_and_reset_llm();
+            return false;
+        }
+        return true;
+    }
+}
+
+bool HLIEModelServiceManager::start_by_model_info(
+    const std::string& model_dir,
+    const HLIEModelInfo& model_info,
+    const std::shared_ptr<HLIEDeviceService>& device_service) {
+    switch (HLIEModelServiceFactory::service_kind(model_info)) {
+    case ModelServiceKind::Whisper:
+        return start_whisper(model_dir, model_info, device_service);
+    case ModelServiceKind::CosyVoice:
+        return start_cosyvoice(model_dir, model_info, device_service);
+    case ModelServiceKind::Qwen3TTS:
+        return start_qwen3_tts(model_dir, model_info, device_service);
+    case ModelServiceKind::SD:
+        return start_sd(model_dir, model_info, device_service);
+    case ModelServiceKind::Document:
+    case ModelServiceKind::LLM:
+    default:
+        if (!start_llm(model_dir, model_info, device_service)) {
+            return false;
+        }
+        if (DocumentPipelineService::supports_document_layout(model_dir, model_info) &&
+            !start_document_pipeline(model_dir, model_info, device_service)) {
+            (void)stop_and_reset_llm();
+            return false;
+        }
+        return true;
+    }
+}
+
 bool HLIEModelServiceManager::load_llm(const std::string& model_dir, const HLIEModelInfo& model_info,
                                        const std::shared_ptr<HLIEDeviceService>& device_service) {
-    return load_service(llm_model_service_, HLIEModelServiceFactory::create_llm, model_dir, model_info, device_service);
+    return load_service(llm_model_service_, HLIEModelServiceFactory::create_llm, model_dir, model_info, device_service, false);
 }
 
 bool HLIEModelServiceManager::load_sd(const std::string& model_dir, const HLIEModelInfo& model_info,
                                       const std::shared_ptr<HLIEDeviceService>& device_service) {
-    return load_service(sd_model_service_, HLIEModelServiceFactory::create_sd, model_dir, model_info, device_service);
+    return load_service(sd_model_service_, HLIEModelServiceFactory::create_sd, model_dir, model_info, device_service, false);
 }
 
 bool HLIEModelServiceManager::load_whisper(const std::string& model_dir, const HLIEModelInfo& model_info,
                                            const std::shared_ptr<HLIEDeviceService>& device_service) {
-    return load_service(whisper_model_service_, HLIEModelServiceFactory::create_whisper, model_dir, model_info, device_service);
+    return load_service(whisper_model_service_, HLIEModelServiceFactory::create_whisper, model_dir, model_info, device_service, false);
 }
 
 bool HLIEModelServiceManager::load_cosyvoice(const std::string& model_dir, const HLIEModelInfo& model_info,
                                              const std::shared_ptr<HLIEDeviceService>& device_service) {
-    return load_service(cosy_voice_model_service_, HLIEModelServiceFactory::create_cosyvoice, model_dir, model_info, device_service);
+    return load_service(cosy_voice_model_service_, HLIEModelServiceFactory::create_cosyvoice,
+                        model_dir, model_info, device_service, false);
 }
 
 bool HLIEModelServiceManager::load_qwen3_tts(const std::string& model_dir, const HLIEModelInfo& model_info,
                                              const std::shared_ptr<HLIEDeviceService>& device_service) {
     return load_service(qwen3_tts_model_service_, HLIEModelServiceFactory::create_qwen3_tts,
-                        model_dir, model_info, device_service);
+                        model_dir, model_info, device_service, false);
 }
 
 bool HLIEModelServiceManager::load_document_pipeline(const std::string& model_dir, const HLIEModelInfo& model_info,
                                                      const std::shared_ptr<HLIEDeviceService>& device_service) {
-    return load_service(document_pipeline_service_, HLIEModelServiceFactory::create_document_pipeline, model_dir, model_info, device_service);
+    return load_service(document_pipeline_service_, HLIEModelServiceFactory::create_document_pipeline,
+                        model_dir, model_info, device_service, false);
 }
 
 bool HLIEModelServiceManager::start_llm(const std::string& model_dir, const HLIEModelInfo& model_info,
                                         const std::shared_ptr<HLIEDeviceService>& device_service) {
-    return start_service(llm_model_service_,
-                         [this](const std::string& dir, const HLIEModelInfo& info,
-                                const std::shared_ptr<HLIEDeviceService>& service) {
-                             return load_llm(dir, info, service);
-                         },
-                         model_dir, model_info, device_service);
+    return load_service(llm_model_service_, HLIEModelServiceFactory::create_llm,
+                        model_dir, model_info, device_service, true);
 }
 
 bool HLIEModelServiceManager::start_sd(const std::string& model_dir, const HLIEModelInfo& model_info,
                                        const std::shared_ptr<HLIEDeviceService>& device_service) {
-    return start_service(sd_model_service_,
-                         [this](const std::string& dir, const HLIEModelInfo& info,
-                                const std::shared_ptr<HLIEDeviceService>& service) {
-                             return load_sd(dir, info, service);
-                         },
-                         model_dir, model_info, device_service);
+    return load_service(sd_model_service_, HLIEModelServiceFactory::create_sd,
+                        model_dir, model_info, device_service, true);
 }
 
 bool HLIEModelServiceManager::start_whisper(const std::string& model_dir, const HLIEModelInfo& model_info,
                                             const std::shared_ptr<HLIEDeviceService>& device_service) {
-    return start_service(whisper_model_service_,
-                         [this](const std::string& dir, const HLIEModelInfo& info,
-                                const std::shared_ptr<HLIEDeviceService>& service) {
-                             return load_whisper(dir, info, service);
-                         },
-                         model_dir, model_info, device_service);
+    return load_service(whisper_model_service_, HLIEModelServiceFactory::create_whisper,
+                        model_dir, model_info, device_service, true);
 }
 
 bool HLIEModelServiceManager::start_cosyvoice(const std::string& model_dir, const HLIEModelInfo& model_info,
                                               const std::shared_ptr<HLIEDeviceService>& device_service) {
-    return start_service(cosy_voice_model_service_,
-                         [this](const std::string& dir, const HLIEModelInfo& info,
-                                const std::shared_ptr<HLIEDeviceService>& service) {
-                             return load_cosyvoice(dir, info, service);
-                         },
-                         model_dir, model_info, device_service);
+    return load_service(cosy_voice_model_service_, HLIEModelServiceFactory::create_cosyvoice,
+                        model_dir, model_info, device_service, true);
 }
 
 bool HLIEModelServiceManager::start_qwen3_tts(const std::string& model_dir, const HLIEModelInfo& model_info,
                                               const std::shared_ptr<HLIEDeviceService>& device_service) {
-    return start_service(qwen3_tts_model_service_,
-                         [this](const std::string& dir, const HLIEModelInfo& info,
-                                const std::shared_ptr<HLIEDeviceService>& service) {
-                             return load_qwen3_tts(dir, info, service);
-                         },
-                         model_dir, model_info, device_service);
+    return load_service(qwen3_tts_model_service_, HLIEModelServiceFactory::create_qwen3_tts,
+                        model_dir, model_info, device_service, true);
 }
 
 bool HLIEModelServiceManager::start_document_pipeline(const std::string& model_dir, const HLIEModelInfo& model_info,
                                                       const std::shared_ptr<HLIEDeviceService>& device_service) {
-    return start_service(document_pipeline_service_,
-                         [this](const std::string& dir, const HLIEModelInfo& info,
-                                const std::shared_ptr<HLIEDeviceService>& service) {
-                             return load_document_pipeline(dir, info, service);
-                         },
-                         model_dir, model_info, device_service);
+    return load_service(document_pipeline_service_, HLIEModelServiceFactory::create_document_pipeline,
+                        model_dir, model_info, device_service, true);
 }
 
 std::shared_ptr<LLModelService> HLIEModelServiceManager::detach_llm() {
-    auto service = llm_model_service_;
-    llm_model_service_.reset();
-    return service;
+    return llm_model_service_.detach();
 }
 
 std::shared_ptr<SDModelService> HLIEModelServiceManager::detach_sd() {
-    auto service = sd_model_service_;
-    sd_model_service_.reset();
-    return service;
+    return sd_model_service_.detach();
 }
 
 std::shared_ptr<WhisperModelService> HLIEModelServiceManager::detach_whisper() {
-    auto service = whisper_model_service_;
-    whisper_model_service_.reset();
-    return service;
+    return whisper_model_service_.detach();
 }
 
 std::shared_ptr<CosyVoiceModelService> HLIEModelServiceManager::detach_cosyvoice() {
-    auto service = cosy_voice_model_service_;
-    cosy_voice_model_service_.reset();
-    return service;
+    return cosy_voice_model_service_.detach();
 }
 
 std::shared_ptr<Qwen3TTSModelService> HLIEModelServiceManager::detach_qwen3_tts() {
-    auto service = qwen3_tts_model_service_;
-    qwen3_tts_model_service_.reset();
-    return service;
+    return qwen3_tts_model_service_.detach();
 }
 
 std::shared_ptr<DocumentPipelineService> HLIEModelServiceManager::detach_document_pipeline() {
-    auto service = document_pipeline_service_;
-    document_pipeline_service_.reset();
-    return service;
+    return document_pipeline_service_.detach();
 }
 
 void HLIEModelServiceManager::reset_llm() {
-    llm_model_service_.reset();
+    (void)llm_model_service_.detach();
 }
 
 void HLIEModelServiceManager::reset_sd() {
-    sd_model_service_.reset();
+    (void)sd_model_service_.detach();
 }
 
 void HLIEModelServiceManager::reset_whisper() {
-    whisper_model_service_.reset();
+    (void)whisper_model_service_.detach();
 }
 
 void HLIEModelServiceManager::reset_cosyvoice() {
-    cosy_voice_model_service_.reset();
+    (void)cosy_voice_model_service_.detach();
 }
 
 void HLIEModelServiceManager::reset_qwen3_tts() {
-    qwen3_tts_model_service_.reset();
+    (void)qwen3_tts_model_service_.detach();
 }
 
 void HLIEModelServiceManager::reset_document_pipeline() {
-    document_pipeline_service_.reset();
+    (void)document_pipeline_service_.detach();
 }
 
-void HLIEModelServiceManager::stop_and_reset_llm() {
-    stop_and_reset(llm_model_service_);
+bool HLIEModelServiceManager::stop_and_reset_llm() {
+    return stop_service_noexcept(llm_model_service_.detach());
 }
 
-void HLIEModelServiceManager::stop_and_reset_sd() {
-    stop_and_reset(sd_model_service_);
+bool HLIEModelServiceManager::stop_and_reset_sd() {
+    return stop_service_noexcept(sd_model_service_.detach());
 }
 
-void HLIEModelServiceManager::stop_and_reset_whisper() {
-    stop_and_reset(whisper_model_service_);
+bool HLIEModelServiceManager::stop_and_reset_whisper() {
+    return stop_service_noexcept(whisper_model_service_.detach());
 }
 
-void HLIEModelServiceManager::stop_and_reset_cosyvoice() {
-    stop_and_reset(cosy_voice_model_service_);
+bool HLIEModelServiceManager::stop_and_reset_cosyvoice() {
+    return stop_service_noexcept(cosy_voice_model_service_.detach());
 }
 
-void HLIEModelServiceManager::stop_and_reset_qwen3_tts() {
-    stop_and_reset(qwen3_tts_model_service_);
+bool HLIEModelServiceManager::stop_and_reset_qwen3_tts() {
+    return stop_service_noexcept(qwen3_tts_model_service_.detach());
 }
 
-void HLIEModelServiceManager::stop_and_reset_document_pipeline() {
-    stop_and_reset(document_pipeline_service_);
+bool HLIEModelServiceManager::stop_and_reset_document_pipeline() {
+    return stop_service_noexcept(document_pipeline_service_.detach());
+}
+
+bool HLIEModelServiceManager::stop_and_reset_by_type(
+    const std::string& type, const bool owns_document_companion) {
+    bool confirmed = true;
+    if (type == HLIEModelType::LLM) {
+        if (owns_document_companion) {
+            confirmed = stop_and_reset_document_pipeline() && confirmed;
+        }
+        confirmed = stop_and_reset_llm() && confirmed;
+    } else if (type == HLIEModelType::SD) {
+        confirmed = stop_and_reset_sd();
+    } else if (type == HLIEModelType::WHISPER) {
+        confirmed = stop_and_reset_whisper();
+    } else if (type == HLIEModelType::COSYVOICE || type == HLIEModelType::TTS) {
+        confirmed = stop_and_reset_cosyvoice();
+    } else if (type == HLIEModelType::QWEN3_TTS) {
+        confirmed = stop_and_reset_qwen3_tts();
+    } else if (type == HLIEModelType::DOCUMENT) {
+        confirmed = stop_and_reset_document_pipeline();
+    } else {
+        return false;
+    }
+    return confirmed;
 }
 
 HLIE_NAMESPACE_END

@@ -40,6 +40,22 @@ public:
         }
     }
 
+    // Non-blocking insertion used by request admission. Returns false when the
+    // queue is at capacity; a closed queue is still an operational error.
+    bool try_push(const T& item) {
+        std::lock_guard lock(mutex_);
+        if (closed_) {
+            throw std::runtime_error("BlockingQueue is closed");
+        }
+        if (queue_.size() >= max_size_) {
+            return false;
+        }
+
+        queue_.push(item);
+        not_empty_.notify_one();
+        return true;
+    }
+
     // 阻塞式取出，队列空时等待
     T pop() {
         try {
@@ -128,6 +144,10 @@ public:
     bool is_closed() const {
         std::lock_guard lock(mutex_);
         return closed_;
+    }
+
+    size_t max_size() const {
+        return max_size_;
     }
 
 private:

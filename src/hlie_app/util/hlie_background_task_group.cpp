@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include "hlie_base/hlie_logger.h"
+
 HLIE_NAMESPACE_BEGIN
 
 BackgroundTaskGroup::~BackgroundTaskGroup() {
@@ -44,9 +46,10 @@ bool BackgroundTaskGroup::launch(std::function<void()> task) {
             std::thread([task = std::move(task), completed] () mutable {
                 try {
                     task();
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Background task threw: {}", error.what());
                 } catch (...) {
-                    completed->store(true, std::memory_order_release);
-                    throw;
+                    LOG_ERROR("Background task threw an unknown exception");
                 }
                 completed->store(true, std::memory_order_release);
             }),

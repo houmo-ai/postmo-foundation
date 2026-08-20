@@ -5,6 +5,7 @@
 #include <string>
 
 #include "hlie_base/hlie_base.h"
+#include "hlie_core/backend/hlie_backend_registry.h"
 
 HLIE_NAMESPACE_BEGIN
 
@@ -17,21 +18,20 @@ class CosyVoiceModelService;
 class Qwen3TTSModelService;
 class DocumentPipelineService;
 
-// Service category used by the factory before creating a concrete service.
-enum class ModelServiceKind {
-    LLM,
-    SD,
-    Whisper,
-    CosyVoice,
-    Qwen3TTS,
-    Document,
-};
+// Migration alias retained for Workflow call sites. Backend classification is
+// owned by hlie-core; concrete service construction remains in hlie-app.
+using ModelServiceKind = HLIEBackendKind;
 
 // Factory for concrete model services. Keeps Workflow from knowing constructor details.
 // Centralizes model type classification and service creation.
 class HLIEModelServiceFactory {
 public:
+    // Canonical immutable backend table for the current HOUMO runtime.
+    // Composition services should source their backend policy from here.
+    [[nodiscard]] static const HLIEBackendRegistry& default_registry();
+
     static ModelServiceKind service_kind(const HLIEModelInfo& model_info);
+    static bool uses_llm_primary_service(const HLIEModelInfo& model_info);
     static bool is_supported_model_type(const std::string& model_type);
     static std::shared_ptr<IHLIEModelService> create_by_model_info(const HLIEModelInfo& model_info);
     static std::shared_ptr<IHLIEModelService> create_by_model_type(const std::string& model_type);

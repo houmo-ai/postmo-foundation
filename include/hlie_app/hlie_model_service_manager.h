@@ -2,8 +2,10 @@
 #define HLIE_MODEL_SERVICE_MANAGER_H
 
 #include <memory>
+#include <optional>
 #include <string>
 
+#include "hlie_core/runtime/hlie_service_slot.h"
 #include "hlie_base/hlie_base.h"
 
 HLIE_NAMESPACE_BEGIN
@@ -21,25 +23,34 @@ class HLIEModelInfo;
 // Owns live model service instances. Workflow keeps orchestration; this class keeps service storage.
 class HLIEModelServiceManager {
 public:
-    std::shared_ptr<LLModelService>& llm() { return llm_model_service_; }
-    [[nodiscard]] const std::shared_ptr<LLModelService>& llm() const { return llm_model_service_; }
+    [[nodiscard]] std::shared_ptr<LLModelService> llm() const { return llm_model_service_.snapshot(); }
 
-    std::shared_ptr<SDModelService>& sd() { return sd_model_service_; }
-    [[nodiscard]] const std::shared_ptr<SDModelService>& sd() const { return sd_model_service_; }
+    [[nodiscard]] std::shared_ptr<SDModelService> sd() const { return sd_model_service_.snapshot(); }
 
-    std::shared_ptr<WhisperModelService>& whisper() { return whisper_model_service_; }
-    [[nodiscard]] const std::shared_ptr<WhisperModelService>& whisper() const { return whisper_model_service_; }
+    [[nodiscard]] std::shared_ptr<WhisperModelService> whisper() const { return whisper_model_service_.snapshot(); }
 
-    std::shared_ptr<CosyVoiceModelService>& cosyvoice() { return cosy_voice_model_service_; }
-    [[nodiscard]] const std::shared_ptr<CosyVoiceModelService>& cosyvoice() const { return cosy_voice_model_service_; }
+    [[nodiscard]] std::shared_ptr<CosyVoiceModelService> cosyvoice() const { return cosy_voice_model_service_.snapshot(); }
 
-    std::shared_ptr<Qwen3TTSModelService>& qwen3_tts() { return qwen3_tts_model_service_; }
-    [[nodiscard]] const std::shared_ptr<Qwen3TTSModelService>& qwen3_tts() const { return qwen3_tts_model_service_; }
+    [[nodiscard]] std::shared_ptr<Qwen3TTSModelService> qwen3_tts() const { return qwen3_tts_model_service_.snapshot(); }
 
-    std::shared_ptr<DocumentPipelineService>& document_pipeline() { return document_pipeline_service_; }
-    [[nodiscard]] const std::shared_ptr<DocumentPipelineService>& document_pipeline() const { return document_pipeline_service_; }
+    [[nodiscard]] std::shared_ptr<DocumentPipelineService> document_pipeline() const {
+        return document_pipeline_service_.snapshot();
+    }
 
     [[nodiscard]] std::shared_ptr<IHLIEModelService> get_by_type(const std::string& type) const;
+    // Compatibility projection for initialized slots that have not yet been
+    // published as Controller Runtime handles.
+    [[nodiscard]] std::optional<std::string> model_key_by_type(
+        const std::string& type) const;
+
+    // Compatibility façade used while Workflow is strangled. Backend-specific
+    // slot ownership remains here until P1-4 introduces IHLIEModelRuntime.
+    bool load_by_model_info(const std::string& model_dir,
+                            const HLIEModelInfo& model_info,
+                            const std::shared_ptr<HLIEDeviceService>& device_service);
+    bool start_by_model_info(const std::string& model_dir,
+                             const HLIEModelInfo& model_info,
+                             const std::shared_ptr<HLIEDeviceService>& device_service);
 
     bool load_llm(const std::string& model_dir, const HLIEModelInfo& model_info,
                   const std::shared_ptr<HLIEDeviceService>& device_service);
@@ -81,20 +92,22 @@ public:
     void reset_qwen3_tts();
     void reset_document_pipeline();
 
-    void stop_and_reset_llm();
-    void stop_and_reset_sd();
-    void stop_and_reset_whisper();
-    void stop_and_reset_cosyvoice();
-    void stop_and_reset_qwen3_tts();
-    void stop_and_reset_document_pipeline();
+    [[nodiscard]] bool stop_and_reset_llm();
+    [[nodiscard]] bool stop_and_reset_sd();
+    [[nodiscard]] bool stop_and_reset_whisper();
+    [[nodiscard]] bool stop_and_reset_cosyvoice();
+    [[nodiscard]] bool stop_and_reset_qwen3_tts();
+    [[nodiscard]] bool stop_and_reset_document_pipeline();
+    [[nodiscard]] bool stop_and_reset_by_type(
+        const std::string& type, bool owns_document_companion = false);
 
 private:
-    std::shared_ptr<LLModelService> llm_model_service_;
-    std::shared_ptr<SDModelService> sd_model_service_;
-    std::shared_ptr<WhisperModelService> whisper_model_service_;
-    std::shared_ptr<CosyVoiceModelService> cosy_voice_model_service_;
-    std::shared_ptr<Qwen3TTSModelService> qwen3_tts_model_service_;
-    std::shared_ptr<DocumentPipelineService> document_pipeline_service_;
+    HLIEServiceSlot<LLModelService> llm_model_service_;
+    HLIEServiceSlot<SDModelService> sd_model_service_;
+    HLIEServiceSlot<WhisperModelService> whisper_model_service_;
+    HLIEServiceSlot<CosyVoiceModelService> cosy_voice_model_service_;
+    HLIEServiceSlot<Qwen3TTSModelService> qwen3_tts_model_service_;
+    HLIEServiceSlot<DocumentPipelineService> document_pipeline_service_;
 };
 
 HLIE_NAMESPACE_END

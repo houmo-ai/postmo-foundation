@@ -34,9 +34,10 @@ std::string scalar_to_string(const HLIELlmParamValue& value) {
 } // namespace
 
 bool HLIELlmParamSet::is_framework_owned(const std::string& key) {
-    static constexpr std::array<std::string_view, 11> owned{
+    static constexpr std::array<std::string_view, 14> owned{
         "--model", "--mmproj", "--host", "--port", "--device_id", "--instance_id", "--config",
-        "--json_info", "--launch_manifest", "--api-key", "--log-file",
+        "--json_info", "--launch_manifest", "--launch_model_key", "--launch_generation",
+        "--launch_token", "--api-key", "--log-file",
     };
     return std::find(owned.begin(), owned.end(), key) != owned.end();
 }

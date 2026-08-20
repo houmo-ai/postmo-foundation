@@ -10,29 +10,12 @@
 
 #include "hlie_base/hlie_base.h"
 #include "hlie_app/hlie_llm_param_set.h"
+#include "hlie_core/domain/hlie_model_spec.h"
+#include "hlie_core/resource/hlie_device_reservation_ledger.h"
 
 class INIReader;
 
 HLIE_NAMESPACE_BEGIN
-
-struct HLIEModelCapabilities {
-    bool text = true;
-    bool vision = false;
-    bool audio = false;
-};
-
-enum class HLIEModelRole {
-    Unknown,
-    Chat,
-    VisionLanguage,
-    Ocr,
-    Asr,
-    ForcedAligner,
-    Embedding,
-    Rerank,
-    Tts,
-    ImageGeneration,
-};
 
 class HLIE_API HLIEModelInfo {
 public:
@@ -64,6 +47,9 @@ public:
                   const std::string& clip_l_model, const std::string& mmdit_model, const std::string& devices);
 
     void set_devices(const std::string& devices) { devices_ = devices; }
+    void set_device_reservation_id(const HLIEDeviceReservationId reservation_id) {
+        device_reservation_id_ = reservation_id;
+    }
     void set_service_kind(const std::string& service_kind);
     void set_mm_proj_path(const std::string& mm_proj_path, bool inspect_metadata = true);
 
@@ -94,7 +80,11 @@ public:
     [[nodiscard]] const std::string& get_vae_model() const { return vae_model_; }
     [[nodiscard]] const std::string& get_devices() const { return devices_; }
     [[nodiscard]] int get_device_num() const { return device_num_; }
+    [[nodiscard]] HLIEDeviceReservationId get_device_reservation_id() const {
+        return device_reservation_id_;
+    }
     [[nodiscard]] int get_estimated_mem() const;
+    [[nodiscard]] HLIEModelSpec to_model_spec() const;
     [[nodiscard]] bool has_effective_llama_params() const { return has_effective_llama_params_; }
     [[nodiscard]] const HLIELlmParamSet& get_effective_llama_params() const { return effective_llama_params_; }
     [[nodiscard]] const std::vector<std::string>& get_matched_llama_presets() const { return matched_llama_presets_; }
@@ -149,6 +139,9 @@ private:
     std::string vae_model_;
     std::string devices_;
     int estimated_mem_mb_ = 0;
+    // Runtime-only parent/local control-plane state. This is deliberately not
+    // serialized into info.json or subprocess launch manifests.
+    HLIEDeviceReservationId device_reservation_id_ = 0;
     HLIELlmParamSet effective_llama_params_;
     std::vector<std::string> matched_llama_presets_;
     std::vector<std::string> llama_param_sources_;

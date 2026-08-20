@@ -95,28 +95,52 @@ option(LLAMA_FATAL_WARNINGS "llama: enable -Werror flag" OFF)
 set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
 set(GGML_FATAL_WARNINGS ${LLAMA_FATAL_WARNINGS})
 
-if (NOT MSVC)
-    if (LLAMA_SANITIZE_THREAD)
-        message(STATUS "Using -fsanitize=thread")
+option(HLIE_SANITIZE_ADDRESS "Build hicpp targets with AddressSanitizer" OFF)
+option(HLIE_SANITIZE_UNDEFINED "Build hicpp targets with UndefinedBehaviorSanitizer" OFF)
+option(HLIE_SANITIZE_THREAD "Build hicpp targets with ThreadSanitizer" OFF)
 
-        add_compile_options(-fsanitize=thread)
-        link_libraries     (-fsanitize=thread)
-    endif()
+# Keep the inherited llama.cpp switches working while exposing hicpp-owned
+# names to CI and developers.
+if (LLAMA_SANITIZE_ADDRESS)
+    set(HLIE_SANITIZE_ADDRESS ON)
+endif ()
+if (LLAMA_SANITIZE_UNDEFINED)
+    set(HLIE_SANITIZE_UNDEFINED ON)
+endif ()
+if (LLAMA_SANITIZE_THREAD)
+    set(HLIE_SANITIZE_THREAD ON)
+endif ()
 
-    if (LLAMA_SANITIZE_ADDRESS)
-        message(STATUS "Using -fsanitize=address")
+if (HLIE_SANITIZE_THREAD AND (HLIE_SANITIZE_ADDRESS OR HLIE_SANITIZE_UNDEFINED))
+    message(FATAL_ERROR "ThreadSanitizer must use a separate build from ASAN/UBSAN")
+endif ()
 
-        add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
-        link_libraries     (-fsanitize=address)
-    endif()
+if (HLIE_SANITIZE_ADDRESS OR HLIE_SANITIZE_UNDEFINED OR HLIE_SANITIZE_THREAD)
+    if (MSVC)
+        message(FATAL_ERROR "HLIE sanitizer builds currently require GCC or Clang on Linux")
+    endif ()
 
-    if (LLAMA_SANITIZE_UNDEFINED)
-        message(STATUS "Using -fsanitize=undefined")
+    set(HLIE_ENABLED_SANITIZERS "")
+    if (HLIE_SANITIZE_ADDRESS)
+        list(APPEND HLIE_ENABLED_SANITIZERS address)
+    endif ()
+    if (HLIE_SANITIZE_UNDEFINED)
+        list(APPEND HLIE_ENABLED_SANITIZERS undefined)
+    endif ()
+    if (HLIE_SANITIZE_THREAD)
+        list(APPEND HLIE_ENABLED_SANITIZERS thread)
+    endif ()
+    list(JOIN HLIE_ENABLED_SANITIZERS "," HLIE_SANITIZER_LIST)
+    set(HLIE_SANITIZER_FLAG "-fsanitize=${HLIE_SANITIZER_LIST}")
+    message(STATUS "Using hicpp sanitizers: ${HLIE_SANITIZER_LIST}")
 
-        add_compile_options(-fsanitize=undefined)
-        link_libraries     (-fsanitize=undefined)
-    endif()
-endif()
+    add_compile_options(${HLIE_SANITIZER_FLAG} -fno-omit-frame-pointer)
+    add_link_options(${HLIE_SANITIZER_FLAG})
+    if (HLIE_SANITIZE_UNDEFINED)
+        add_compile_options(-fno-sanitize-recover=undefined)
+        add_link_options(-fno-sanitize-recover=undefined)
+    endif ()
+endif ()
 
 #
 # build the library
@@ -132,6 +156,7 @@ if (HLIE_BUILD_TESTS OR HLIE_TESTS_ONLY)
 endif ()
 
 include(CTest)
+find_package(Threads REQUIRED)
 
 # cpp-httplib is lightweight and is also used by HTTP component tests. Define it
 # before production targets so target resolution is deterministic.
@@ -149,6 +174,10 @@ set_target_properties(zlibstatic PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if (NOT HLIE_TESTS_ONLY)
     add_subdirectory(src)
+else ()
+    # Build the same production hlie-core implementation for the SDK-free
+    # sanitizer/control-plane slice instead of hand-copying its sources in tests.
+    add_subdirectory(src/hlie_core)
 endif ()
 
 if (BUILD_TESTING)

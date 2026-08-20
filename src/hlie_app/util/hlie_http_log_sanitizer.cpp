@@ -44,7 +44,8 @@ bool is_sensitive_key(std::string key) {
     }
     return key == "api_key" || key == "apikey" || key == "authorization" ||
         key == "access_token" || key == "refresh_token" || key == "password" ||
-        key == "secret" || key == "client_secret";
+        key == "secret" || key == "client_secret" || key == "token" ||
+        key == "launch_token" || key == "launch-token";
 }
 
 void redact_sensitive_fields(nlohmann::json& value) {
