@@ -1,0 +1,199 @@
+# FROM ubuntu:24.04
+FROM harbor.houmo.ai/toolchain/base:ubuntu2404
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+ENV LANG=C.UTF-8
+
+ENV http_proxy=http://10.65.36.14:7897
+ENV https_proxy=http://10.65.36.14:7897
+
+# Updata apt source to tuna source
+RUN echo "deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu noble main restricted universe multiverse" > /etc/apt/sources.list && \
+    echo "deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu noble-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu noble-backports main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu noble-security main restricted universe multiverse" >> /etc/apt/sources.list
+
+RUN apt-get update && apt-get install -y python3 python3-pip
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip config set global.retries 15 && \
+    pip config set global.timeout 60
+
+# Configure timezone
+RUN echo Asia/Shanghai > /etc/timezone
+
+# Install essential tools
+RUN DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends \
+        python3 python3-dev python3-pip python3-apt build-essential \
+        cmake make g++ git software-properties-common unzip zip rename \
+        tzdata ssh curl wget vim && \
+    apt clean
+
+# create python venv
+ENV HOUMO_VENV=/opt/venv/houmo
+RUN apt install -y --no-install-recommends python3-venv
+RUN python3 -m venv $HOUMO_VENV
+ENV PATH=$HOUMO_VENV/bin:$PATH
+
+# Install gcc,g++ version 13.1
+# RUN python3 /usr/bin/add-apt-repository -y ppa:ubuntu-toolchain-r/test && \
+RUN apt update && DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends \
+    g++-13 gcc-13 && \
+    apt clean
+COPY update-alternatives.sh /tmp/update-alternatives.sh
+RUN /bin/bash -c "source /tmp/update-alternatives.sh && update-alternatives-gcc 13 100" && rm -rf /tmp/*
+
+RUN apt update && apt-get install -y --no-install-recommends \
+    sudo rename zip libopencv-dev ffmpeg libnuma-dev \
+    libtcmalloc-minimal4 libomp5 libomp-dev && \
+    apt clean
+
+RUN set -e && \
+    tc_path=$(find /usr -name 'libtcmalloc_minimal.so.4' | head -n 1) && \
+    omp_path=$(find /usr -name 'libomp.so.5' | head -n 1) && \
+    test -n "$tc_path" && test -n "$omp_path" && \
+    ln -sf "$tc_path" /usr/local/lib/libtcmalloc_minimal.so.4 && \
+    ln -sf "$omp_path" /usr/local/lib/libomp.so.5
+
+# Install cpu torch
+RUN pip3 install torch==2.10.0 torchvision --index-url https://download.pytorch.org/whl/cpu
+
+RUN pip3 install --upgrade pip
+RUN pip3 install --no-cache-dir numpy==2.2.6 \
+                                addict==2.4.0 \
+                                black==25.1.0 \
+                                chardet==5.2.0 \
+                                cython==3.1.2 \
+                                einops==0.8.1 \
+                                ipython==9.4.0 \
+                                isort==6.0.1 \
+                                jsonlines==4.0.0 \
+                                multiprocess==0.70.16 \
+                                ninja==1.11.1.4 \
+                                onnx2pytorch==0.5.1 \
+                                onnxscript==0.4.0 \
+                                pydot==4.0.1 \
+                                pynvml==12.0.0 \
+                                termcolor==3.1.0 \
+                                terminaltables==3.1.10 \
+                                tifffile==2025.6.11 \
+                                torch-tb-profiler==0.4.3 \
+                                turbojpeg==0.0.2 \
+                                yapf==0.43.0 \
+                                onnx-graphsurgeon==0.5.8 \
+                                appdirs==1.4.4 \
+                                click==8.2.1 \
+                                onnxsim==0.4.36 \
+                                rich==14.0.0 \
+                                tiktoken==0.9.0 \
+                                setuptools==80.9.0 \
+                                tqdm==4.67.1 \
+                                prettytable==3.16.0 \
+                                multidict==6.6.3 \
+                                bitsandbytes==0.46.1 \
+                                psutil==7.0.0 \
+                                sentencepiece==0.2.0 \
+                                transformers==5.12.1 \
+                                opencv-python==4.11.0.86 \
+                                opencv-python-headless==4.11.0.86 \
+                                datasets==4.0.0 \
+                                networkx>=3.3 \
+                                protobuf==3.20.3 \
+                                safetensors \
+                                openai-whisper \
+                                resampy
+
+# change privilege
+RUN chmod 777 -R ${HOUMO_VENV}
+
+# -----------------------------------------------------------------------------------
+
+# set environment variables
+ARG HOUMO_VERSION
+ENV HOUMO_VERSION=${HOUMO_VERSION}
+ENV HOUMO_TARGET=xh2
+ENV HOUMO_CORE_NUM=2
+ENV HDPL_PLATFORM=ASIC
+ENV TCIM_BACKEND=Xh2HalBackend
+ENV HOUMO_PATH=/usr/local/houmo
+ENV TCIM_RUNTIME_PATH=${HOUMO_VENV}/lib/python3.12/site-packages/tcim_lite
+ENV HOUMO_SDK_PATH=/usr/local/houmo-sdk
+ENV IOMP_PATH=/usr/local/lib/libomp.so.5
+ENV TC_PATH=/usr/local/lib/libtcmalloc_minimal.so.4
+ENV LD_PRELOAD=${TC_PATH}:${IOMP_PATH}:${LD_PRELOAD}
+ENV LD_LIBRARY_PATH=${HOUMO_PATH}/lib:${HOUMO_SDK_PATH}/hal/lib:${LD_LIBRARY_PATH}
+ENV PATH=${HOUMO_PATH}/bin:${HOUMO_SDK_PATH}/tools:${HOUMO_SDK_PATH}/scripts:${PATH}
+
+RUN chmod 777 /tmp && pwd && ls -l /tmp
+
+ARG houmo_drv
+ARG houmo_tcim_runtime
+ARG hlievllm
+ARG hlievllm_plugin
+ARG hliepython
+
+COPY houmo/${houmo_drv} /tmp
+COPY houmo/${houmo_tcim_runtime} /tmp/${houmo_tcim_runtime}
+COPY houmo/${hlievllm} /tmp
+COPY houmo/${hlievllm_plugin} /tmp
+COPY houmo/${hliepython} /tmp
+
+ENV HOUMO_DRV_URL=${HOUMO_DRV_URL}
+ENV HOUMO_TCIM_RUNTIME_URL=${HOUMO_TCIM_RUNTIME_URL}
+
+RUN cd /tmp && bash ${houmo_drv} install lib
+
+ENV PEP517_BACKEND_PATH=${HOUMO_VENV}/lib/python3.12/site-packages/
+RUN pip3 uninstall dataclasses -y
+RUN pip3 install /tmp/${houmo_tcim_runtime}
+
+# remove tmp
+RUN rm -rf /tmp/*
+
+# change privilege
+RUN chmod 777 ${HOUMO_VENV}/lib/python3.12/site-packages/
+
+# -----------------------------------------------------------------------------------
+
+# 安装 HLIEvLLM 构建所需的兼容依赖，避免把 setuptools 升到 torch/vllm 不兼容的版本
+RUN pip3 install --no-cache-dir \
+    "setuptools>=77.0.3,<81.0.0" \
+    wheel \
+    "setuptools-scm>=8.0" \
+    jinja2
+
+RUN mkdir -p /houmo/temp
+COPY houmo/${hlievllm} /houmo/temp/${hlievllm}
+COPY houmo/${hlievllm_plugin} /houmo/temp/${hlievllm_plugin}
+COPY houmo/${hliepython} /houmo/temp/${hliepython}
+
+RUN pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# 安装后摩版本 vllm
+# RUN cd /houmo/temp && unzip -q ${hlievllm} && cd ${hlievllm%.zip} && \
+RUN cd /houmo/temp && unzip -q ${hlievllm} && cd HLIEvLLM && \
+    VLLM_TARGET_DEVICE=cpu pip install -e . \
+        --extra-index-url https://download.pytorch.org/whl/cpu \
+        -i https://mirrors.aliyun.com/pypi/simple/ -v
+
+# 安装vllm-houmo 推理插件包
+RUN cd /houmo/temp && \
+    VLLM_TARGET_DEVICE=houmo pip3 install ${hlievllm_plugin} --no-build-isolation \
+        --extra-index-url https://download.pytorch.org/whl/cpu \
+        -i https://mirrors.aliyun.com/pypi/simple/ -v
+
+# 基于 release tar.gz 安装 hliepython，本步骤不重复解析依赖，避免覆盖已安装的 vllm/torch 环境
+RUN cd /houmo/temp && \
+    pip3 install --no-cache-dir --no-deps ${hliepython} && \
+    python3 -c "import hliepython; print(hliepython.__file__)"
+
+ENV HM_PLATFORM=2
+ENV LLAMA_LOG_VERBOSITY=99999999
+ENV VLLM_TARGET_DEVICE=houmo
+
+ENV PYTHONPATH=/houmo:${PYTHONPATH}
+ENV HOUMO_MODELS_PATH=/houmo/.cache/models
+ENV USER_MODELS_PATH=/houmo/llm/models
+
+ENV http_proxy=
+ENV https_proxy=

@@ -1,0 +1,3029 @@
+houmo:
+  develop:
+    module:
+      common/common/platform:
+        commit: f0ed3ed0bfcb7500b848b956a1e65ef152ba55b7
+      common/houmoquantization/xh2modelzoo:
+        commit: c7606eee7cc55bd268627f757ea4b0f195b2e74b
+      common/toolchain/hmcc:
+        commit: f838efcd1bd05f7cd65e2c2c09ada04a3a168439
+      common/toolchain/hmnn:
+        commit: e16627e700e8168d4a4b46b49cee441a1e7fab45
+      common/toolchain/illvm:
+        commit: eb56d77c553285ed7f116213c0db359421820864
+      common/toolchain/imodelzoo:
+        commit: bdeb7c2ef79fd7ce24ed6ad1dfd2fd77ec4ae17e
+      common/toolchain/isim:
+        commit: 31d9cb86a7f6a7569d76e7c54d4a6ea24193124d
+      common/toolchain/tcim_runtime_lite:
+        commit: e8aba8dd8ecfb06ce6f9765c80859cf49c703da7
+      common/toolchain/torch-mlir:
+        commit: bfcf93ea2191a760ed14bbefc76f3cb34806806a
+      xh1/houmoquantization/houmoquantool:
+        commit: 1d2193fbdd8f9a73e83d73bcff99c0ce40ff86b1
+      xh1/system_software/buildroot:
+        commit: a8f1924fc40da7ef65c5a9f1fe38df22444c8a71
+      xh1/system_software/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu:
+        commit: dcac6c3bb72efd1ffbfb69388637248510ce8519
+      xh1/system_software/hm_sdk:
+        commit: 247b0934a9fda323dc29a6a7b4f0c473ae1d08d6
+      xh1/system_software/host:
+        commit: 12d462cb1359f60e28522e269871ead8297396f0
+      xh1/system_software/linux:
+        commit: f9365058d6d683adf289600b1bb3cfd8a379c38a
+      xh1/system_software/nds64le-elf-newlib-v5:
+        commit: dcac6c3bb72efd1ffbfb69388637248510ce8519
+      xh1/system_software/riscv_firmware:
+        commit: e9d548876fedc132f17543f8d9a4df640cc74aee
+      xh1/system_software/u-boot:
+        commit: 14f9c9d0f5d7862157a134705298d176e6e840bf
+      xh1/toolchain/imodelzoo:
+        commit: 4bfebdffa64385ccf2f1eb0d4428c3cead2e764b
+      xh1/toolchain/tcim_runtime_lite:
+        commit: e8aba8dd8ecfb06ce6f9765c80859cf49c703da7
+      xh2/houmoquantization/xh2modelzoo:
+        commit: c7606eee7cc55bd268627f757ea4b0f195b2e74b
+      xh2/houmoquantization/xhquanttool:
+        commit: 89c1e35660a1eb1e0eaf14949ce68e6e992a0782
+      xh2/system_software/buildroot:
+        commit: 3a28fe195c885440deb344336e79bd76e64a37d6
+      xh2/system_software/fsbl:
+        commit: 3b60aef14769bb847904cd667673825f4dc50fc3
+      xh2/system_software/hm_sdk:
+        commit: 8e6b8bab0f0bdad715dd27cb8d85faba1fb60122
+      xh2/system_software/host:
+        commit: b394eca4ad022690f439be655a0a362056bd2d1a
+      xh2/system_software/linux:
+        commit: 23b3ac9df49e15cc2c87745c5c8ca63bc751bf7f
+      xh2/system_software/nuttx:
+        commit: c1c27d432f1154278ff7521550dbe5c10bd9a7a9
+      xh2/system_software/opensbi:
+        commit: cd22cada1b2a3426a24a6ffdaf98ba05f4a9ccbd
+      xh2/system_software/scp_firmware:
+        commit: 547a30de025b690bbfa20a2f11bfa11748b277ee
+      xh2/system_software/sifive_tools:
+        commit: 97a6dd5968b05de8dabc52b7721ddc375d1ad79c
+      xh2/system_software/u-boot:
+        commit: 44b39a7caba09d1379d1a572fed54589ded16c11
+      xh2/toolchain/imodelzoo:
+        commit: bdeb7c2ef79fd7ce24ed6ad1dfd2fd77ec4ae17e
+      xh2/toolchain/tcim_runtime_lite:
+        commit: e8aba8dd8ecfb06ce6f9765c80859cf49c703da7
+    packages:
+      DEBUG-xh1:
+      - os: DEBUG
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/DEBUG/DEBUG-xh1_v2.7.0.dev20260322.zip
+      DEBUG-xh2:
+      - os: DEBUG
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/DEBUG/DEBUG-xh2_v1.2.0.dev20260322.zip
+      LM_VPU_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/firmwarexh1/LM_VPU_fw_v2.7.0.dev20260322.tar.gz
+      LM_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/firmwarexh1/LM_fw_v2.7.0.dev20260322.tar.gz
+      M2_HP_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/07/21/2144/firmwarexh1/M2_HP_fw_v2.4.1.tar.gz
+      M2_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/07/21/2144/firmwarexh1/M2_fw_v2.4.1.tar.gz
+      M50_DM2_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/firmwarexh2/M50_DM2_fw-xh2_v1.2.0.dev20260322.tar.gz
+      M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/firmwarexh2/M50_EVB_fw-xh2_v1.2.0.dev20260322.tar.gz
+      M50_M2_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_M2_Micron_12GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_M2_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_M2_Micron_18GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_M2_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_M2_Micron_24GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_M2_Samsung_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/firmwarexh2/M50_M2_Samsung_48GB_2R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_M2_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/firmwarexh2/M50_M2_fw-xh2_v1.2.0.dev20260322.tar.gz
+      M50_PCIE_F_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/firmwarexh2/M50_PCIE_F_fw-xh2_v1.2.0.dev20260322.tar.gz
+      M50_PCIE_H_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/firmwarexh2/M50_PCIE_H_fw-xh2_v1.2.0.dev20260322.tar.gz
+      SOM_4G_VPU_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/07/21/2144/firmwarexh1/SOM_4G_VPU_fw_v2.4.1.tar.gz
+      SOM_VPU_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/firmwarexh1/SOM_VPU_fw_v2.7.0.dev20260322.tar.gz
+      SOM_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/firmwarexh1/SOM_fw_v2.7.0.dev20260322.tar.gz
+      evb_AI1000M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/07/21/2144/DEBUGfw/evb_AI1000M_samsung_2G_16G_v2.4.1.tar.gz
+      evb_AI700M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/07/21/2144/DEBUGfw/evb_AI700M_samsung_2G_16G_v2.4.1.tar.gz
+      evb_no_vpu_AI1000M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/07/21/2144/DEBUGfw/evb_no_vpu_AI1000M_samsung_2G_16G_v2.4.1.tar.gz
+      evb_no_vpu_AI700M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/07/21/2144/DEBUGfw/evb_no_vpu_AI700M_samsung_2G_16G_v2.4.1.tar.gz
+      hmnn:
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/01/28/2330/ubuntu2004/hmnn_1.0.0.dev20260128_amd64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/01/28/2330/ubuntu2004/hmnn_1.0.0.dev20260128_arm64.deb
+      hmquantool:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/hmquant_xh1-2.7.0.dev20260322-cp39-cp39-linux_x86_64.whl
+      houmo-drv-xh1:
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/windows11/houmo-drv-xh1_v2.7.0.dev20260322_windows11.zip
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-drv-xh1_v2.7.0.dev20260322_ubuntu2004_aarch64.run
+      - arch: x86_64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-drv-xh1_v2.7.0.dev20260322_ubuntu2004_x86_64.run
+      - arch: x86_64
+        os: ubuntu2404
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2404/houmo-drv-xh1_v2.7.0.dev20260322_ubuntu2404_x86_64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu1804/houmo-drv-xh1_v2.7.0.dev20260322_ubuntu1804_x86_64.run
+      - arch: x86_64
+        os: centos79
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/centos79/houmo-drv-xh1_v2.7.0.dev20260322_centos79_x86_64.run
+      houmo-drv-xh2:
+      - arch: aarch64
+        os: androidmicron18GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/01/19/2330/androidmicron18GB/houmo-drv-xh2_v1.0.0.dev20260119_androidmicron18GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron12GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/01/19/2330/androidmicron12GB/houmo-drv-xh2_v1.0.0.dev20260119_androidmicron12GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron24GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/01/19/2330/androidmicron24GB/houmo-drv-xh2_v1.0.0.dev20260119_androidmicron24GB_aarch64.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-drv-xh2_1.2.0.dev20260322_arm64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-drv-xh2_v1.2.0.dev20260322_linux_aarch64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu1804/houmo-drv-xh2_1.2.0.dev20260322_amd64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu1804/houmo-drv-xh2_v1.2.0.dev20260322_linux_x86_64.run
+      - arch: x86_64_exe
+        os: windows11
+        type: exe
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/windows11/houmo-drv-xh2_v1.2.0.dev20260322.exe
+      - arch: aarch64
+        os: androidmicron
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/androidmicron/houmo-drv-xh2_v1.2.0.dev20260322_androidmicron_aarch64.tar.gz
+      - arch: aarch64
+        os: openeuler2203
+        type: rpm
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/openeuler2203/houmo-drv-xh2-1.2.0.dev20260322-1.aarch64.rpm
+      - arch: aarch64
+        os: ubuntu2004
+        type: rpm
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-drv-xh2-1.2.0.dev20260322-1.aarch64.rpm
+      - arch: x86_64
+        os: openeuler2203
+        type: rpm
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/openeuler2203/houmo-drv-xh2-1.2.0.dev20260322-1.x86_64.rpm
+      - arch: x86_64
+        os: ubuntu1804
+        type: rpm
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu1804/houmo-drv-xh2-1.2.0.dev20260322-1.x86_64.rpm
+      houmo-examples:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/08/17/2330/ubuntu2004/houmo-examples_2.5.0.dev20250817.zip
+      houmo-examples-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-examples-xh1_2.7.0.dev20260322.zip
+      houmo-examples-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-examples-xh2_v1.2.0.dev20260322.zip
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/02/08/2330/ubuntu2004/houmo-examples-xh2_1.1.0.dev20260208_arm64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/02/08/2330/ubuntu2004/houmo-examples-xh2_1.1.0.dev20260208_amd64.deb
+      houmo-hmnn:
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/09/04/1137/ubuntu2004/
+      houmo-mini-drv-xh2:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-mini-drv-xh2_1.2.0.dev20260322_arm64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu1804/houmo-mini-drv-xh2_1.2.0.dev20260322_amd64.deb
+      houmo-tcim-runtime-xh1:
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/windows11/houmo_tcim_runtime_xh1_windows_x86_64-1.0.0.dev20260322.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo_tcim_runtime_xh1_linux_aarch64-1.0.0.dev20260322.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu1804/houmo_tcim_runtime_xh1_linux_x86_64-1.0.0.dev20260322.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/07/2330/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_x86_64-0.7.0.dev20251207.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-tcim-runtime-xh1_1.0.0.dev20260322_arm64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/07/2330/ubuntu2004/houmo-tcim-runtime-xh1_0.7.0.dev20251207_ubuntu2004_x86_64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu1804/houmo-tcim-runtime-xh1_1.0.0.dev20260322_amd64.deb
+      houmo-tcim-runtime-xh2:
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-1.2.0.dev20260322.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo_tcim_runtime_xh2_linux_aarch64-1.2.0.dev20260322.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo_tcim_runtime_xh2_linux_x86_64-1.2.0.dev20260322.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-tcim-runtime-xh2_1.2.0.dev20260322_arm64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-tcim-runtime-xh2_1.2.0.dev20260322_amd64.deb
+      - arch: aarch64
+        os: android
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/android/houmo-tcim-runtime-xh2_v1.2.0.dev20260322_android_aarch64.tar.gz
+      - arch: x86_64
+        os: android
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/09/19/2330/android/houmo-tcim-runtime-xh2_v2.6.0.dev20250919_android_x86_64.tar.gz
+      houmo-tcim-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu1804/houmo_tcim_xh1-2.7.0.dev20260322-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo_tcim_xh1-2.7.0.dev20260322-py3-none-any.whl
+      houmo-tcim-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo_tcim_xh2-1.2.0.dev20260322-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu1804/houmo_tcim_xh2-1.2.0.dev20260322-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2404/houmo_tcim_xh2-1.2.0.dev20260322-py3-none-any.whl
+      houmo-toolchain-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu1804/houmo-toolchain-xh1_2.7.0.dev20260322_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-toolchain-xh1_2.7.0.dev20260322_ubuntu2004_x86_64.tar.gz
+      houmo-toolchain-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2004/houmo-toolchain-xh2_v1.2.0.dev20260322_ubuntu2004_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu1804/houmo-toolchain-xh2_v1.2.0.dev20260322_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2404
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2404/houmo-toolchain-xh2_v1.2.0.dev20260322_ubuntu2404_x86_64.tar.gz
+      houmo_drv_xh1:
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/windows11/houmo_drv_xh1_v2.7.0.dev20251225_windows11.zip
+      - arch: x86_64
+        os: centos79
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/centos79/houmo_drv_xh1_v2.7.0.dev20251225_centos79_x86_64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/ubuntu1804/houmo_drv_xh1_v2.7.0.dev20251225_ubuntu1804_x86_64.run
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/ubuntu2004/houmo_drv_xh1_v2.7.0.dev20251225_ubuntu2004_aarch64.run
+      - arch: x86_64
+        os: ubuntu2404
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/ubuntu2404/houmo_drv_xh1_v2.7.0.dev20251225_ubuntu2404_x86_64.run
+      - arch: x86_64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/25/1502/ubuntu2004/houmo_drv_xh1_v2.7.0.dev20251225_ubuntu2004_x86_64.run
+      houmo_drv_xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/11/28/2330/ubuntu2404/houmo_drv_xh2_v0.6.0.dev20251128_ubuntu2404_x86_64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/23/2330/ubuntu1804/houmo_drv_xh2_v0.7.0.dev20251223_ubuntu1804_x86_64.run
+      - arch: x86_64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/11/28/2330/ubuntu2004/houmo_drv_xh2_v0.6.0.dev20251128_ubuntu2004_x86_64.run
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/23/2330/windows11/houmo_drv_xh2_v0.7.0.dev20251223_windows11_x86_64.zip
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/23/2330/ubuntu2004/houmo_drv_xh2_v0.7.0.dev20251223_ubuntu2004_aarch64.run
+      - arch: x86_64
+        os: ubuntu2204
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/11/28/2330/ubuntu2204/houmo_drv_xh2_v0.6.0.dev20251128_ubuntu2204_x86_64.run
+      - arch: aarch64
+        os: androidmicron18GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/23/2330/androidmicron18GB/houmo_drv_xh2_v0.7.0.dev20251223_androidmicron18GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron12GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/23/2330/androidmicron12GB/houmo_drv_xh2_v0.7.0.dev20251223_androidmicron12GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron24GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/23/2330/androidmicron24GB/houmo_drv_xh2_v0.7.0.dev20251223_androidmicron24GB_aarch64.tar.gz
+      - os: lmytestwin
+        type: exe
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/09/16/1106/lmytestwin/houmo_drv_xh2_v0.4.0.exe
+      - arch: x86_64_exe
+        os: windows11
+        type: exe
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/23/2330/windows11/houmo_drv_xh2_v0.7.0.dev20251223.exe
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/23/2330/ubuntu1804/houmo_drv_xh2_0.7.0.dev20251223_ubuntu1804_x86_64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/23/2330/ubuntu2004/houmo_drv_xh2_0.7.0.dev20251223_ubuntu2004_aarch64.deb
+      houmo_mini_drv_xh2:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/23/2330/ubuntu2004/houmo_mini_drv_xh2_0.7.0.dev20251223_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/12/23/2330/ubuntu1804/houmo_mini_drv_xh2_0.7.0.dev20251223_ubuntu1804_x86_64.deb
+      som_4G_AI1000M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/07/21/2144/DEBUGfw/som_4G_AI1000M_samsung_2G_16G_v2.4.1.tar.gz
+      som_4G_AI700M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/07/21/2144/DEBUGfw/som_4G_AI700M_samsung_2G_16G_v2.4.1.tar.gz
+      xhquanttool:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2026/03/22/2330/ubuntu2404/hmquant_xh2-1.2.0.dev20260322-cp312-cp312-linux_x86_64.whl
+  release_ftest:
+    module:
+      xh2/system_software/buildroot:
+        commit: 2b12bda76cbd11aef39343437a15148491d33442
+      xh2/system_software/fsbl:
+        commit: afb3427e2f4f459e38d16659a617130b9f46aba8
+      xh2/system_software/hm_sdk:
+        commit: 0c7fd10c75afcfef0703b1cefed1360b103229a5
+      xh2/system_software/host:
+        commit: 8d1dac16d3b846a4836aac3a9d0030b154c5bb81
+      xh2/system_software/linux:
+        commit: e60e851f8617de4ee632610ad8df395a3392c539
+      xh2/system_software/opensbi:
+        commit: 51c3e68ff02ef0c4c922a86034ace7f71c2b6849
+      xh2/system_software/scp_firmware:
+        commit: e280f48fc4260350b3daedfd858a2d5998670f36
+      xh2/system_software/sifive_tools:
+        commit: 97a6dd5968b05de8dabc52b7721ddc375d1ad79c
+      xh2/system_software/u-boot:
+        commit: b99b773a39d04d5e3aea850fce7e5f6d7e2d8881
+  release_system_v0.4_rc:
+    module:
+      xh2/system_software/buildroot:
+        commit: 2b12bda76cbd11aef39343437a15148491d33442
+      xh2/system_software/fsbl:
+        commit: afb3427e2f4f459e38d16659a617130b9f46aba8
+      xh2/system_software/hm_sdk:
+        commit: 70a941d7636b2ca16562e23e674ef1636004a6c9
+      xh2/system_software/host:
+        commit: c331fbef2c53759efc2a9cc8063a9a0e7e2d6b0f
+      xh2/system_software/linux:
+        commit: 8b8ea27022412e44f66c7dd34ee1203bcb6000e9
+      xh2/system_software/opensbi:
+        commit: 51c3e68ff02ef0c4c922a86034ace7f71c2b6849
+      xh2/system_software/scp_firmware:
+        commit: 4b264b06320355495b74020892dd78d73442101d
+      xh2/system_software/sifive_tools:
+        commit: 97a6dd5968b05de8dabc52b7721ddc375d1ad79c
+      xh2/system_software/u-boot:
+        commit: b99b773a39d04d5e3aea850fce7e5f6d7e2d8881
+  release_v2.4.0:
+    module:
+      hm_sdk:
+        commit: 741cd9e9bd3e55cf9eff47aa9aa2fc10ea03db0f
+      hm_sdk/boot/riscv_firmware:
+        commit: 7e1d413ca86d19ef008c8aa45457028e4c527c3c
+      hm_sdk/boot/u-boot:
+        commit: 45ab39405874e336389ce03922d49a01fa15d9cb
+      hm_sdk/buildroot:
+        commit: 44378ee0732c6ccc8efaffe169dceddbfbd0924d
+      hm_sdk/misc/host:
+        commit: 94c6792a2f4b0f2938cb3437fa30b7030e46b712
+      hm_sdk/os/linux:
+        commit: 4ebf0026f336ec008bc2830a61e385ad119a5cf8
+      hmcc:
+        commit: 1d0dd7fc38d53c022dfe680b83f1ff04f1e585d2
+      houmoquantool:
+        commit: f2d7660f9d2d31ac095a597c4ecbcc2f8b43803c
+      illvm:
+        commit: 66e82c451f191278d1a4724b22eac91f8fd29de7
+      isim:
+        commit: 05de096145a0d3cfb997bcb051fd1f2ef76541e1
+      platform:
+        commit: 2952744f1c172af2c81165850395609473b078ae
+      tcim_runtime_lite:
+        commit: df1bad2c835095cef8f0e2028d94b48f57af1dff
+    packages:
+      LM_VPU_fw:
+      - os: LM
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/LM/LM_VPU_fw_v2.4.3.tar.gz
+      LM_fw:
+      - os: LM
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/LM/LM_fw_v2.4.3.tar.gz
+      M2_HP_fw:
+      - os: M2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/M2/M2_HP_fw_v2.4.3.tar.gz
+      M2_fw:
+      - os: M2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/M2/M2_fw_v2.4.3.tar.gz
+      SOM_4G_VPU_fw:
+      - os: SOM
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/SOM/SOM_4G_VPU_fw_v2.4.3.tar.gz
+      SOM_VPU_fw:
+      - os: SOM
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/SOM/SOM_VPU_fw_v2.4.3.tar.gz
+      SOM_fw:
+      - os: SOM
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/SOM/SOM_fw_v2.4.3.tar.gz
+      evb_AI1000M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/DEBUGfw/evb_AI1000M_samsung_2G_16G_v2.4.3.tar.gz
+      evb_AI700M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/DEBUGfw/evb_AI700M_samsung_2G_16G_v2.4.3.tar.gz
+      evb_no_vpu_AI1000M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/DEBUGfw/evb_no_vpu_AI1000M_samsung_2G_16G_v2.4.3.tar.gz
+      evb_no_vpu_AI700M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/DEBUGfw/evb_no_vpu_AI700M_samsung_2G_16G_v2.4.3.tar.gz
+      hmquantool:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/hmquant_xh1-2.4.3-cp39-cp39-linux_x86_64.whl
+      houmo-examples:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/houmo-examples_2.4.2.zip
+      houmo-tcim-runtime-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_x86_64-2.4.2.tar.gz
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/windows11/houmo_tcim_runtime_xh1_windows11_x86_64-2.4.2.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_aarch64-2.4.2.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu1804/houmo_tcim_runtime_xh1_ubuntu1804_x86_64-2.4.2.tar.gz
+      houmo-tcim-runtime-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_x86_64-2.4.2.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_aarch64-2.4.2.tar.gz
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-2.4.2.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu1804/houmo_tcim_runtime_xh2_ubuntu1804_x86_64-2.4.2.tar.gz
+      houmo-tcim-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/houmo_tcim_xh1-2.4.2-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu1804/houmo_tcim_xh1-2.4.2-py3-none-any.whl
+      houmo-tcim-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/houmo_tcim_xh2-2.4.2-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu1804/houmo_tcim_xh2-2.4.2-py3-none-any.whl
+      houmo-toolchain-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/houmo-toolchain-xh1_2.4.2_ubuntu2004_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu1804/houmo-toolchain-xh1_2.4.2_ubuntu1804_x86_64.tar.gz
+      houmo-toolchain-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/houmo-toolchain-xh2_2.4.2_ubuntu2004_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu1804/houmo-toolchain-xh2_2.4.2_ubuntu1804_x86_64.tar.gz
+      houmo_drv_xh1:
+      - arch: x86_64
+        os: centos79
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/centos79/houmo_drv_xh1_v2.4.3_centos79_x86_64.run
+      - arch: x86_64
+        os: ubuntu2404
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2404/houmo_drv_xh1_v2.4.3_ubuntu2404_x86_64.run
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/windows11/houmo_drv_xh1_v2.4.3_windows11_x86_64.zip
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/houmo_drv_xh1_v2.4.3_ubuntu2004_aarch64.run
+      - arch: x86_64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu2004/houmo_drv_xh1_v2.4.3_ubuntu2004_x86_64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/ubuntu1804/houmo_drv_xh1_v2.4.3_ubuntu1804_x86_64.run
+      som_4G_AI1000M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/DEBUGfw/som_4G_AI1000M_samsung_2G_16G_v2.4.3.tar.gz
+      som_4G_AI700M_samsung_2G_16G:
+      - os: DEBUGfw
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/09/25/0200/DEBUGfw/som_4G_AI700M_samsung_2G_16G_v2.4.3.tar.gz
+  release_xh1_v2.5.0:
+    module:
+      common/common/platform:
+        commit: ec282858223ee3cb0e19198481aa700067a516ca
+      common/toolchain/hmcc:
+        commit: 375c2973fecd903e486628b592d2031fc69f9536
+      common/toolchain/illvm:
+        commit: 8b03ff7a7d96c135b12ca8f6b8973da6c8eeab6e
+      common/toolchain/imodelzoo:
+        commit: dc1aac4d60ea0c5ad890557aef72ed8841ecf119
+      common/toolchain/isim:
+        commit: f276e515c47aefc1dccccb43ef95a4a772341f08
+      common/toolchain/tcim_runtime_lite:
+        commit: fc54cb580602ed61679fa8a34ac06cf8481a62ac
+      common/toolchain/torch-mlir:
+        commit: bfcf93ea2191a760ed14bbefc76f3cb34806806a
+      xh1/houmoquantization/houmoquantool:
+        commit: 794e31a1ff411382f833fd6902bcd2d7f715ffd8
+      xh1/system_software/buildroot:
+        commit: 7941276d3c253d4281176cdd030a49c4209d8865
+      xh1/system_software/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu:
+        commit: bd01af3d409f930eb91af9a1bf992aada9df53c1
+      xh1/system_software/hm_sdk:
+        commit: bd01af3d409f930eb91af9a1bf992aada9df53c1
+      xh1/system_software/host:
+        commit: 45e7361061198e1d8ebda576146f2ab2040076fa
+      xh1/system_software/linux:
+        commit: 2c8ead3efdd761f9f5664c1e78151efab2eeca68
+      xh1/system_software/nds64le-elf-newlib-v5:
+        commit: bd01af3d409f930eb91af9a1bf992aada9df53c1
+      xh1/system_software/riscv_firmware:
+        commit: e9d548876fedc132f17543f8d9a4df640cc74aee
+      xh1/system_software/u-boot:
+        commit: 14f9c9d0f5d7862157a134705298d176e6e840bf
+    packages:
+      LM_VPU_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/firmwarexh1/LM_VPU_fw_v2.5.0.dev20251124.tar.gz
+      LM_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/firmwarexh1/LM_fw_v2.5.0.dev20251124.tar.gz
+      SOM_VPU_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/firmwarexh1/SOM_VPU_fw_v2.5.0.dev20251124.tar.gz
+      SOM_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/firmwarexh1/SOM_fw_v2.5.0.dev20251124.tar.gz
+      hmquantool:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/hmquant_xh1-2.5.0.dev20251124-cp39-cp39-linux_x86_64.whl
+      houmo-examples-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/houmo-examples-xh1_2.5.0.dev20251124_ubuntu2004_x86_64.zip
+      houmo-examples-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/houmo-examples-xh2_v0.4.0.dev20251124_ubuntu2004_x86_64.zip
+      houmo-tcim-runtime-xh1:
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/windows11/houmo_tcim_runtime_xh1_windows11_x86_64-2.5.0.dev20251124.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_aarch64-2.5.0.dev20251124.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu1804/houmo_tcim_runtime_xh1_ubuntu1804_x86_64-2.5.0.dev20251124.tar.gz
+      houmo-tcim-runtime-xh2:
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-2.5.0.dev20251124.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_aarch64-2.5.0.dev20251124.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_x86_64-2.5.0.dev20251124.tar.gz
+      houmo-tcim-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu1804/houmo_tcim_xh1-2.5.0.dev20251124-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/houmo_tcim_xh1-2.5.0.dev20251124-py3-none-any.whl
+      houmo-tcim-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2404/houmo_tcim_xh2-0.4.0.dev20251124-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu1804/houmo_tcim_xh2-0.4.0.dev20251124-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/houmo_tcim_xh2-0.4.0.dev20251124-py3-none-any.whl
+      houmo-toolchain-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu1804/houmo-toolchain-xh1_2.5.0.dev20251124_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/houmo-toolchain-xh1_2.5.0.dev20251124_ubuntu2004_x86_64.tar.gz
+      houmo-toolchain-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2404/houmo-toolchain-xh2_v0.4.0.dev20251124_ubuntu2404_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu1804/houmo-toolchain-xh2_v0.4.0.dev20251124_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/houmo-toolchain-xh2_v0.4.0.dev20251124_ubuntu2004_x86_64.tar.gz
+      houmo_drv_xh1:
+      - arch: x86_64
+        os: centos79
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/centos79/houmo_drv_xh1_v2.5.0.dev20251124_centos79_x86_64.run
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/houmo_drv_xh1_v2.5.0.dev20251124_ubuntu2004_aarch64.run
+      - arch: x86_64
+        os: ubuntu2404
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2404/houmo_drv_xh1_v2.5.0.dev20251124_ubuntu2404_x86_64.run
+      - arch: x86_64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu2004/houmo_drv_xh1_v2.5.0.dev20251124_ubuntu2004_x86_64.run
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/windows11/houmo_drv_xh1_v2.5.0.dev20251124_windows11_x86_64.zip
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.5.0/2025/11/24/0200/ubuntu1804/houmo_drv_xh1_v2.5.0.dev20251124_ubuntu1804_x86_64.run
+  release_xh1_v2.6.0:
+    module:
+      common/common/platform:
+        commit: ec282858223ee3cb0e19198481aa700067a516ca
+      common/houmoquantization/xh2modelzoo:
+        commit: f3432a49ea10419b4579da0cc85a83b87c6bc856
+      common/toolchain/hmcc:
+        commit: 08777f61f9f49b1fec21d352af52ade9dc6c3d79
+      common/toolchain/hmnn:
+        commit: 8caed53f81a993deb7a3b7affad16a54c9277981
+      common/toolchain/illvm:
+        commit: ad0ac9b13cb1ff130c5ef12da12b2416dd803029
+      common/toolchain/imodelzoo:
+        commit: c8dd6d9d0b492ccab659b262ce8f510ade56047b
+      common/toolchain/isim:
+        commit: 7f2265ba669e4fa3cef83eb68b9da57071cfbcf2
+      common/toolchain/tcim_runtime_lite:
+        commit: d65667017acf7dd159700effe24341ae5b447626
+      common/toolchain/torch-mlir:
+        commit: bfcf93ea2191a760ed14bbefc76f3cb34806806a
+      xh1/houmoquantization/houmoquantool:
+        commit: 021166efbc4405a095e844321dbcabba1751932c
+      xh1/system_software/buildroot:
+        commit: a8f1924fc40da7ef65c5a9f1fe38df22444c8a71
+      xh1/system_software/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu:
+        commit: ff2ec9e9f1ee953561024c2e2b732f57d9385824
+      xh1/system_software/hm_sdk:
+        commit: ff2ec9e9f1ee953561024c2e2b732f57d9385824
+      xh1/system_software/host:
+        commit: a2eafa7f57cd5bbcaa6670fc5c3f84518b2744ba
+      xh1/system_software/linux:
+        commit: f9365058d6d683adf289600b1bb3cfd8a379c38a
+      xh1/system_software/nds64le-elf-newlib-v5:
+        commit: ff2ec9e9f1ee953561024c2e2b732f57d9385824
+      xh1/system_software/riscv_firmware:
+        commit: e9d548876fedc132f17543f8d9a4df640cc74aee
+      xh1/system_software/u-boot:
+        commit: 14f9c9d0f5d7862157a134705298d176e6e840bf
+    packages:
+      DEBUG-xh1:
+      - os: DEBUG
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/03/24/0200/DEBUG/DEBUG-xh1_v2.6.1.dev20260324_DEBUG.zip
+      LM_VPU_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/03/24/0200/firmwarexh1/LM_VPU_fw_v2.6.1.dev20260324.tar.gz
+      LM_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/03/24/0200/firmwarexh1/LM_fw_v2.6.1.dev20260324.tar.gz
+      SOM_VPU_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/03/24/0200/firmwarexh1/SOM_VPU_fw_v2.6.1.dev20260324.tar.gz
+      SOM_fw:
+      - os: firmwarexh1
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/03/24/0200/firmwarexh1/SOM_fw_v2.6.1.dev20260324.tar.gz
+      hmnn:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/hmnn_0.6.0.dev20260109_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/hmnn_0.6.0.dev20260109_ubuntu2004_x86_64.deb
+      hmquantool:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/hmquant_xh1-2.6.0.dev20260109-cp39-cp39-linux_x86_64.whl
+      houmo-examples-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo-examples-xh1_2.6.0.dev20260109.zip
+      houmo-examples-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo-examples-xh2_v0.6.0.dev20260109.zip
+      houmo-tcim-runtime-xh1:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo-tcim-runtime-xh1_2.6.0.dev20260109_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/windows11/houmo_tcim_runtime_xh1_windows11_x86_64-2.6.0.dev20260109.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_aarch64-2.6.0.dev20260109.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2025/12/08/1031/ubuntu2004/houmo-tcim-runtime-xh1_0.6.0_ubuntu2004_x86_64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2025/12/08/1031/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_x86_64-0.6.0.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu1804/houmo-tcim-runtime-xh1_2.6.0.dev20260109_ubuntu1804_x86_64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu1804/houmo_tcim_runtime_xh1_ubuntu1804_x86_64-2.6.0.dev20260109.tar.gz
+      houmo-tcim-runtime-xh2:
+      - arch: aarch64
+        os: android
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/android/houmo-tcim-runtime-xh2_v2.6.0.dev20260109_android_aarch64.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo-tcim-runtime-xh2_2.6.0.dev20260109_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-2.6.0.dev20260109.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_aarch64-2.6.0.dev20260109.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo-tcim-runtime-xh2_2.6.0.dev20260109_ubuntu2004_x86_64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_x86_64-2.6.0.dev20260109.tar.gz
+      houmo-tcim-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu1804/houmo_tcim_xh1-2.6.0.dev20260109-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo_tcim_xh1-2.6.0.dev20260109-py3-none-any.whl
+      houmo-tcim-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2404/houmo_tcim_xh2-0.6.0.dev20260109-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu1804/houmo_tcim_xh2-0.6.0.dev20260109-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo_tcim_xh2-0.6.0.dev20260109-py3-none-any.whl
+      houmo-toolchain-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu1804/houmo-toolchain-xh1_2.6.0.dev20260109_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo-toolchain-xh1_2.6.0.dev20260109_ubuntu2004_x86_64.tar.gz
+      houmo-toolchain-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2404/houmo-toolchain-xh2_v0.6.0.dev20260109_ubuntu2404_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu1804/houmo-toolchain-xh2_v0.6.0.dev20260109_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/01/09/0200/ubuntu2004/houmo-toolchain-xh2_v0.6.0.dev20260109_ubuntu2004_x86_64.tar.gz
+      houmo_drv_xh1:
+      - arch: x86_64
+        os: centos79
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/03/24/0200/centos79/houmo_drv_xh1_v2.6.1.dev20260324_centos79_x86_64.run
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/03/24/0200/windows11/houmo_drv_xh1_v2.6.1.dev20260324_windows11_x86_64.zip
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/03/24/0200/ubuntu2004/houmo_drv_xh1_v2.6.1.dev20260324_ubuntu2004_aarch64.run
+      - arch: x86_64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/03/24/0200/ubuntu2004/houmo_drv_xh1_v2.6.1.dev20260324_ubuntu2004_x86_64.run
+      - arch: x86_64
+        os: ubuntu2404
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/03/24/0200/ubuntu2404/houmo_drv_xh1_v2.6.1.dev20260324_ubuntu2404_x86_64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh1_v2.6.0/2026/03/24/0200/ubuntu1804/houmo_drv_xh1_v2.6.1.dev20260324_ubuntu1804_x86_64.run
+  release_xh2_v0.3.0:
+    module:
+      common/common/platform:
+        commit: ec282858223ee3cb0e19198481aa700067a516ca
+      common/houmoquantization/xh2modelzoo:
+        commit: 3d212edc29f017f50646d228bcecb3f82970747f
+      common/toolchain/hmcc:
+        commit: 7700d6ef8dc6722e9ace40c39dcb7c8aa4d09017
+      common/toolchain/illvm:
+        commit: 7a2e67154e43fd8db763c371581a663e095ba48f
+      common/toolchain/imodelzoo:
+        commit: 1bfc068c3f04be3130d97a155712a5a529a6ee20
+      common/toolchain/isim:
+        commit: b45c35d3ee0afe7c20aaa93fba20b4a67796e3f3
+      common/toolchain/tcim_runtime_lite:
+        commit: ace88a74875270ad32bd96967960f0fd5c138d3b
+      common/toolchain/torch-mlir:
+        commit: bfcf93ea2191a760ed14bbefc76f3cb34806806a
+      xh2/houmoquantization/xhquanttool:
+        commit: f90e4548dc92804ac1942c3739961e2cf599009c
+      xh2/system_software/buildroot:
+        commit: ec76c409541b08bf7fca4c2da74c5ab245b1a6e1
+      xh2/system_software/fsbl:
+        commit: f3283b52275a5bc2dac2961d22317857ca3a93d6
+      xh2/system_software/hm_sdk:
+        commit: 2266c3025e99c2b487f9781eec6436ccaac4c5af
+      xh2/system_software/host:
+        commit: c174775861c44e78df3c33e77df36f5b9e78e392
+      xh2/system_software/linux:
+        commit: 9c6ce613d96cfe500fbd5bff8c2a62b58c79b9a6
+      xh2/system_software/opensbi:
+        commit: c9d9b5d6aeeca81e4f5200f61a0684ec3f7bf96c
+      xh2/system_software/scp_firmware:
+        commit: 1104acb88a5a2195722fe7076e0acc19a3c8536f
+      xh2/system_software/sifive_tools:
+        commit: 97a6dd5968b05de8dabc52b7721ddc375d1ad79c
+      xh2/system_software/u-boot:
+        commit: 09b12845d2d156c4a64f1e16b34aa66f8b4a2a9b
+    packages:
+      LM_VPU_fw:
+      - os: LM
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/08/07/0200/LM/LM_VPU_fw_v2.4.2.tar.gz
+      M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_M2_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_M2_Micron_12GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_M2_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_M2_Micron_18GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_M2_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_M2_Micron_24GB_1R_6400MT_fw-xh2_v0.3.2.tar.gz
+      M50_M2_Samsung_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/firmwarexh2/M50_M2_Samsung_48GB_2R_6400MT_fw-xh2_v0.3.2.tar.gz
+      houmo-examples:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2004/houmo-examples_v0.3.1.zip
+      houmo-tcim-runtime-xh1:
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/windows11/houmo_tcim_runtime_xh1_windows11_x86_64-0.3.1.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_aarch64-0.3.1.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu1804/houmo_tcim_runtime_xh1_ubuntu1804_x86_64-0.3.1.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_x86_64-0.3.1.tar.gz
+      houmo-tcim-runtime-xh2:
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_aarch64-0.3.1.tar.gz
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2404/houmo_tcim_runtime_xh2_ubuntu2404_x86_64-0.3.1.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu1804/houmo_tcim_runtime_xh2_ubuntu1804_x86_64-0.3.1.tar.gz
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-0.3.1.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_x86_64-0.3.1.tar.gz
+      houmo-tcim-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu1804/houmo_tcim_xh1-2.4.0-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu200
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/08/08/0200/ubuntu2004/houmo_tcim_xh1-2.4.0-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2004/houmo_tcim_xh1-2.4.0-py3-none-any.whl
+      houmo-tcim-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2404/houmo_tcim_xh2-0.3.1-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu1804/houmo_tcim_xh2-0.3.1-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2004/houmo_tcim_xh2-0.3.1-py3-none-any.whl
+      houmo-toolchain-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu1804/houmo-toolchain-xh1_2.4.0_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2004/houmo-toolchain-xh1_2.4.0_ubuntu2004_x86_64.tar.gz
+      houmo-toolchain-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2404/houmo-toolchain-xh2_v0.3.1_ubuntu2404_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu1804/houmo-toolchain-xh2_v0.3.1_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2004/houmo-toolchain-xh2_v0.3.1_ubuntu2004_x86_64.tar.gz
+      houmo_drv_xh2:
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/ubuntu2004/houmo_drv_xh2_v0.3.2_ubuntu2004_aarch64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/ubuntu1804/houmo_drv_xh2_v0.3.2_ubuntu1804_x86_64.run
+      - arch: x86_64
+        os: ubuntu2404
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/ubuntu2404/houmo_drv_xh2_v0.3.2_ubuntu2404_x86_64.run
+      - arch: x86_64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/ubuntu2004/houmo_drv_xh2_v0.3.2_ubuntu2004_x86_64.run
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/10/10/2212/windows11/houmo_drv_xh2_v0.3.2_windows11_x86_64.zip
+      xhquanttool:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.3.0/2025/09/12/2117/ubuntu2404/hmquant_xh2-0.3.1-cp312-cp312-linux_x86_64.whl
+  release_xh2_v0.4.0:
+    module:
+      common/common/platform:
+        commit: ec282858223ee3cb0e19198481aa700067a516ca
+      common/houmoquantization/xh2modelzoo:
+        commit: 90da425cf27875a8cad427df4d88325c7c6f6236
+      common/toolchain/hmcc:
+        commit: f122de355769f572ad1cc398e1e0b4be08e6c949
+      common/toolchain/hmnn:
+        commit: 89b2e4acd6d077496b3b907d6048257a0a0e59df
+      common/toolchain/illvm:
+        commit: 69b159cf311928ec4d2f0084298a9e1b4f0709f9
+      common/toolchain/imodelzoo:
+        commit: 6a9448268df71057430245240dbcf3c7000cb3ce
+      common/toolchain/isim:
+        commit: d9a36af3949930ae8224afd6d50552a55f741c81
+      common/toolchain/tcim_runtime_lite:
+        commit: 8302e49862c197b747ab7a7628c5cc4779a07973
+      common/toolchain/torch-mlir:
+        commit: bfcf93ea2191a760ed14bbefc76f3cb34806806a
+      xh2/houmoquantization/xhquanttool:
+        commit: 3164826434256c488c2b70dd04e0b7f811e654e9
+      xh2/system_software/buildroot:
+        commit: 2b12bda76cbd11aef39343437a15148491d33442
+      xh2/system_software/fsbl:
+        commit: afb3427e2f4f459e38d16659a617130b9f46aba8
+      xh2/system_software/hm_sdk:
+        commit: 0c7fd10c75afcfef0703b1cefed1360b103229a5
+      xh2/system_software/host:
+        commit: e4eefcd2b1a40afcf49fe79202944f7bb69ae32d
+      xh2/system_software/linux:
+        commit: e60e851f8617de4ee632610ad8df395a3392c539
+      xh2/system_software/opensbi:
+        commit: 51c3e68ff02ef0c4c922a86034ace7f71c2b6849
+      xh2/system_software/scp_firmware:
+        commit: e280f48fc4260350b3daedfd858a2d5998670f36
+      xh2/system_software/sifive_tools:
+        commit: 97a6dd5968b05de8dabc52b7721ddc375d1ad79c
+      xh2/system_software/u-boot:
+        commit: b99b773a39d04d5e3aea850fce7e5f6d7e2d8881
+    packages:
+      LM_VPU_fw:
+      - os: LM
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/08/07/0200/LM/LM_VPU_fw_v2.4.2.tar.gz
+      M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_M2_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_M2_Micron_12GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_M2_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_M2_Micron_18GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_M2_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_M2_Micron_24GB_1R_6400MT_fw-xh2_v0.4.1.tar.gz
+      M50_M2_Samsung_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/firmwarexh2/M50_M2_Samsung_48GB_2R_6400MT_fw-xh2_v0.4.1.tar.gz
+      hmnn:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/hmnn_0.4.1_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/hmnn_0.4.1_ubuntu2004_x86_64.deb
+      houmo-examples-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo-examples-xh1_2.6.0_ubuntu2004_x86_64.zip
+      houmo-examples-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo-examples-xh2_v0.4.1_ubuntu2004_x86_64.zip
+      houmo-tcim-runtime-xh1:
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/windows11/houmo_tcim_runtime_xh1_windows11_x86_64-0.4.1.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo-tcim-runtime-xh1_0.4.1_ubuntu2004_aarch64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_aarch64-0.4.1.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo-tcim-runtime-xh1_0.4.1_ubuntu2004_x86_64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_x86_64-0.4.1.tar.gz
+      houmo-tcim-runtime-xh2:
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-0.4.1.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo-tcim-runtime-xh2_0.4.1_ubuntu2004_aarch64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_aarch64-0.4.1.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo-tcim-runtime-xh2_0.4.1_ubuntu2004_x86_64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_x86_64-0.4.1.tar.gz
+      - arch: aarch64
+        os: android
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/android/houmo-tcim-runtime-xh2_v0.4.1_android_aarch64.tar.gz
+      houmo-tcim-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu1804/houmo_tcim_xh1-2.6.0-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo_tcim_xh1-2.6.0-py3-none-any.whl
+      houmo-tcim-xh2:
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu1804/houmo_tcim_xh2-0.4.1-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2404/houmo_tcim_xh2-0.4.1-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo_tcim_xh2-0.4.1-py3-none-any.whl
+      houmo-toolchain-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu1804/houmo-toolchain-xh1_2.6.0_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo-toolchain-xh1_2.6.0_ubuntu2004_x86_64.tar.gz
+      houmo-toolchain-xh2:
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu1804/houmo-toolchain-xh2_v0.4.1_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2404
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2404/houmo-toolchain-xh2_v0.4.1_ubuntu2404_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo-toolchain-xh2_v0.4.1_ubuntu2004_x86_64.tar.gz
+      houmo_drv_xh2:
+      - arch: aarch64
+        os: androidmicron18GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/androidmicron18GB/houmo_drv_xh2_v0.4.1_androidmicron18GB_aarch64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu1804/houmo_drv_xh2_v0.4.1_ubuntu1804_x86_64.run
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo_drv_xh2_v0.4.1_ubuntu2004_aarch64.run
+      - arch: x86_64
+        os: ubuntu2404
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2404/houmo_drv_xh2_v0.4.1_ubuntu2404_x86_64.run
+      - arch: x86_64
+        os: ubuntu2204
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2204/houmo_drv_xh2_v0.4.1_ubuntu2204_x86_64.run
+      - arch: x86_64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2004/houmo_drv_xh2_v0.4.1_ubuntu2004_x86_64.run
+      - arch: aarch64
+        os: androidmicron12GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/androidmicron12GB/houmo_drv_xh2_v0.4.1_androidmicron12GB_aarch64.tar.gz
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/windows11/houmo_drv_xh2_v0.4.1_windows11_x86_64.zip
+      - arch: aarch64
+        os: androidmicron24GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/androidmicron24GB/houmo_drv_xh2_v0.4.1_androidmicron24GB_aarch64.tar.gz
+      xhquanttool:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.4.0/2025/10/27/1409/ubuntu2404/hmquant_xh2-0.4.1-cp312-cp312-linux_x86_64.whl
+  release_xh2_v0.5.0:
+    module:
+      common/common/platform:
+        commit: ec282858223ee3cb0e19198481aa700067a516ca
+      common/houmoquantization/xh2modelzoo:
+        commit: 571bd410dc0cb4567eb0b2017d3dfb3e089dff71
+      common/toolchain/hmcc:
+        commit: 68e39bc66d18a7b6c1c4eab850eee3a96413f228
+      common/toolchain/hmnn:
+        commit: 5776d2650539790c46ab7a28ed01d4317a8c52c3
+      common/toolchain/illvm:
+        commit: 69b159cf311928ec4d2f0084298a9e1b4f0709f9
+      common/toolchain/imodelzoo:
+        commit: 703ac08fbeb0da8c7e4266527db7010c7a4871cc
+      common/toolchain/isim:
+        commit: 13f9cb5cd87c9d7771e20629cf430f8376fcdcba
+      common/toolchain/tcim_runtime_lite:
+        commit: 846fe36c9bc021d3a0e1de2b8cf1e167b661c4aa
+      common/toolchain/torch-mlir:
+        commit: bfcf93ea2191a760ed14bbefc76f3cb34806806a
+      xh2/houmoquantization/xhquanttool:
+        commit: 479f0b851f3ec4b83cec0de5cb2f8e021c6ef6b6
+      xh2/system_software/buildroot:
+        commit: 2f5705827a1839044dd823e1762d2e2da14665e7
+      xh2/system_software/fsbl:
+        commit: 8cd00af3e3b5ca84e87b6e8ddba14041a702e8ec
+      xh2/system_software/hm_sdk:
+        commit: e978224a5f6bf1f2a94df538f67143d8a99ec3a2
+      xh2/system_software/host:
+        commit: 5a76d956bf9ca274292b7566615837587b5d338a
+      xh2/system_software/linux:
+        commit: 3c453e64be126e2b7984ffb1aee3a843b1d1893b
+      xh2/system_software/opensbi:
+        commit: 51c3e68ff02ef0c4c922a86034ace7f71c2b6849
+      xh2/system_software/scp_firmware:
+        commit: 1b98f2ee350d838540ddadfbfc30edd923c468d8
+      xh2/system_software/sifive_tools:
+        commit: 97a6dd5968b05de8dabc52b7721ddc375d1ad79c
+      xh2/system_software/u-boot:
+        commit: b99b773a39d04d5e3aea850fce7e5f6d7e2d8881
+    packages:
+      LM_VPU_fw:
+      - os: LM
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_v2.4.0/2025/08/07/0200/LM/LM_VPU_fw_v2.4.2.tar.gz
+      M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_M2_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_M2_Micron_12GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_M2_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_M2_Micron_18GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_M2_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_M2_Micron_24GB_1R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      M50_M2_Samsung_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/firmwarexh2/M50_M2_Samsung_48GB_2R_6400MT_fw-xh2_v0.5.1.dev20251110.tar.gz
+      hmnn:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/hmnn_0.5.0.dev20251110_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/hmnn_0.5.0.dev20251110_ubuntu2004_x86_64.deb
+      houmo-examples-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo-examples-xh1_2.6.0.dev20251110_ubuntu2004_x86_64.zip
+      houmo-examples-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo-examples-xh2_v0.5.0.dev20251110_ubuntu2004_x86_64.zip
+      houmo-tcim-runtime-xh1:
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/windows11/houmo_tcim_runtime_xh1_windows11_x86_64-0.5.0.dev20251110.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo-tcim-runtime-xh1_0.5.0.dev20251110_ubuntu2004_aarch64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_aarch64-0.5.0.dev20251110.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo-tcim-runtime-xh1_0.5.0.dev20251110_ubuntu2004_x86_64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_x86_64-0.5.0.dev20251110.tar.gz
+      houmo-tcim-runtime-xh2:
+      - arch: aarch64
+        os: android
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/android/houmo-tcim-runtime-xh2_v0.5.0.dev20251110_android_aarch64.tar.gz
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-0.5.0.dev20251110.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo-tcim-runtime-xh2_0.5.0.dev20251110_ubuntu2004_aarch64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_aarch64-0.5.0.dev20251110.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo-tcim-runtime-xh2_0.5.0.dev20251110_ubuntu2004_x86_64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_x86_64-0.5.0.dev20251110.tar.gz
+      houmo-tcim-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo_tcim_xh1-2.6.0.dev20251110-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu1804/houmo_tcim_xh1-2.6.0.dev20251110-py3-none-any.whl
+      houmo-tcim-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2404/houmo_tcim_xh2-0.5.0.dev20251110-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo_tcim_xh2-0.5.0.dev20251110-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu1804/houmo_tcim_xh2-0.5.0.dev20251110-py3-none-any.whl
+      houmo-toolchain-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo-toolchain-xh1_2.6.0.dev20251110_ubuntu2004_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu1804/houmo-toolchain-xh1_2.6.0.dev20251110_ubuntu1804_x86_64.tar.gz
+      houmo-toolchain-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2404/houmo-toolchain-xh2_v0.5.0.dev20251110_ubuntu2404_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo-toolchain-xh2_v0.5.0.dev20251110_ubuntu2004_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu1804/houmo-toolchain-xh2_v0.5.0.dev20251110_ubuntu1804_x86_64.tar.gz
+      houmo_drv_xh2:
+      - arch: aarch64
+        os: androidmicron12GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/androidmicron12GB/houmo_drv_xh2_v0.5.1.dev20251110_androidmicron12GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron18GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/androidmicron18GB/houmo_drv_xh2_v0.5.1.dev20251110_androidmicron18GB_aarch64.tar.gz
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/windows11/houmo_drv_xh2_v0.5.1.dev20251110_windows11_x86_64.zip
+      - arch: x86_64
+        os: ubuntu2404
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2404/houmo_drv_xh2_v0.5.1.dev20251110_ubuntu2404_x86_64.run
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo_drv_xh2_v0.5.1.dev20251110_ubuntu2004_aarch64.run
+      - arch: aarch64
+        os: androidmicron24GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/androidmicron24GB/houmo_drv_xh2_v0.5.1.dev20251110_androidmicron24GB_aarch64.tar.gz
+      - arch: x86_64
+        os: ubuntu2204
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2204/houmo_drv_xh2_v0.5.1.dev20251110_ubuntu2204_x86_64.run
+      - arch: x86_64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2004/houmo_drv_xh2_v0.5.1.dev20251110_ubuntu2004_x86_64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu1804/houmo_drv_xh2_v0.5.1.dev20251110_ubuntu1804_x86_64.run
+      xhquanttool:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.5.0/2025/11/10/2201/ubuntu2404/hmquant_xh2-0.5.0.dev20251110-cp312-cp312-linux_x86_64.whl
+  release_xh2_v0.6.0:
+    module:
+      common/common/platform:
+        commit: ec282858223ee3cb0e19198481aa700067a516ca
+      common/houmoquantization/xh2modelzoo:
+        commit: 5fc6a0fcee59e22446fea431be56b15d089b47b9
+      common/toolchain/hmcc:
+        commit: b2d32a7e2497f5d04fb48d276db9561bbe7f47e5
+      common/toolchain/hmnn:
+        commit: 98d6449681fa32a86966ba77a9cb1244669695ab
+      common/toolchain/illvm:
+        commit: f0380fb94a24441a792823c5f866954f368c0632
+      common/toolchain/imodelzoo:
+        commit: 00302c3d6db9acec3169ccdcb7657083bae57969
+      common/toolchain/isim:
+        commit: 6a05fc30c80cb24b214019cd857d3546276e871a
+      common/toolchain/tcim_runtime_lite:
+        commit: c97b61dd63c7a535125a240c40b0d53f9a6c4677
+      common/toolchain/torch-mlir:
+        commit: bfcf93ea2191a760ed14bbefc76f3cb34806806a
+      xh2/houmoquantization/xhquanttool:
+        commit: 70a7b725ef1d2d9c4828b4bea72e74874892ec75
+      xh2/system_software/buildroot:
+        commit: 1fde362000c0e3b19642b6b3a095e751b1918fce
+      xh2/system_software/fsbl:
+        commit: 4a2f1b6d289cf677e8c13580b0b7d54bbaee615f
+      xh2/system_software/hm_sdk:
+        commit: c5ee9b9bd689e87696fa39477da06cc5e79322f8
+      xh2/system_software/host:
+        commit: e2cbaa7ee2cc1ec87f443c7ce702e0cb9f473a20
+      xh2/system_software/linux:
+        commit: 6560fbcb29de03f0102e21e3c210161aa3561fa0
+      xh2/system_software/opensbi:
+        commit: 51c3e68ff02ef0c4c922a86034ace7f71c2b6849
+      xh2/system_software/scp_firmware:
+        commit: 798b0fa89188e9fb436c37c18dab0c0060b20dd4
+      xh2/system_software/sifive_tools:
+        commit: 97a6dd5968b05de8dabc52b7721ddc375d1ad79c
+      xh2/system_software/u-boot:
+        commit: b99b773a39d04d5e3aea850fce7e5f6d7e2d8881
+    packages:
+      DEBUG-xh2:
+      - os: DEBUG
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/DEBUG/DEBUG-xh2_v0.6.0_DEBUG.zip
+      M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_M2_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_M2_Micron_12GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_M2_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_M2_Micron_18GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_M2_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_M2_Micron_24GB_1R_6400MT_fw-xh2_v0.6.0.tar.gz
+      M50_M2_Samsung_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/firmwarexh2/M50_M2_Samsung_48GB_2R_6400MT_fw-xh2_v0.6.0.tar.gz
+      hmnn:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/hmnn_0.6.0.dev20251218_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/hmnn_0.6.0.dev20251218_ubuntu2004_x86_64.deb
+      houmo-examples-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo-examples-xh1_2.6.0.dev20251218.zip
+      houmo-examples-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo-examples-xh2_v0.6.0.dev20251218.zip
+      houmo-tcim-runtime-xh1:
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/windows11/houmo_tcim_runtime_xh1_windows11_x86_64-0.6.0.dev20251218.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo-tcim-runtime-xh1_0.6.0.dev20251218_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo-tcim-runtime-xh1_0.6.0.dev20251218_ubuntu2004_x86_64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_aarch64-0.6.0.dev20251218.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo_tcim_runtime_xh1_ubuntu2004_x86_64-0.6.0.dev20251218.tar.gz
+      houmo-tcim-runtime-xh2:
+      - arch: aarch64
+        os: android
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/android/houmo-tcim-runtime-xh2_v0.6.0.dev20251218_android_aarch64.tar.gz
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-0.6.0.dev20251218.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo-tcim-runtime-xh2_0.6.0.dev20251218_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo-tcim-runtime-xh2_0.6.0.dev20251218_ubuntu2004_x86_64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_aarch64-0.6.0.dev20251218.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo_tcim_runtime_xh2_ubuntu2004_x86_64-0.6.0.dev20251218.tar.gz
+      houmo-tcim-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu1804/houmo_tcim_xh1-2.6.0.dev20251218-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo_tcim_xh1-2.6.0.dev20251218-py3-none-any.whl
+      houmo-tcim-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2404/houmo_tcim_xh2-0.6.0.dev20251218-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu1804/houmo_tcim_xh2-0.6.0.dev20251218-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo_tcim_xh2-0.6.0.dev20251218-py3-none-any.whl
+      houmo-toolchain-xh1:
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu1804/houmo-toolchain-xh1_2.6.0.dev20251218_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo-toolchain-xh1_2.6.0.dev20251218_ubuntu2004_x86_64.tar.gz
+      houmo-toolchain-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2404/houmo-toolchain-xh2_v0.6.0.dev20251218_ubuntu2404_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu1804/houmo-toolchain-xh2_v0.6.0.dev20251218_ubuntu1804_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2004/houmo-toolchain-xh2_v0.6.0.dev20251218_ubuntu2004_x86_64.tar.gz
+      houmo_drv_xh2:
+      - arch: aarch64
+        os: androidmicron18GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/androidmicron18GB/houmo_drv_xh2_v0.6.0_androidmicron18GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron12GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/androidmicron12GB/houmo_drv_xh2_v0.6.0_androidmicron12GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron24GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/androidmicron24GB/houmo_drv_xh2_v0.6.0_androidmicron24GB_aarch64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/ubuntu1804/houmo_drv_xh2_v0.6.0_ubuntu1804_x86_64.run
+      - arch: x86_64
+        os: ubuntu2204
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/11/28/0200/ubuntu2204/houmo_drv_xh2_v0.6.0.dev20251128_ubuntu2204_x86_64.run
+      - arch: x86_64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/11/28/0200/ubuntu2004/houmo_drv_xh2_v0.6.0.dev20251128_ubuntu2004_x86_64.run
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/windows11/houmo_drv_xh2_v0.6.0.dev20251218_windows11_x86_64.zip
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/ubuntu2004/houmo_drv_xh2_v0.6.0_ubuntu2004_aarch64.run
+      - arch: x86_64
+        os: ubuntu2404
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/11/28/0200/ubuntu2404/houmo_drv_xh2_v0.6.0.dev20251128_ubuntu2404_x86_64.run
+      - arch: x86_64_exe
+        os: windows11
+        type: exe
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/windows11/houmo_drv_xh2_v0.6.0.exe
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/ubuntu2004/houmo_drv_xh2_0.6.0_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/ubuntu1804/houmo_drv_xh2_0.6.0_ubuntu1804_x86_64.deb
+      houmo_mini_drv_xh2:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/ubuntu2004/houmo_mini_drv_xh2_0.6.0_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2026/01/02/2232/ubuntu1804/houmo_mini_drv_xh2_0.6.0_ubuntu1804_x86_64.deb
+      xhquanttool:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.6.0/2025/12/18/0200/ubuntu2404/hmquant_xh2-0.6.0.dev20251218-cp312-cp312-linux_x86_64.whl
+  release_xh2_v0.7.0:
+    module:
+      common/common/platform:
+        commit: ec282858223ee3cb0e19198481aa700067a516ca
+      common/houmoquantization/xh2modelzoo:
+        commit: 578ac5ec296af24c57fb3f822c6874789c37ad4e
+      common/toolchain/hmcc:
+        commit: 9597bbb210beef8744583989e3936c59faee86b8
+      common/toolchain/hmnn:
+        commit: 8caed53f81a993deb7a3b7affad16a54c9277981
+      common/toolchain/illvm:
+        commit: 090d2a9aab077f7709b3d6b5ea6a1e0c9aaf92b7
+      common/toolchain/imodelzoo:
+        commit: f6bc3dcfe2635f74d47b9e8ffe5ee32b32674b45
+      common/toolchain/isim:
+        commit: 57a5d56be0b57eb1a47bafb4de546b4fd64f9c21
+      common/toolchain/tcim_runtime_lite:
+        commit: 380c3b90936a7ae8a910842885e07b80c86c6906
+      common/toolchain/torch-mlir:
+        commit: bfcf93ea2191a760ed14bbefc76f3cb34806806a
+      xh2/houmoquantization/xhquanttool:
+        commit: 09fa4d9f1ec5eab723375fdeec442292c12b9b52
+      xh2/system_software/buildroot:
+        commit: d7df724e9dd580d0db9c9d93b2238c1043100e93
+      xh2/system_software/fsbl:
+        commit: ce4a3f98c13e0362354af4356c6007425961e7e4
+      xh2/system_software/hm_sdk:
+        commit: 2d797bcbbee839d8798617b4a1c3733d0768a165
+      xh2/system_software/host:
+        commit: 7452a01edc4674a413ec1110ccd416ea4361674e
+      xh2/system_software/linux:
+        commit: 6e27d56eb1937e5f5f579ecaaa8f5a2092ff8549
+      xh2/system_software/opensbi:
+        commit: f99638f6da6506bd3f317378682acb5520f9bd03
+      xh2/system_software/scp_firmware:
+        commit: 34b3494ecb67af99c653e69c6fae193f5cd65e2c
+      xh2/system_software/sifive_tools:
+        commit: 97a6dd5968b05de8dabc52b7721ddc375d1ad79c
+      xh2/system_software/u-boot:
+        commit: 6947c4b2c08a591689ea6d611486378ce500f725
+    packages:
+      DEBUG-xh2:
+      - os: DEBUG
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/DEBUG/DEBUG-xh2_v0.8.0.zip
+      M50_DM2_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/firmwarexh2/M50_DM2_fw-xh2_v0.8.0.tar.gz
+      M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_EVB_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/firmwarexh2/M50_EVB_fw-xh2_v0.8.0.tar.gz
+      M50_M2_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_M2_Micron_12GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_M2_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_M2_Micron_18GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_M2_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_M2_Micron_24GB_1R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_M2_Samsung_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/25/1855/firmwarexh2/M50_M2_Samsung_48GB_2R_6400MT_fw-xh2_v0.7.0.dev20251225.tar.gz
+      M50_M2_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/firmwarexh2/M50_M2_fw-xh2_v0.8.0.tar.gz
+      M50_PCIE_F_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/firmwarexh2/M50_PCIE_F_fw-xh2_v0.8.0.tar.gz
+      M50_PCIE_H_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/firmwarexh2/M50_PCIE_H_fw-xh2_v0.8.0.tar.gz
+      hmnn:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/hmnn_0.7.0.dev20260110_arm64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/hmnn_0.7.0.dev20260110_amd64.deb
+      houmo-drv-xh2:
+      - arch: aarch64
+        os: androidmicron12GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/26/0200/androidmicron12GB/houmo-drv-xh2_v0.7.0.dev20251226_androidmicron12GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron18GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/26/0200/androidmicron18GB/houmo-drv-xh2_v0.7.0.dev20251226_androidmicron18GB_aarch64.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/ubuntu2004/houmo-drv-xh2_0.8.0_arm64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/ubuntu1804/houmo-drv-xh2_0.8.0_amd64.deb
+      - arch: aarch64
+        os: androidmicron24GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/26/0200/androidmicron24GB/houmo-drv-xh2_v0.7.0.dev20251226_androidmicron24GB_aarch64.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/ubuntu2004/houmo-drv-xh2_v0.8.0_linux_aarch64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/ubuntu1804/houmo-drv-xh2_v0.8.0_linux_x86_64.run
+      - arch: x86_64_exe
+        os: windows11
+        type: exe
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/windows11/houmo-drv-xh2_v0.8.0.exe
+      - arch: aarch64
+        os: androidmicron
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/androidmicron/houmo-drv-xh2_v0.8.0_androidmicron_aarch64.tar.gz
+      houmo-examples-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo-examples-xh1_2.7.0.dev20260110.zip
+      houmo-examples-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo-examples-xh2_v0.7.0.dev20260110.zip
+      houmo-mini-drv-xh2:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/ubuntu2004/houmo-mini-drv-xh2_0.8.0_arm64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/27/2024/ubuntu1804/houmo-mini-drv-xh2_0.8.0_amd64.deb
+      houmo-tcim-runtime-xh1:
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/windows11/houmo_tcim_runtime_xh1_windows_x86_64-0.7.0.dev20260110.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo-tcim-runtime-xh1_0.7.0.dev20260110_arm64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu1804/houmo-tcim-runtime-xh1_0.7.0.dev20260110_amd64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo_tcim_runtime_xh1_linux_aarch64-0.7.0.dev20260110.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu1804/houmo_tcim_runtime_xh1_linux_x86_64-0.7.0.dev20260110.tar.gz
+      houmo-tcim-runtime-xh2:
+      - arch: aarch64
+        os: android
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/android/houmo-tcim-runtime-xh2_v0.7.0.dev20260110_android_aarch64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo-tcim-runtime-xh2_0.7.0.dev20260110_amd64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo_tcim_runtime_xh2_linux_x86_64-0.7.0.dev20260110.tar.gz
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-0.7.0.dev20260110.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo-tcim-runtime-xh2_0.7.0.dev20260110_arm64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo_tcim_runtime_xh2_linux_aarch64-0.7.0.dev20260110.tar.gz
+      houmo-tcim-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo_tcim_xh1-2.7.0.dev20260110-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu1804/houmo_tcim_xh1-2.7.0.dev20260110-py3-none-any.whl
+      houmo-tcim-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2404/houmo_tcim_xh2-0.7.0.dev20260110-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo_tcim_xh2-0.7.0.dev20260110-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu1804/houmo_tcim_xh2-0.7.0.dev20260110-py3-none-any.whl
+      houmo-toolchain-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo-toolchain-xh1_2.7.0.dev20260110_ubuntu2004_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu1804/houmo-toolchain-xh1_2.7.0.dev20260110_ubuntu1804_x86_64.tar.gz
+      houmo-toolchain-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2404/houmo-toolchain-xh2_v0.7.0.dev20260110_ubuntu2404_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2004/houmo-toolchain-xh2_v0.7.0.dev20260110_ubuntu2004_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu1804/houmo-toolchain-xh2_v0.7.0.dev20260110_ubuntu1804_x86_64.tar.gz
+      houmo_drv_xh2:
+      - arch: aarch64
+        os: androidmicron18GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/24/1013/androidmicron18GB/houmo_drv_xh2_v0.7.0.dev20251224_androidmicron18GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron24GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/24/1013/androidmicron24GB/houmo_drv_xh2_v0.7.0.dev20251224_androidmicron24GB_aarch64.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/24/1013/ubuntu2004/houmo_drv_xh2_0.7.0.dev20251224_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/24/1013/ubuntu1804/houmo_drv_xh2_0.7.0.dev20251224_ubuntu1804_x86_64.deb
+      - arch: aarch64
+        os: androidmicron12GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/24/1013/androidmicron12GB/houmo_drv_xh2_v0.7.0.dev20251224_androidmicron12GB_aarch64.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/24/1013/ubuntu2004/houmo_drv_xh2_v0.7.0.dev20251224_ubuntu2004_aarch64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/24/1013/ubuntu1804/houmo_drv_xh2_v0.7.0.dev20251224_ubuntu1804_x86_64.run
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/24/1013/windows11/houmo_drv_xh2_v0.7.0.dev20251224_windows11_x86_64.zip
+      - arch: x86_64_exe
+        os: windows11
+        type: exe
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/24/1013/windows11/houmo_drv_xh2_v0.7.0.dev20251224.exe
+      houmo_mini_drv_xh2:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/24/1013/ubuntu2004/houmo_mini_drv_xh2_0.7.0.dev20251224_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2025/12/24/1013/ubuntu1804/houmo_mini_drv_xh2_0.7.0.dev20251224_ubuntu1804_x86_64.deb
+      xhquanttool:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v0.7.0/2026/01/10/0200/ubuntu2404/hmquant_xh2-0.7.0.dev20260110-cp312-cp312-linux_x86_64.whl
+  release_xh2_v1.0.0:
+    module:
+      common/common/platform:
+        commit: ec282858223ee3cb0e19198481aa700067a516ca
+      common/houmoquantization/xh2modelzoo:
+        commit: 51bdad52ce178d31ec266dc6d3f75694c358249b
+      common/toolchain/hmcc:
+        commit: e7b0f26f35d355e7b93927649ea43465c51d6f03
+      common/toolchain/hmnn:
+        commit: 44a087bd933d7eab2d3656d289359ca1b0cfee36
+      common/toolchain/illvm:
+        commit: d648dd90292e26bb046d4c6fed8173d77867d8f2
+      common/toolchain/imodelzoo:
+        commit: 40505bba0a7c2b7e184250f36bb9214e31faba60
+      common/toolchain/isim:
+        commit: 916ec16e64a497aba00c546d1dbdd0b9cf5c62d3
+      common/toolchain/tcim_runtime_lite:
+        commit: 68f000aa1cc751e893d251af40456b106f0d688b
+      common/toolchain/torch-mlir:
+        commit: bfcf93ea2191a760ed14bbefc76f3cb34806806a
+      xh2/houmoquantization/xhquanttool:
+        commit: 4b0ba37cf5547c8233ad0814796235d149031dab
+      xh2/system_software/buildroot:
+        commit: d7df724e9dd580d0db9c9d93b2238c1043100e93
+      xh2/system_software/fsbl:
+        commit: 9efd79ef6110b02123a59654034fbf9d7663a493
+      xh2/system_software/hm_sdk:
+        commit: 4f837c1bf564e490500fc16a074cb98d0e7d54dd
+      xh2/system_software/host:
+        commit: 9441e402c6ab20616ec462865d17afd28ec5ea2f
+      xh2/system_software/linux:
+        commit: abf592bc8fbcb40e33663c7023384aac1af5f226
+      xh2/system_software/opensbi:
+        commit: f99638f6da6506bd3f317378682acb5520f9bd03
+      xh2/system_software/scp_firmware:
+        commit: cb131f74ffd639a747e3bf62c371e00dc4f22fb3
+      xh2/system_software/sifive_tools:
+        commit: 97a6dd5968b05de8dabc52b7721ddc375d1ad79c
+      xh2/system_software/u-boot:
+        commit: 4cfc08b0dc8615ca956b4b13663b16740beeda8d
+      xh2/toolchain/tcim_runtime_lite:
+        commit: 68f000aa1cc751e893d251af40456b106f0d688b
+    packages:
+      DEBUG-xh2:
+      - os: DEBUG
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/DEBUG/DEBUG-xh2_v1.0.0.dev20260123.zip
+      M50_DM2_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/firmwarexh2/M50_DM2_fw-xh2_v1.0.0.dev20260123.tar.gz
+      M50_EVB_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/firmwarexh2/M50_EVB_fw-xh2_v1.0.0.dev20260123.tar.gz
+      M50_M2_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/firmwarexh2/M50_M2_fw-xh2_v1.0.0.dev20260123.tar.gz
+      M50_PCIE_F_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/firmwarexh2/M50_PCIE_F_fw-xh2_v1.0.0.dev20260123.tar.gz
+      M50_PCIE_H_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/firmwarexh2/M50_PCIE_H_fw-xh2_v1.0.0.dev20260123.tar.gz
+      hmnn:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/hmnn_1.0.0.dev20260123_arm64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/hmnn_1.0.0.dev20260123_amd64.deb
+      houmo-drv-xh2:
+      - arch: aarch64
+        os: androidmicron18GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/20/1010/androidmicron18GB/houmo-drv-xh2_v1.0.0.dev20260120_androidmicron18GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron12GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/20/1010/androidmicron12GB/houmo-drv-xh2_v1.0.0.dev20260120_androidmicron12GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron24GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/20/1010/androidmicron24GB/houmo-drv-xh2_v1.0.0.dev20260120_androidmicron24GB_aarch64.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo-drv-xh2_1.0.0.dev20260123_arm64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo-drv-xh2_v1.0.0.dev20260123_linux_aarch64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu1804/houmo-drv-xh2_1.0.0.dev20260123_amd64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu1804/houmo-drv-xh2_v1.0.0.dev20260123_linux_x86_64.run
+      - arch: x86_64_exe
+        os: windows11
+        type: exe
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/windows11/houmo-drv-xh2_v1.0.0.dev20260123.exe
+      - arch: aarch64
+        os: androidmicron
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/androidmicron/houmo-drv-xh2_v1.0.0.dev20260123_androidmicron_aarch64.tar.gz
+      houmo-examples-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo-examples-xh1_2.7.0.dev20260123.zip
+      houmo-examples-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo-examples-xh2_v1.0.0.dev20260123.zip
+      houmo-mini-drv-xh2:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo-mini-drv-xh2_1.0.0.dev20260123_arm64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu1804/houmo-mini-drv-xh2_1.0.0.dev20260123_amd64.deb
+      houmo-tcim-runtime-xh1:
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/20/1010/windows11/houmo_tcim_runtime_xh1_windows_x86_64-1.0.0.dev20260120.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/20/1010/ubuntu2004/houmo-tcim-runtime-xh1_1.0.0.dev20260120_arm64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/20/1010/ubuntu2004/houmo_tcim_runtime_xh1_linux_aarch64-1.0.0.dev20260120.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/20/1010/ubuntu1804/houmo-tcim-runtime-xh1_1.0.0.dev20260120_amd64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/20/1010/ubuntu1804/houmo_tcim_runtime_xh1_linux_x86_64-1.0.0.dev20260120.tar.gz
+      houmo-tcim-runtime-xh2:
+      - arch: x86_64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo-tcim-runtime-xh2_1.0.0.dev20260123_amd64.deb
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo_tcim_runtime_xh2_linux_x86_64-1.0.0.dev20260123.tar.gz
+      - arch: x86_64
+        os: windows11
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-1.0.0.dev20260123.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo-tcim-runtime-xh2_1.0.0.dev20260123_arm64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo_tcim_runtime_xh2_linux_aarch64-1.0.0.dev20260123.tar.gz
+      - arch: aarch64
+        os: android
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/android/houmo-tcim-runtime-xh2_v1.0.0.dev20260123_android_aarch64.tar.gz
+      houmo-tcim-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo_tcim_xh1-2.7.0.dev20260123-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu1804/houmo_tcim_xh1-2.7.0.dev20260123-py3-none-any.whl
+      houmo-tcim-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2404/houmo_tcim_xh2-1.0.0.dev20260123-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu2004
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo_tcim_xh2-1.0.0.dev20260123-py3-none-any.whl
+      - arch: x86_64
+        os: ubuntu1804
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu1804/houmo_tcim_xh2-1.0.0.dev20260123-py3-none-any.whl
+      houmo-toolchain-xh1:
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo-toolchain-xh1_2.7.0.dev20260123_ubuntu2004_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu1804/houmo-toolchain-xh1_2.7.0.dev20260123_ubuntu1804_x86_64.tar.gz
+      houmo-toolchain-xh2:
+      - arch: x86_64
+        os: ubuntu2404
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2404/houmo-toolchain-xh2_v1.0.0.dev20260123_ubuntu2404_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu2004
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2004/houmo-toolchain-xh2_v1.0.0.dev20260123_ubuntu2004_x86_64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu1804/houmo-toolchain-xh2_v1.0.0.dev20260123_ubuntu1804_x86_64.tar.gz
+      xhquanttool:
+      - arch: x86_64
+        os: ubuntu2404
+        type: whl
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.0.0/2026/01/23/0200/ubuntu2404/hmquant_xh2-1.0.0.dev20260123-cp312-cp312-linux_x86_64.whl
+  release_xh2_v1.1.0:
+    module:
+      xh2/system_software/buildroot:
+        commit: 3a28fe195c885440deb344336e79bd76e64a37d6
+      xh2/system_software/fsbl:
+        commit: 4a65ef3f4b564d16924ef3f7c0d0a81692ae2c29
+      xh2/system_software/hm_sdk:
+        commit: 6601e70e386e55e44661524e1317bbd7b5650b98
+      xh2/system_software/host:
+        commit: 578538f2bc96795525038bb654f8cabbd3287b4e
+      xh2/system_software/linux:
+        commit: be84ad8873bea33f11c83919a12b74599b6fc548
+      xh2/system_software/opensbi:
+        commit: cd22cada1b2a3426a24a6ffdaf98ba05f4a9ccbd
+      xh2/system_software/scp_firmware:
+        commit: c713c1bec73b235ec068f34512aecddca6443c00
+      xh2/system_software/sifive_tools:
+        commit: 97a6dd5968b05de8dabc52b7721ddc375d1ad79c
+      xh2/system_software/u-boot:
+        commit: 44b39a7caba09d1379d1a572fed54589ded16c11
+    packages:
+      DEBUG-xh2:
+      - os: DEBUG
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/DEBUG/DEBUG-xh2_v1.1.1.dev20260324.zip
+      M50_DM2_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/firmwarexh2/M50_DM2_fw-xh2_v1.1.1.dev20260324.tar.gz
+      M50_EVB_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/firmwarexh2/M50_EVB_fw-xh2_v1.1.1.dev20260324.tar.gz
+      M50_M2_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/firmwarexh2/M50_M2_fw-xh2_v1.1.1.dev20260324.tar.gz
+      M50_PCIE_F_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/firmwarexh2/M50_PCIE_F_fw-xh2_v1.1.1.dev20260324.tar.gz
+      M50_PCIE_H_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/firmwarexh2/M50_PCIE_H_fw-xh2_v1.1.1.dev20260324.tar.gz
+      houmo-drv-xh2:
+      - arch: aarch64
+        os: androidmicron
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/androidmicron/houmo-drv-xh2_v1.1.1.dev20260324_androidmicron_aarch64.tar.gz
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/ubuntu2004/houmo-drv-xh2_1.1.1.dev20260324_arm64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/ubuntu1804/houmo-drv-xh2_1.1.1.dev20260324_amd64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/ubuntu2004/houmo-drv-xh2_v1.1.1.dev20260324_linux_aarch64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/ubuntu1804/houmo-drv-xh2_v1.1.1.dev20260324_linux_x86_64.run
+      - arch: x86_64_exe
+        os: windows11
+        type: exe
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/windows11/houmo-drv-xh2_v1.1.1.dev20260324.exe
+      houmo-mini-drv-xh2:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/ubuntu2004/houmo-mini-drv-xh2_1.1.1.dev20260324_arm64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.1.0/2026/03/24/0200/ubuntu1804/houmo-mini-drv-xh2_1.1.1.dev20260324_amd64.deb
+  xh2a:
+    module:
+      xh2/system_software/buildroot:
+        commit: 3a28fe195c885440deb344336e79bd76e64a37d6
+      xh2/system_software/fsbl:
+        commit: 3b60aef14769bb847904cd667673825f4dc50fc3
+      xh2/system_software/hm_sdk:
+        commit: e1e68d187c7a2f5978b8cb3074b12c7e715fbf20
+      xh2/system_software/host:
+        commit: ee7cbb4c1864e80ca8956f49168b01e944975b27
+      xh2/system_software/linux:
+        commit: 23b3ac9df49e15cc2c87745c5c8ca63bc751bf7f
+      xh2/system_software/nuttx:
+        commit: 21774a55012378d92c616f4e5a8a099b25eb415b
+      xh2/system_software/opensbi:
+        commit: cd22cada1b2a3426a24a6ffdaf98ba05f4a9ccbd
+      xh2/system_software/scp_firmware:
+        commit: 547a30de025b690bbfa20a2f11bfa11748b277ee
+      xh2/system_software/sifive_tools:
+        commit: 97a6dd5968b05de8dabc52b7721ddc375d1ad79c
+      xh2/system_software/u-boot:
+        commit: 44b39a7caba09d1379d1a572fed54589ded16c11
+    packages:
+      DEBUG-xh2:
+      - os: DEBUG
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/DEBUG/DEBUG-xh2_v1.2.0.zip
+      M50_DM2_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/firmwarexh2/M50_DM2_fw-xh2_v1.2.0.tar.gz
+      M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB315_Hynix_12GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB315_Hynix_18GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB315_Hynix_24GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB315_Hynix_36GB_2R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB315_Hynix_48GB_2R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB315_Micron_12GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB315_Micron_18GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB315_Micron_24GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB561_Micron_12GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB561_Micron_18GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB561_Micron_24GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_EVB561_Micron_36GB_2R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_EVB_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/firmwarexh2/M50_EVB_fw-xh2_v1.2.0.tar.gz
+      M50_M2_Micron_12GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_M2_Micron_12GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_M2_Micron_18GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_M2_Micron_18GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_M2_Micron_24GB_1R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_M2_Micron_24GB_1R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_M2_Samsung_48GB_2R_6400MT_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/25/2330/firmwarexh2/M50_M2_Samsung_48GB_2R_6400MT_fw-xh2_v0.7.0.tar.gz
+      M50_M2_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/firmwarexh2/M50_M2_fw-xh2_v1.2.0.tar.gz
+      M50_PCIE_F_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/firmwarexh2/M50_PCIE_F_fw-xh2_v1.2.0.tar.gz
+      M50_PCIE_H_fw-xh2:
+      - os: firmwarexh2
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/firmwarexh2/M50_PCIE_H_fw-xh2_v1.2.0.tar.gz
+      houmo-drv-xh2:
+      - arch: aarch64
+        os: androidmicron18GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/01/19/2330/androidmicron18GB/houmo-drv-xh2_v1.0.0_androidmicron18GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron24GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/01/19/2330/androidmicron24GB/houmo-drv-xh2_v1.0.0_androidmicron24GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron12GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/01/19/2330/androidmicron12GB/houmo-drv-xh2_v1.0.0_androidmicron12GB_aarch64.tar.gz
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/ubuntu1804/houmo-drv-xh2_1.2.0_amd64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/ubuntu2004/houmo-drv-xh2_1.2.0_arm64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/ubuntu2004/houmo-drv-xh2_v1.2.0_linux_aarch64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/ubuntu1804/houmo-drv-xh2_v1.2.0_linux_x86_64.run
+      - arch: x86_64_exe
+        os: windows11
+        type: exe
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/windows11/houmo-drv-xh2_v1.2.0.exe
+      - arch: aarch64
+        os: androidmicron
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/androidmicron/houmo-drv-xh2_v1.2.0_androidmicron_aarch64.tar.gz
+      - arch: aarch64
+        os: openeuler2203
+        type: rpm
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/openeuler2203/houmo-drv-xh2-1.2.0-1.aarch64.rpm
+      - arch: aarch64
+        os: ubuntu2004
+        type: rpm
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/ubuntu2004/houmo-drv-xh2-1.2.0-1.aarch64.rpm
+      - arch: x86_64
+        os: openeuler2203
+        type: rpm
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/openeuler2203/houmo-drv-xh2-1.2.0-1.x86_64.rpm
+      - arch: x86_64
+        os: ubuntu1804
+        type: rpm
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/ubuntu1804/houmo-drv-xh2-1.2.0-1.x86_64.rpm
+      houmo-mini-drv-xh2:
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/ubuntu1804/houmo-mini-drv-xh2_1.2.0_amd64.deb
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2026/03/23/2330/ubuntu2004/houmo-mini-drv-xh2_1.2.0_arm64.deb
+      houmo_drv_xh2:
+      - arch: aarch64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/23/2330/ubuntu2004/houmo_drv_xh2_v0.7.0_ubuntu2004_aarch64.run
+      - arch: x86_64
+        os: ubuntu1804
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/23/2330/ubuntu1804/houmo_drv_xh2_v0.7.0_ubuntu1804_x86_64.run
+      - arch: x86_64
+        os: ubuntu2404
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/11/28/2330/ubuntu2404/houmo_drv_xh2_v0.6.0_ubuntu2404_x86_64.run
+      - arch: x86_64
+        os: ubuntu2204
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/11/28/2330/ubuntu2204/houmo_drv_xh2_v0.6.0_ubuntu2204_x86_64.run
+      - arch: x86_64
+        os: ubuntu2004
+        type: run
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/11/28/2330/ubuntu2004/houmo_drv_xh2_v0.6.0_ubuntu2004_x86_64.run
+      - arch: x86_64
+        os: windows11
+        type: zip
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/23/2330/windows11/houmo_drv_xh2_v0.7.0_windows11_x86_64.zip
+      - os: lmytestwin
+        type: exe
+        url: http://10.10.1.53:8082/artifactory/houmo_software/2025/09/16/1155/lmytestwin/houmo_drv_xh2_v0.4.0.exe
+      - arch: aarch64
+        os: androidmicron18GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/23/2330/androidmicron18GB/houmo_drv_xh2_v0.7.0_androidmicron18GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron12GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/23/2330/androidmicron12GB/houmo_drv_xh2_v0.7.0_androidmicron12GB_aarch64.tar.gz
+      - arch: aarch64
+        os: androidmicron24GB
+        type: tar
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/23/2330/androidmicron24GB/houmo_drv_xh2_v0.7.0_androidmicron24GB_aarch64.tar.gz
+      - arch: x86_64_exe
+        os: windows11
+        type: exe
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/23/2330/windows11/houmo_drv_xh2_v0.7.0.exe
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/23/2330/ubuntu2004/houmo_drv_xh2_0.7.0_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/23/2330/ubuntu1804/houmo_drv_xh2_0.7.0_ubuntu1804_x86_64.deb
+      houmo_mini_drv_xh2:
+      - arch: aarch64
+        os: ubuntu2004
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/23/2330/ubuntu2004/houmo_mini_drv_xh2_0.7.0_ubuntu2004_aarch64.deb
+      - arch: x86_64
+        os: ubuntu1804
+        type: deb
+        url: http://10.10.1.53:8082/artifactory/houmo_software/xh2a/2025/12/23/2330/ubuntu1804/houmo_mini_drv_xh2_0.7.0_ubuntu1804_x86_64.deb

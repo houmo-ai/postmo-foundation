@@ -1,0 +1,40 @@
+name: hliepython_integrate_py311
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  - pip
+  - setuptools>=68
+  - wheel
+
+  # Common runtime/build utilities.
+  - pip:
+      - build>=1.2
+      - fastapi
+      - uvicorn
+      - pydantic>=2
+      - pyyaml
+      - httpx
+      - loguru
+      - jinja2
+      - numpy
+      - scipy
+      - librosa
+      - soundfile
+      - regex
+      - tqdm
+      - pillow
+      - transformers
+      - qwen-vl-utils
+      - gguf
+      - inflect
+
+# Notes:
+# 1. This file intentionally does NOT pin torch / torchaudio / vllm, because
+#    those are hardware- and CUDA-specific in real deployments.
+# 2. Install those separately according to your target machine, then install the
+#    wheel with scripts/install_hliepython.sh.
+# 3. If you use Houmo custom components, also prepare importable tcim_lite and
+#    vllm_houmo before running the service.

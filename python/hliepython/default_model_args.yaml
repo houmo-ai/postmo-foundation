@@ -1,0 +1,207 @@
+
+# 默认模型元信息与 vLLM 启动参数。主要用于动态加载模型时，快速获取模型类型、vLLM 配置等信息。
+
+schema_version: 1
+
+profiles:
+# LLM Models
+  llm: &profile_llm
+    model_type: "llm"
+
+  llm_qwen_tool_call: &profile_llm_qwen_tool_call
+    model_type: "llm"
+    vllm_config:
+      serving:
+        enable-auto-tool-choice: true
+        tool-call-parser: "qwen3_coder"
+
+  llm_qwen_mtp: &profile_llm_qwen_mtp
+    model_type: "llm"
+    vllm_config:
+      engine:
+        speculative-config:
+          model: ""
+          method: "mtp"
+          num_speculative_tokens: 5
+      serving:
+        enable-auto-tool-choice: true
+        tool-call-parser: "qwen3_coder"
+
+  llm_gemma_tool_call: &profile_llm_gemma_tool_call
+    model_type: "llm"
+    vllm_config:
+      serving:
+        enable-auto-tool-choice: true
+        tool-call-parser: "gemma4"
+
+  llm_openai_tool_call: &profile_llm_openai_tool_call
+    model_type: "llm"
+    vllm_config:
+      serving:
+        enable-auto-tool-choice: true
+        tool-call-parser: "openai"
+
+# ASR Models
+  asr_dummy_load: &profile_asr_dummy_load
+    model_type: "asr"
+    vllm_config:
+      engine:
+        load-format: "dummy"
+
+  asr_whisper_dummy_load: &profile_asr_whisper_dummy_load
+    model_type: "asr"
+    vllm_config:
+      engine:
+        load-format: "dummy"
+        max-num-batched-tokens: 2048
+
+  forced_aligner: &profile_forced_aligner
+    model_type: "forced_aligner"
+    vllm_config:
+      engine:
+        load-format: "dummy"
+        hf-overrides:
+          architectures: ["Qwen3ASRForcedAlignerForTokenClassification"]
+        max-model-len: 411
+
+
+# TTS Models
+  tts: &profile_tts
+    model_type: "tts"
+
+
+# Embedding & Reranker Models
+  embedding: &profile_embedding
+    model_type: "embedding"
+
+  reranker_qwen3: &profile_reranker_qwen3
+    model_type: "reranker"
+    vllm_config:
+      engine:
+        hf-overrides:
+          architectures: ["Qwen3ForSequenceClassification"]
+          classifier_from_token: ["no", "yes"]
+          is_original_qwen3_reranker: true
+
+  reranker_bge_m3: &profile_reranker_bge_m3
+    model_type: "reranker"
+    vllm_config:
+      serving:
+        tool-call-parser: "hermes"
+
+models:
+# LLM Models
+  # Qwen3-next
+  HiModel_xh2_qwen3-next-80b-a3b_w4a8h0_ssfp_256_256k_b1_2chips_2cores_v1.4.0_20260709.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  # Qwen3.5
+  HiModel_xh2_qwen3.5-0.8b_w8a16_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_448_448.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-0.8b_w8a16_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_896_896.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-2b_w8a16_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_448_448.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-2b_w8a16_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_896_896.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-4b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_448_448.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-4b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_896_896.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-9b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_448_448.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.5-9b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260708_vit_896_896.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  # Qwen3.6
+  HiModel_xh2_qwen3.6-27b_w4a8_256_128k_b1_1chip_2cores_v1.4.0_20260708_vit_448_448.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.6-27b_w4a8_256_128k_b1_1chip_2cores_v1.4.0_20260708_vit_896_896.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel-Qwen3.6-27b-mtp-w4a8-p256-128K-b1-2core-1d-xh2-v1.4.0-20260716153551_vit_448_448.gguf:
+    <<: *profile_llm_qwen_mtp
+
+  HiModel-Qwen3.6-27b-mtp-w4a8-p256-128K-b1-2core-1d-xh2-v1.4.0-20260716153551_vit_896_896.gguf:
+    <<: *profile_llm_qwen_mtp
+
+  HiModel_xh2_qwen3.6-35b-a3b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260716_vit_448_448.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  HiModel_xh2_qwen3.6-35b-a3b_w4a8_256_256k_b1_1chip_2cores_v1.4.0_20260716_vit_896_896.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+  # GPT-OSS
+  HiModel_xh2_gpt-oss-20b_256_256k_b1_1chip_2cores_v1.4.0_20260708.gguf:
+    <<: *profile_llm_openai_tool_call
+
+  # Gemma4
+  HiModel_xh2_gemma4-e2b_320_128k_b1_1chip_2cores_v1.4.0_20260708.gguf:
+    <<: *profile_llm_gemma_tool_call
+
+  HiModel_xh2_gemma4-e4b_320_128k_b1_1chip_2cores_v1.4.0_20260708.gguf:
+    <<: *profile_llm_gemma_tool_call
+
+  HiModel_xh2_gemma4-26b-a4b_320_256k_b1_1chip_2cores_v1.4.0_20260709_vit_768_2520.gguf:
+    <<: *profile_llm_gemma_tool_call
+
+  HiModel_xh2_gemma4-26b-a4b-mtp_320_256k_b1_1chip_2cores_v1.4.0_20260713_vit_768_2520.gguf:
+    <<: *profile_llm_gemma_tool_call
+
+  HiModel_xh2_gemma4-26b-a4b_320_128k_b1_1chip_2cores_v1.4.0_20260709_vit_768_2520.gguf:
+    <<: *profile_llm_gemma_tool_call
+
+  # GLM-OCR
+  HiModel_xh2_glm-ocr_0.9b_256_8k_b1_1chip_2cores_v1.4.0_20260707.gguf:
+    <<: *profile_llm
+
+  # Qwen
+  HiModel_xh2_copaw-flash-9b_256_8k_b1_1chip_2cores_v1.4.0_20260720.gguf:
+    <<: *profile_llm_qwen_tool_call
+
+
+# ASR & ForcedAligned Models
+  HiModel_xh2_qwen3-asr-0.6b_2k_1chip_2cores_v1.4.0_20260721.gguf:
+    <<: *profile_asr_dummy_load
+  
+  HiModel_xh2_qwen3-asr-1.7b_2k_1chip_2cores_v1.4.0_20260721.gguf:
+    <<: *profile_asr_dummy_load
+
+  HiModel_xh2_whisper-medium_1chip_2cores_v1.4.0_20260721.gguf:
+    <<: *profile_asr_whisper_dummy_load
+
+  HiModel_xh2_whisper-large-v3-turbo_1chip_2cores_v1.4.0_20260721.gguf:
+    <<: *profile_asr_whisper_dummy_load
+  
+  HiModel_xh2_glm-asr_1.9b_b1_1chip_2cores_v1.4.0_20260721.gguf:
+    <<: *profile_asr_dummy_load
+
+  HiModel_xh2_qwen3-forcealigner-0.6b_2k_1chip_2cores_v1.4.0_20260721.gguf:
+    <<: *profile_forced_aligner
+
+
+# TTS Models
+  HiModel_xh2_cosyvoice3-0.5b-2512_256_2k_b1_1chip_2cores_v1.4.0_20260720.gguf:
+    <<: *profile_tts
+
+
+# Embedding & Reranker Models
+  HiModel_xh2_qwen3-embedding-8b_256_8k_b1_1chip_2cores_v1.4.0_20260720.gguf:
+    <<: *profile_embedding
+
+  HiModel_xh2_qwen3-reranker-8b_256_8k_b1_1chip_2cores_v1.4.0_20260720.gguf:
+    <<: *profile_reranker_qwen3
+
+  HiModel_xh2_bge-0.5b_0.5k_b10_1chip_2cores_v1.4.0_20260720.gguf:
+    <<: *profile_embedding
+
+  HiModel_xh2_bge-reranker-v2-m3-0.5b_0.5k_b10_1chip_2cores_v1.4.0_20260720.gguf:
+    <<: *profile_reranker_bge_m3

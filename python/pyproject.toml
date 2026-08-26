@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hliepython"
+version = "3.1.0"
+description = "A multi-process multi-instance OpenAI API server"
+authors = [
+    {name = "wenhao.yang", email = "wenhao.yang@houmo.ai"},
+]
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "pyyaml",
+    "httpx",
+    "loguru",
+    "jinja2",
+    "numpy",
+    "scipy",
+    "librosa",
+    "soundfile",
+    "regex",
+    "tqdm",
+    "pillow",
+    "torch",
+    "torchaudio",
+    "transformers",
+    "qwen-vl-utils",
+    "gguf",
+    "inflect",
+    "vllm>=0.4.0",
+    "openai-whisper",
+    "resampy",
+    "vllm[audio]",
+]
+readme = "hliepython/README.md"
+requires-python = ">=3.11"
+
+[project.scripts]
+hliepython = "hliepython.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hliepython*"]
+
+[tool.setuptools.package-data]
+hliepython = [
+    "*.yaml",
+    "*.yml",
+    "model_server/engines/files/*.json",
+    "model_server/engines/files/*.wav",
+    "model_server/engines/files/audio/*.mp3",
+]
