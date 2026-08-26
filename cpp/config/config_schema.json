@@ -1,0 +1,343 @@
+{
+  "version": 1,
+  "sections": {
+    "server": {
+      "description": "HTTP service and hardware device settings.",
+      "keys": {
+        "port": {
+          "type": "integer",
+          "description": "TCP port used by the HTTP API service."
+        },
+        "devices": {
+          "type": "string",
+          "description": "Comma-separated device IDs available to this service instance."
+        },
+        "rk_perf": {
+          "type": "boolean",
+          "description": "Enable RK3588 CPU affinity and TCIM synchronization optimizations."
+        },
+        "rk_perf_cores": {
+          "type": "string",
+          "description": "Comma-separated RK3588 Cortex-A76 CPU core IDs used when rk_perf is enabled."
+        },
+        "replicas": {
+          "type": "integer",
+          "description": "Legacy total process instance count; use replica.count for new configurations."
+        },
+        "memory_saving": {
+          "type": "boolean",
+          "description": "Legacy worker delayed-loading switch; use replica.memory_saving for new configurations."
+        }
+      }
+    },
+    "realtime": {
+      "description": "OpenAI-compatible Realtime API settings.",
+      "keys": {
+        "max_pending_segments": {
+          "type": "integer",
+          "description": "Maximum committed audio segments waiting for Realtime ASR inference, clamped to 1-64."
+        },
+        "asr_inference_timeout_sec": {
+          "type": "integer",
+          "description": "Maximum time for one Realtime ASR inference, clamped to 5-300 seconds."
+        }
+      }
+    },
+    "proxy": {
+      "description": "Timeouts for HTTP forwarding from the master service to model subprocesses.",
+      "keys": {
+        "connect_timeout_ms": {
+          "type": "integer",
+          "description": "Maximum time to connect to a local model subprocess, clamped to 100-10000 ms."
+        },
+        "non_stream_read_timeout_sec": {
+          "type": "integer",
+          "description": "Idle read timeout for non-streaming model responses, clamped to 60-3600 seconds."
+        },
+        "stream_idle_timeout_sec": {
+          "type": "integer",
+          "description": "Maximum interval without response bytes for streaming requests, clamped to 10-600 seconds."
+        },
+        "write_timeout_sec": {
+          "type": "integer",
+          "description": "Timeout for writing a request to a model subprocess, clamped to 5-300 seconds."
+        },
+        "max_request_timeout_sec": {
+          "type": "integer",
+          "description": "Absolute upper bound for a proxied request, clamped to 300-7200 seconds."
+        }
+      }
+    },
+    "admission": {
+      "description": "Bounded inference request admission queues.",
+      "keys": {
+        "llm_max_in_flight": {
+          "type": "integer",
+          "description": "Maximum admitted LLM requests including streams, clamped to 1-4096."
+        },
+        "qwen3_tts_max_in_flight": {
+          "type": "integer",
+          "description": "Maximum admitted Qwen3-TTS requests including streams, clamped to 1-64."
+        },
+        "control_plane_reserved_threads": {
+          "type": "integer",
+          "description": "HTTP worker threads reserved from LLM/TTS admission so control-plane callbacks and probes can still run."
+        },
+        "queue_wait_timeout_ms": {
+          "type": "integer",
+          "description": "Maximum time a Whisper, TTS, or Stable Diffusion request may wait in a service queue, clamped to 100-3600000 ms."
+        },
+        "whisper_max_queued": {
+          "type": "integer",
+          "description": "Maximum queued Whisper requests, clamped to 1-1024."
+        },
+        "tts_max_queued": {
+          "type": "integer",
+          "description": "Maximum queued CosyVoice/TTS requests, clamped to 1-1024."
+        },
+        "sd_max_queued": {
+          "type": "integer",
+          "description": "Maximum queued Stable Diffusion requests, clamped to 1-128."
+        }
+      }
+    },
+    "resource": {
+      "description": "Transactional hardware resource reservation settings.",
+      "keys": {
+        "pending_reservation_ttl_sec": {
+          "type": "integer",
+          "description": "Age after which an ownerless pending device reservation may be rolled back, clamped to 30-3600 seconds. Active loading owners and live workers are never expired blindly."
+        }
+      }
+    },
+    "worker_supervisor": {
+      "description": "Subprocess liveness and READY-state convergence.",
+      "keys": {
+        "poll_interval_ms": {
+          "type": "integer",
+          "description": "Child process liveness polling interval, clamped to 100-10000 ms."
+        },
+        "ready_timeout_sec": {
+          "type": "integer",
+          "description": "Maximum time a live child may remain LOADING before termination, clamped to 5-3600 seconds."
+        },
+        "graceful_shutdown_timeout_ms": {
+          "type": "integer",
+          "description": "Maximum time to wait for a dynamic worker to exit after accepting the internal shutdown request, clamped to 100-60000 ms."
+        },
+        "shutdown_response_grace_ms": {
+          "type": "integer",
+          "description": "Worker-side delay before stopping the HTTP server so the shutdown acknowledgement can be flushed, clamped to 0-2000 ms."
+        },
+        "port_probe_attempts": {
+          "type": "integer",
+          "description": "Maximum consecutive instance ports to probe before rejecting a dynamic worker launch, clamped to 1-4096."
+        }
+      }
+    },
+    "replica": {
+      "description": "Multi-process replica scheduling settings.",
+      "keys": {
+        "count": {
+          "type": "integer",
+          "description": "Total hi.cpp process instances, including the master instance."
+        },
+        "device_policy": {
+          "type": "string",
+          "description": "Policy used to assign devices to replica processes.",
+          "options": [
+            "prefer_idle_card",
+            "prefer_used_card",
+            "exclusive_card"
+          ]
+        },
+        "max_instances_per_device": {
+          "type": "integer",
+          "description": "Maximum process instances assigned to one device unless exclusive_card is selected."
+        },
+        "memory_saving": {
+          "type": "boolean",
+          "description": "Delay worker model loading to reduce peak startup memory use."
+        },
+        "startup_delay_sec": {
+          "type": "integer",
+          "description": "Per-instance startup delay in seconds when memory_saving is enabled."
+        }
+      }
+    },
+    "balancer": {
+      "description": "External management service and load balancer registration settings.",
+      "keys": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Register this service instance with the external management service."
+        },
+        "management_url": {
+          "type": "string",
+          "description": "Base URL of the external management service."
+        },
+        "target_host": {
+          "type": "string",
+          "description": "Host address advertised by this instance to the management service."
+        },
+        "heartbeat_interval_ms": {
+          "type": "integer",
+          "description": "Heartbeat interval to the management service in milliseconds."
+        }
+      }
+    },
+    "log": {
+      "description": "Application and TCIM logging settings.",
+      "keys": {
+        "level": {
+          "type": "string",
+          "description": "Application log verbosity level.",
+          "options": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ]
+        },
+        "tcim_level": {
+          "type": "integer",
+          "description": "TCIM log level: 1=info, 2=error, 3=warn, 4=debug.",
+          "options": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "retention_days": {
+          "type": "integer",
+          "description": "Number of calendar-day log directories retained, including today. Zero enables count-based rotation without date directories."
+        },
+        "max_files": {
+          "type": "integer",
+          "description": "Maximum parts per logger per day in date mode, or per logger globally when retention_days is zero. Zero means unlimited."
+        },
+        "max_file_size": {
+          "type": "string",
+          "description": "Maximum size of each application and TCIM log part using an integer K/M/G binary unit, for example 512K or 10M. Valid range: 64K to 1G."
+        },
+        "compress_rotated_files": {
+          "type": "boolean",
+          "description": "Compress closed rotated log parts to individual .log.gz files in a background worker."
+        },
+        "compression_level": {
+          "type": "integer",
+          "description": "Gzip compression level from 1 (fastest) to 9."
+        },
+        "location": {
+          "type": "string",
+          "description": "Directory used to store application log files."
+        },
+        "open_console_window": {
+          "type": "boolean",
+          "description": "Open a console window when running the Windows SDK or demo application."
+        }
+      }
+    },
+    "llm_params": {
+      "description": "Command-line options passed through to llama-server.",
+      "keys": {
+        "--jinja": {
+          "type": "string",
+          "description": "Enable llama-server Jinja chat template processing when the option is present."
+        },
+        "--reasoning-format": {
+          "type": "string",
+          "description": "Reasoning content extraction format used by llama-server.",
+          "options": [
+            "auto",
+            "none",
+            "deepseek",
+            "deepseek-legacy"
+          ]
+        }
+      }
+    },
+    "model": {
+      "description": "Model discovery, loading, and runtime residency settings.",
+      "keys": {
+        "cur_model": {
+          "type": "string",
+          "description": "Root directory scanned for model files."
+        },
+        "default": {
+          "type": "string",
+          "description": "Default LLM or Whisper model name without its file extension."
+        },
+        "default_mmproj": {
+          "type": "string",
+          "description": "Default multimodal projector model name without its file extension."
+        },
+        "enable_sd3": {
+          "type": "boolean",
+          "description": "Load the configured Stable Diffusion 3 model by default."
+        },
+        "auto_load": {
+          "type": "boolean",
+          "description": "Automatically load the model requested by completion or embedding APIs."
+        },
+        "discovery_scan_interval_sec": {
+          "type": "integer",
+          "description": "Interval in seconds for detecting newly downloaded models; 0 disables periodic discovery."
+        },
+        "discovery_stability_sec": {
+          "type": "integer",
+          "description": "Time a changed model directory must remain unchanged before new GGUF files are validated and registered."
+        },
+        "discovery_scan_on_models_request": {
+          "type": "boolean",
+          "description": "Allow unknown model lookups to wake the background discovery worker; GET /v1/models never triggers discovery."
+        },
+        "discovery_request_cooldown_sec": {
+          "type": "integer",
+          "description": "Minimum seconds between on-demand discovery requests; concurrent requests are coalesced."
+        },
+        "discovery_request_wait_sec": {
+          "type": "integer",
+          "description": "Maximum seconds an on-demand model lookup waits for discovery registration; 0 disables waiting."
+        },
+        "auto_unload": {
+          "type": "boolean",
+          "description": "Allow idle models to be evicted by memory, count, or idle-time policies."
+        },
+        "idle_ttl_sec": {
+          "type": "integer",
+          "description": "Idle time in seconds before a model may be evicted; 0 disables TTL eviction."
+        },
+        "max_loaded_models": {
+          "type": "integer",
+          "description": "Maximum concurrently loaded models; 0 means unlimited."
+        },
+        "pinned_models": {
+          "type": "string",
+          "description": "Comma-separated model identifiers protected from automatic eviction."
+        },
+        "llm_lazy_mode": {
+          "type": "boolean",
+          "description": "Enable lazy loading for LLM models."
+        },
+        "llm_presets_enabled": {
+          "type": "boolean",
+          "description": "Enable per-model llama.cpp preset and local override resolution."
+        },
+        "llm_preset_catalog": {
+          "type": "string",
+          "description": "Path to the versioned official per-model llama.cpp preset catalog."
+        },
+        "llm_override_catalog": {
+          "type": "string",
+          "description": "Path to the deployment-local per-model llama.cpp override catalog."
+        },
+        "llm_preset_strict": {
+          "type": "boolean",
+          "description": "Fail initialization when an existing llama.cpp preset catalog is invalid."
+        }
+      }
+    }
+  }
+}

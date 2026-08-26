@@ -1,0 +1,326 @@
+###
+POST http://127.0.0.1:7901/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "HiModel_xh2_qwen3.5_9b_256_32k_b1_1chip_2cores_v1.2.0_20260401",
+  "messages": [
+    {
+      "role": "system",
+      "content": "你是一位资深且热情的秘书, 可以满足用户各种日常需求，说话很温柔是你的特质，每次说完话都会小小笑一下~"
+    },
+    {
+      "role": "user",
+      "content": "中午吃什么饭呀？"
+    }
+  ],
+  "top_k": 30,
+  "temperature": 0,
+  "top_p": 0.88,
+  "stream": true
+}
+
+###
+
+GET http://127.0.0.1:7901/health
+Content-Type: application/json
+
+###
+
+POST http://localhost:7901/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "1.0.0%2FHiModel_xh2_qwen3-vl_8b_256_32k_b1_1chip_2cores_v1.0.0_20260205",
+  "messages": [
+    {
+      "role": "system",
+      "content": "你是一位资深且热情的旅游专家，拥有丰富的全球旅游知识和经验，熟知世界各地的热门景点、小众秘境、特色美食、独特文化以及最佳旅行时间。无论是规划一次浪漫的蜜月之旅、充满挑战的户外探险之旅，还是适合家庭出行的亲子游，你都能根据客户的预算、兴趣偏好和时间安排，提供详细且个性化的旅行方案。\n当客户向你咨询时，请以友好、耐心且专业的态度回复。清晰地介绍各个旅行目的地的特点，包括景点的历史背景、文化意义、游玩攻略等。对于美食推荐，不仅要说出菜名，还可以描述其口味和制作方法。在安排行程时，要合理规划时间，考虑交通便利性和休息时间。如果客户有特殊需求，比如对某些食物过敏、行动不便等，要特别注意并提供相应的解决方案。\n现在，请准备好为客户提供优质的旅游咨询服务，你可以先介绍一些热门的旅游目的地及其特色，引导客户说出他们的旅行需求。"
+    },
+    {
+      "role": "user",
+      "content": "你知道上海吗？"
+    }
+  ],
+  "stream": true
+}
+
+### models
+
+GET http://localhost:7901/v1/models
+Content-Type: application/json
+
+### Slots
+
+GET http://localhost:7901/slots
+Content-Type: application/json
+
+
+###
+POST http://localhost:7901/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "test",
+  "messages": [
+    {
+      "role": "user",
+      "content": "你了解上海吗？"
+    }
+  ]
+}
+
+
+### message参数 错误测试
+POST http://localhost:7901/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "test",
+  "messages": [
+    {
+      "content": "user"
+    }
+  ]
+}
+
+### devices
+GET http://localhost:7901/hlie/v1/devices
+Content-Type: application/json
+
+
+### start
+POST http://localhost:7901/hlie/v1/start
+Content-Type: application/json
+
+{
+  "devices": "1",
+  "model": "HiModel_xh2_qwen3-vl_4b_256_32k_b1_1chip_2cores_v0.7.0_20251220",
+  "params": {
+    "mm_proj_path": "mmproj_xh2_qwen3-vl_4b_2cores_vit_448x448_v0.7.0_20251220.gguf"
+  }
+}
+
+### start SD
+POST http://localhost:7901/hlie/v1/start
+Content-Type: application/json
+
+{
+  "model_type": "sd",
+  "params": {
+    "vae_model": "SD3/vae.hmm",
+    "t5_model": "SD3/t5.hmm",
+    "clip_model" : "SD3/clip.hmm",
+    "clip_l_model" : "SD3/clip_l.hmm",
+    "mmdit_model" : "SD3/mmdit.hmm"
+  }
+}
+
+### explicitly refresh model discovery after downloading model files
+POST http://localhost:7901/hlie/v1/models/refresh
+Content-Type: application/json
+
+{
+  "wait": true
+}
+
+
+### start WHISPER
+POST http://localhost:7901/hlie/v1/start
+Content-Type: application/json
+
+{
+  "model_type": "whisper",
+  "model": "HiModel_xh2_whisper-medium_1.5b_256_1chip_2cores_v1.0.0_20260228"
+}
+
+### start TTS
+POST http://localhost:7901/hlie/v1/start
+Content-Type: application/json
+
+{
+  "model_type": "cosyvoice",
+  "model": "HiModel_xh2_cosyvoice3_0.5b_1chip_2cores_v1.1.0-20260409"
+}
+
+### unload by model identity (preferred; works across service kinds/processes)
+POST http://localhost:7901/hlie/v1/unload_model
+Content-Type: application/json
+
+{
+  "model_id": "HiModel_xh2_qwen3-asr_0.6b_b1_1chip_2cores_v1.3.0_20260522"
+}
+
+### legacy unload by service type (kept for compatibility)
+POST http://localhost:7901/hlie/v1/unload_model
+Content-Type: application/json
+
+{
+  "model_type": "whisper"
+}
+
+### try legacy TTS route (no model means CosyVoice)
+# Response header: X-HLIE-TTS-Backend: cosyvoice
+# @timeout 600
+POST http://localhost:7901/v1/audio/speech
+Content-Type: application/json
+
+{
+  "input": "接下来你想做什么。是想让我帮你查个资料，还是单纯想聊聊天？"
+}
+
+### try CosyVoice zero-shot voice clone through the legacy route
+# Response header: X-HLIE-TTS-Backend: cosyvoice
+# @timeout 600
+POST http://localhost:7901/v1/audio/speech
+Content-Type: application/json
+
+{
+  "input": "君不见，黄河之水天上来，奔流到海不复回。君不见，高堂明镜悲白发，朝如青丝暮成雪！人生得意须尽欢，莫使金樽空对月。",
+  "prompt_wav_path": "E:/test_data/tts/zero_shot_0.wav",
+  "prompt_text": "八百标兵奔北坡，北坡炮兵并排跑，炮兵怕把标兵碰，标兵怕碰炮兵炮。"
+}
+
+
+### stop
+POST http://localhost:7901/hlie/v1/stop
+Content-Type: application/json
+
+{
+  "instance_id": 0,
+  "process_id": 0
+}
+
+
+### status
+GET http://localhost:7901/hlie/v1/status
+Content-Type: application/json
+
+### start mm
+POST http://localhost:7901/hlie/v1/start
+Content-Type: application/json
+
+{
+  "devices": "0",
+  "model_path": "HiModel_xh2_qwen3-vl_8b_256_8k_b1_1chip_2cores_v0.6.0_20251201.gguf",
+  "model_type": "llm",
+  "params": {
+    "context_size": 8192,
+    "batch": 1,
+    "core_num": 2,
+    "is_mm": true,
+    "mm_proj_path": "mmproj_xh2_qwen3-vl_8b_vit_448_448_v0.6.0_20251201.gguf",
+    "xh_version": 1,
+    "size": "8B"
+  }
+}
+
+### embed
+POST http://localhost:7901/v1/embeddings
+Content-Type: application/json
+
+{
+  "model": "HiModel_xh2_gte_1.5b_256_1chip_2cores_v1.1.0_20260329",
+  "input": "这是一段测试的文笔",
+  "n_tokens": 5
+}
+
+
+### audio transcription
+POST http://127.0.0.1:7901/v1/audio/transcriptions
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="jfk.wav"
+
+< D:/workspace/wtt/houmo/llm/hi.cpp/samples/zero_shot_prompt.wav
+
+--WebAppBoundary
+Content-Disposition: form-data; name="model"
+
+HiModel_xh2_whisper-medium_1chip_2cores_v1.4.0_20260721
+
+--WebAppBoundary
+Content-Disposition: form-data; name="temperature"
+
+0.0
+
+--WebAppBoundary
+Content-Disposition: form-data; name="language"
+
+auto
+
+--WebAppBoundary
+Content-Disposition: form-data; name="temperature_inc"
+
+0.2
+
+--WebAppBoundary--
+
+
+### audio transcription
+POST http://127.0.0.1:7901/v1/audio/transcriptions
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="jfk.wav"
+
+< E:/test_data/audio/61-70968-0000.wav
+
+--WebAppBoundary
+Content-Disposition: form-data; name="model"
+
+HiModel_xh2_qwen3-asr-1.7b_2k_1chip_2cores_v1.4.0_20260721
+
+--WebAppBoundary
+Content-Disposition: form-data; name="temperature"
+
+0.0
+
+--WebAppBoundary
+Content-Disposition: form-data; name="temperature_inc"
+
+0.2
+
+--WebAppBoundary--
+
+###
+
+### audio transcription with word timestamps (Qwen3 ASR + Qwen3 ForceAligner pipeline)
+POST http://127.0.0.1:7901/v1/audio/transcriptions
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="jfk.wav"
+
+< E:/test_data/audio/61-70968-0000.wav
+
+--WebAppBoundary
+Content-Disposition: form-data; name="model"
+
+HiModel_xh2_qwen3-asr_0.6b_b1_1chip_2cores_v1.3.0_20260522
+
+--WebAppBoundary
+Content-Disposition: form-data; name="aligner_model"
+
+HiModel_xh2_qwen3-ForcedAligner_0.6b_2cores_v1.3.0_20260525
+
+--WebAppBoundary
+Content-Disposition: form-data; name="response_format"
+
+verbose_json
+
+--WebAppBoundary
+Content-Disposition: form-data; name="timestamp_granularities[]"
+
+word
+
+--WebAppBoundary
+Content-Disposition: form-data; name="temperature"
+
+0.0
+
+--WebAppBoundary--
+
+###
+

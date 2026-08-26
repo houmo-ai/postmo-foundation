@@ -1,0 +1,18 @@
+[Unit]
+Description=Houmo Lanyue Infer Engine Service
+#After=graphical.target
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/HLIECpp/bin/HLIECpp
+WorkingDirectory=/opt/HLIECpp
+Restart=always
+RestartSec=5
+Environment=LD_LIBRARY_PATH=/usr/local/houmo-sdk/hal/lib:/opt/HLIECpp/lib:$LD_LIBRARY_PATH
+Environment=HDPL_PLATFORM=ASIC
+Environment=TCIM_LOG_TAGS=all
+User=root
+
+[Install]
+WantedBy=multi-user.target

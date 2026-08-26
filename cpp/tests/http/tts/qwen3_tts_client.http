@@ -1,0 +1,261 @@
+@host = http://127.0.0.1:7901
+@modelType = qwen3_tts
+@device = 0
+@modelPath = E:/models/HiModel_xh2_qwen3-tts-1.7b-customvoice-w8a16-256-2k-b1-1chip-2cores-v1.4.0_20260720.gguf
+@model = HiModel_xh2_qwen3-tts-1.7b-customvoice-w8a16-256-2k-b1-1chip-2cores-v1.4.0_20260720
+@baseModelPath = E:/models/HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0.gguf
+@baseModel = HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0
+@referenceWav = D:/workspace/wtt/houmo/imodelzoo/data/audio/clone_1.wav
+
+### 1. Check available devices before loading
+GET {{host}}/hlie/v1/devices
+Content-Type: application/json
+
+### 2. Dynamically load the Qwen3-TTS GGUF
+# @timeout 600
+POST {{host}}/models/load
+Content-Type: application/json
+
+{
+  "model_type": "{{modelType}}",
+  "model_path": "{{modelPath}}",
+  "devices": "{{device}}"
+}
+
+### 3. Check service health and model status
+GET {{host}}/health
+Content-Type: application/json
+
+### 4. Run deterministic Frontend + Talker prefill debug
+# Compare input_ids, prompt_length, logits_shape and first_codec_token with Python.
+# Python tokenizer reference for this exact text:
+# [151644,77091,198,108386,3837,100437,37029,1207,16948,18,9285,9951,1773,151645,198,151644,77091,198]
+# Python/HMM reference: prompt_length=20, prompt_sum=-42.94773865,
+# prompt_abs_mean=0.02886092663, logits_shape=[1,1,3072], first_codec_token=1995,
+# first_codec_logit=33.34375.
+# @timeout 600
+POST {{host}}/hlie/v1/qwen3_tts/prefill_debug
+Content-Type: application/json
+
+{
+  "text": "你好，欢迎使用 Qwen3-TTS。",
+  "language": "Chinese",
+  "speaker": "vivian"
+}
+
+### 5. Generate three deterministic 16-codebook codec frames
+# Python/HMM reference:
+# [[1995,1159,355,22,1174,1093,625,1814,1058,905,1846,1247,1677,889,812,901],
+#  [1028,1751,144,1444,13,528,177,1390,430,610,915,1185,1176,1961,1165,1086],
+#  [2007,1383,1334,486,153,1321,1911,122,113,210,539,960,123,428,1081,300]]
+# @timeout 600
+POST {{host}}/hlie/v1/qwen3_tts/codec_frames_debug
+Content-Type: application/json
+
+{
+  "text": "你好，欢迎使用 Qwen3-TTS。",
+  "language": "Chinese",
+  "speaker": "vivian",
+  "max_frames": 3
+}
+
+### 6. Generate speech through the OpenAI-compatible API
+# Response header: X-HLIE-TTS-Backend: qwen3_tts
+# @timeout 600
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{model}}",
+  "input": "其中配置文件中的default_mmproj 可以留空，因为服务会自动根据 name 匹配到对应的 mmproj 文件，如果存在多个同版本&同构建时间不同分辨率的 mmproj，则需要指定到具体 mmproj 名称。",
+  "voice": "vivian",
+  "language": "Chinese",
+  "response_format": "wav",
+  "speed": 1.0,
+  "seed": 1024,
+  "max_frames": 512
+}
+
+### 7. Generate greedy-to-EOS speech through the model-specific debug API
+# The response headers expose frame/sample counts for quick comparison.
+# Invariant: samples == generated codec frames * 1920. Near-tied Talker logits can
+# make the exact EOS step vary across independent NPU process starts.
+# @timeout 600
+POST {{host}}/hlie/v1/qwen3_tts/speech_debug
+Content-Type: application/json
+
+{
+  "input": "你好，欢迎使用 Qwen3-TTS。",
+  "language": "Chinese",
+  "voice": "vivian",
+  "max_frames": 256
+}
+
+### 8. Verify Stateful Decoder independently with fixed codec frames
+# This isolates decoder state/chunk/cropping behavior from Talker generation.
+# Expected: codec_frames=3, samples=5760.
+# @timeout 600
+POST {{host}}/hlie/v1/qwen3_tts/stateful_decoder_debug
+Content-Type: application/json
+
+{
+  "codec_frames": [
+    [1995,1159,355,22,1174,1093,625,1814,1058,905,1846,1247,1677,889,812,901],
+    [1028,1751,144,1444,13,528,177,1390,430,610,915,1185,1176,1961,1165,1086],
+    [2007,1383,1334,486,153,1321,1911,122,113,210,539,960,123,428,1081,300]
+  ]
+}
+
+### 9. Reject an out-of-range Stateful Decoder token before NPU execution
+POST {{host}}/hlie/v1/qwen3_tts/stateful_decoder_debug
+Content-Type: application/json
+
+{
+  "codec_frames": [
+    [3072,1159,355,22,1174,1093,625,1814,1058,905,1846,1247,1677,889,812,901]
+  ]
+}
+
+### 10. Reject a truncated production response when EOS is not reached
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{modelType}}",
+  "input": "Qwen3-TTS production truncation check.",
+  "voice": "vivian",
+  "language": "English",
+  "response_format": "wav",
+  "max_frames": 1
+}
+
+### 11. Reject an integer that cannot be represented by max_frames
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{modelType}}",
+  "input": "Qwen3-TTS range check.",
+  "voice": "vivian",
+  "language": "English",
+  "max_frames": 18446744073709551615
+}
+
+### 12. Check workflow status after inference
+GET {{host}}/hlie/v1/status
+Content-Type: application/json
+
+### 13. Unload CustomVoice before switching variants
+# @timeout 600
+POST {{host}}/models/unload
+Content-Type: application/json
+
+{
+  "model_type": "{{modelType}}"
+}
+
+### 14. Load the Base voice-clone GGUF
+# @timeout 600
+POST {{host}}/models/load
+Content-Type: application/json
+
+{
+  "model_type": "{{modelType}}",
+  "model_path": "{{baseModelPath}}",
+  "devices": "{{device}}"
+}
+
+### 15. Reject a different registered Qwen3-TTS model while Base is loaded
+# Expected: 400 requested speech model is not loaded. The router must not run
+# the currently loaded Base service for this concrete CustomVoice model ID.
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{model}}",
+  "input": "Qwen3-TTS concrete model routing regression.",
+  "voice": "vivian",
+  "language": "English",
+  "max_frames": 1
+}
+
+### 16. Base voice-clone reference frontend debug
+# Base GGUFs do not contain a speaker map.  The reference audio is encoded by
+# the speech-tokenizer encoder and speaker encoder on every request.
+# @timeout 600
+POST {{host}}/hlie/v1/qwen3_tts/reference_debug
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "prompt_wav_path": "{{referenceWav}}"
+}
+
+### 17. Base voice-clone Talker/code debug
+# prompt_text/prompt_wav_path are the preferred names; reference_text and
+# reference_audio_path are accepted aliases for clients that already use them.
+# @timeout 600
+POST {{host}}/hlie/v1/qwen3_tts/codec_frames_debug
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "input": "This is a Base voice clone test.",
+  "language": "English",
+  "prompt_text": "This is the reference recording.",
+  "prompt_wav_path": "{{referenceWav}}",
+  "max_frames": 24
+}
+
+### 18. Base voice-clone speech through the OpenAI-compatible API
+# Base mode requires model + prompt_text + prompt_wav_path.  It uses seeded
+# sampling and returns a normal 24 kHz WAV response.
+# @timeout 600
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "input": "This is a Base voice clone test.",
+  "language": "English",
+  "prompt_text": "This is the reference recording.",
+  "prompt_wav_path": "{{referenceWav}}",
+  "response_format": "wav",
+  "seed": 1024,
+  "max_frames": 256
+}
+
+### 19. Reject an invalid Base reference path as a client error
+# Expected: HTTP 400 invalid_request_error, not a server error.
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "{{baseModel}}",
+  "input": "Invalid reference path regression.",
+  "language": "English",
+  "prompt_text": "Reference transcript.",
+  "prompt_wav_path": "Z:/does-not-exist.wav",
+  "max_frames": 32
+}
+
+### 20. Dynamically unload Qwen3-TTS
+# @timeout 600
+POST {{host}}/models/unload
+Content-Type: application/json
+
+{
+  "model_type": "{{modelType}}"
+}
+
+### Optional: load by registered model name instead of model_path
+# Run this only when {{model}} is already present in /v1/models.
+# @timeout 600
+POST {{host}}/hlie/v1/start
+Content-Type: application/json
+
+{
+  "model_type": "{{modelType}}",
+  "model": "{{model}}",
+  "devices": "{{device}}"
+}

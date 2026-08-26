@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "catalog_version": "2.1.1",
+  "runtime": {
+    "hlie_min_version": "2.1.0",
+    "hlie_max_version": "2.1.x"
+  },
+  "presets": []
+}

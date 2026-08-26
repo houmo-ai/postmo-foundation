@@ -1,0 +1,38 @@
+@host = http://127.0.0.1:7901
+
+### Qwen3-TTS Base Clone: minimal non-streaming request
+# Prerequisite: a Qwen3-TTS Base model is already loaded.
+# Omitting both prompt fields selects samples/zero_shot_prompt.wav and its
+# built-in transcript. Omitting response_format also verifies the WAV default.
+# @timeout 600
+POST {{host}}/v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "qwen3_tts",
+  "input": "你好，这是Qwen3-TTS默认克隆音色的简化非流式测试。",
+  "language": "Chinese",
+  "stream": false,
+  "seed": 1024,
+  "max_frames": 256
+}
+
+> {%
+    client.test("Qwen3-TTS Base Clone returns one complete WAV", function () {
+        client.assert(response.status === 200, "expected HTTP 200");
+        client.assert(response.headers.valueOf("Content-Type").includes("audio/wav"),
+            "expected audio/wav");
+        client.assert(response.headers.valueOf("X-HLIE-TTS-Backend") === "qwen3_tts",
+            "wrong TTS backend");
+        client.assert(response.headers.valueOf("X-Qwen3-TTS-Variant") === "base",
+            "wrong Qwen3-TTS variant");
+        client.assert(response.headers.valueOf("X-Qwen3-TTS-Reference-Profile") === "default-zero-shot",
+            "default Clone profile was not selected");
+        client.assert(response.headers.valueOf("X-Qwen3-TTS-Reached-EOS") === "true",
+            "generation did not reach EOS");
+        client.assert(Number(response.headers.valueOf("X-Qwen3-TTS-Frames")) > 0,
+            "no codec frames generated");
+        client.assert(Number(response.headers.valueOf("X-Qwen3-TTS-Samples")) > 0,
+            "no audio samples generated");
+    });
+%}

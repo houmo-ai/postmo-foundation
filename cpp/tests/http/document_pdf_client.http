@@ -1,0 +1,53 @@
+### PDF document preprocess via chat/completions multipart
+# This exercises DocumentInputAdapter::inspect(req.files) and routes the request
+# to DocumentPipelineService before normal LLM generation.
+#
+# Change these two values before running from JetBrains HTTP Client.
+@host = 127.0.0.1
+@port = 7901
+@model = HiModel_xh2_glm-ocr_0.9b_256_2k_b1_1chip_2cores_v1.4.0_20260707
+@pdf = E:/test_data/cpio.5.pdf
+
+POST http://{{host}}:{{port}}/v1/chat/completions
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="model"
+
+{{model}}
+
+--WebAppBoundary
+Content-Disposition: form-data; name="messages"
+
+[{"role":"user","content":"Please preprocess this PDF."}]
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="sample.pdf"
+Content-Type: application/pdf
+
+< {{pdf}}
+
+--WebAppBoundary--
+
+### PDF document preprocess via responses multipart
+# @timeout 600
+POST http://{{host}}:{{port}}/v1/responses
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="model"
+
+{{model}}
+
+--WebAppBoundary
+Content-Disposition: form-data; name="input"
+
+[{"role":"user","content":[{"type":"input_text","text":"Please preprocess this PDF."}]}]
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="sample.pdf"
+Content-Type: application/pdf
+
+< E:/test_data/cpio.5.pdf
+
+--WebAppBoundary--

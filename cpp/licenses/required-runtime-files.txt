@@ -1,0 +1,25 @@
+# One repository-relative path per line. Both Windows and Linux packaging fail
+# when a listed file is missing. Keep this list synchronized with
+# THIRD_PARTY_NOTICES.md and the binaries copied by the package scripts.
+README.md
+THIRD_PARTY_NOTICES.md
+zlib/LICENSE.txt
+cpp-httplib/LICENSE.txt
+spdlog/LICENSE.txt
+inih/LICENSE.txt
+nlohmann-json/LICENSE.MIT
+base64/UNLICENSE.txt
+stb/LICENSE.txt
+libsamplerate/COPYING
+kaldi-native-fbank/LICENSE
+uwebsockets/LICENSE
+usockets/LICENSE
+libuv/LICENSE
+eigen/MPL-2.0.txt
+pdfium/UPSTREAM-LICENSE.txt
+pdfium/CHROMIUM-LICENSE.txt
+pdfium/ICU-LICENSE.txt
+pdfium/LLVM-LICENSE.txt
+pdfium/HARFBUZZ-COPYING.txt
+pdfium/ABSEIL-LICENSE.txt
+pdfium/ZLIB-LICENSE.txt
