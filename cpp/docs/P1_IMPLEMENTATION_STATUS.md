@@ -134,22 +134,22 @@
 - Windows `HLIE_TESTS_ONLY=ON`：`hlie-core`、test support、unit target 构建通过，CTest 5/5 通过（含三条架构门禁和真实 Scheduler 契约测试）。
 - Linux P1-4 精确源码在隔离 worktree 中 clean build 通过；产品目标 `houmo-llm-hi-cpp-linux` 构建通过，完整 CTest 7/7 通过（四条 architecture gate、unit、stress、WorkerSupervisor component）。
 - Linux 构建发现并修复 `hlie-core` 静态库进入 `libhlie-app.so` 时缺少 PIC 的目标属性问题；`hlie-core` 现显式启用 `POSITION_INDEPENDENT_CODE`。
-- Linux 真机短时 golden smoke 在 `wtt@10.65.35.16`、隔离端口 `18901` 通过：
+- Linux 真机短时 golden smoke 在 `test-user@test-host.example.com`、隔离端口 `isolated-port` 通过：
   - 主进程模型加载、推理和 reservation commit；
   - 动态 Worker READY、代理推理、READY 后崩溃收敛；
   - generation 恢复、graceful unload 和额外 1-cycle lifecycle；
   - 最终 reservation ledger 回到基线，INFO/WARN/ERROR 日志契约通过。
-- golden 使用 Qwen3-ASR 0.6B 主模型与 1.7B 动态 Worker，共享单卡；现有 `7901` 服务未停止或修改，验证产物保存在远端隔离 worktree 的 `artifacts/p1_1_linux_golden_retry`。
+- golden 使用 Qwen3-ASR 0.6B 主模型与 1.7B 动态 Worker，共享单卡；现有 `existing-service-port` 服务未停止或修改，验证产物保存在远端隔离 worktree 的 `artifacts/p1_1_linux_golden_retry`。
 - P1-2 Linux clean build 通过；CTest 5/5 通过（含两条架构门禁与真实 Supervisor Fake Worker component）。
-- P1-2 真机 golden 在隔离端口 `18902` 通过：动态 Worker READY/代理推理、READY 后 crash 的 Registry/route/process/reservation 收敛、generation 恢复、graceful unload、额外 lifecycle cycle 与最终 ledger 回零全部 PASS；产物位于 `artifacts/p1_2_linux_golden_retry`。
+- P1-2 真机 golden 在隔离端口 `isolated-port` 通过：动态 Worker READY/代理推理、READY 后 crash 的 Registry/route/process/reservation 收敛、generation 恢复、graceful unload、额外 lifecycle cycle 与最终 ledger 回零全部 PASS；产物位于 `artifacts/p1_2_linux_golden_retry`。
 - 真机首次 P1-2 golden 发现 WebService 在 Workflow 启动后重复 `set_server_port()` 会替换并停止已运行 Supervisor；现已改为相同端口保持实例，真实端口变化时保留 running 状态完成重建/重启。修复前 crash 无监督，修复后约 1 秒完成全链路收敛。
 - P1-3 Linux 产品目标 `houmo-llm-hi-cpp-linux` 构建通过，CTest 6/6；Linux `HLIE_TESTS_ONLY=ON` CTest 5/5。默认 `all` 仍会顺带编译一个与当前 vendored llama headers API 不匹配的独立旧 `houmo-llm-sdk` 目标，发布/CI 产品目标不依赖它，本轮未把该无关兼容升级混入 P1-3。
-- P1-3 真机 golden 最终精确源码在隔离端口 `18905` 通过：主进程 load/infer/commit、动态 Worker READY/infer、READY 后 crash 收敛、generation 恢复、graceful unload、额外 lifecycle cycle、ledger baseline 和日志契约全部 PASS；产物位于 `artifacts/p1_3_linux_golden_exact`，7901 未停止或修改。
-- P1-4 真机 golden 在隔离端口 `18906` 通过：Embedded/Process Runtime 发布、主进程 load/infer、Worker READY/infer、READY 后 crash 收敛、generation 恢复、graceful unload、额外 lifecycle cycle、最终 ledger baseline 和 INFO/WARN/ERROR 日志契约全部 PASS。RSS `455888896 -> 455970816`、private bytes `431874048 -> 431955968`、handles `18 -> 18`、threads `32 -> 32`；产物位于 `artifacts/p1_4_linux_golden/summary.json`，7901 未停止或修改。
+- P1-3 真机 golden 最终精确源码在隔离端口 `isolated-port` 通过：主进程 load/infer/commit、动态 Worker READY/infer、READY 后 crash 收敛、generation 恢复、graceful unload、额外 lifecycle cycle、ledger baseline 和日志契约全部 PASS；产物位于 `artifacts/p1_3_linux_golden_exact`，existing-service-port 未停止或修改。
+- P1-4 真机 golden 在隔离端口 `isolated-port` 通过：Embedded/Process Runtime 发布、主进程 load/infer、Worker READY/infer、READY 后 crash 收敛、generation 恢复、graceful unload、额外 lifecycle cycle、最终 ledger baseline 和 INFO/WARN/ERROR 日志契约全部 PASS。RSS `455888896 -> 455970816`、private bytes `431874048 -> 431955968`、handles `18 -> 18`、threads `32 -> 32`；产物位于 `artifacts/p1_4_linux_golden/summary.json`，existing-service-port 未停止或修改。
 - P1-4 精确源码 Linux ASAN+UBSAN 3/3、TSAN 6/6 通过，没有 sanitizer 或数据竞争报告。
 - 新增 Registry 中性 snapshot 状态映射、基于 snapshot 的 residency 策略、ModelSpec 投影、BackendDescriptor 内存/placement 策略、typed control contract 和 app adapter registry 测试。
 - `git diff --check` 通过；core 禁止依赖和旧源码 target 引用审计通过。
-- 构建时发现 7901 调试服务占用 `hlie-app.dll`；按既有授权只停止该 listener 的进程后重试，链接通过。
+- 构建时发现 existing-service-port 调试服务占用 `hlie-app.dll`；按既有授权只停止该 listener 的进程后重试，链接通过。
 
 ## P1-5：ModelController 唯一生命周期入口
 
@@ -170,10 +170,10 @@
 - 新增 Controller 组件级单测与 core Orphaned 状态测试，覆盖 READY commit、confirmed unexpected exit、unconfirmed ownership retention、资源不误释放、重载拒绝、confirmed eviction，以及 16 路 `ensure_ready()` 只有一个 launcher。
 - Windows Release 主程序与 unit target 构建通过；加入 `hlie.architecture.model-backend-launcher-dependencies` 后完整 CTest 10/10 通过，其中六条 architecture gate、unit、stress、WorkerSupervisor component 与 Mirage 全绿。
 - Linux 精确源码产品目标构建通过，完整可用 CTest 8/8、无 SDK clean build/CTest 7/7 通过。
-- Linux 真机短时 golden 在隔离端口 `18907` 通过：主进程 load/infer、Worker READY/infer、READY 后 crash 收敛、generation 恢复、graceful unload、额外 1-cycle lifecycle、ledger baseline 和 INFO/WARN/ERROR 日志契约全部 PASS；产物位于 `artifacts/p1_5_controller_golden`，7901/7999 未停止或修改。
+- Linux 真机短时 golden 在隔离端口 `isolated-port` 通过：主进程 load/infer、Worker READY/infer、READY 后 crash 收敛、generation 恢复、graceful unload、额外 1-cycle lifecycle、ledger baseline 和 INFO/WARN/ERROR 日志契约全部 PASS；产物位于 `artifacts/p1_5_controller_golden`，existing-service-port/other-service-port 未停止或修改。
 - P1-5 完整 load transaction 精确源码在 Linux 独立目录 `build-p1-5-load-transaction` 构建通过，CTest 9/9；新增 BackendLauncher gate 后六条 architecture test、unit、stress 和 WorkerSupervisor component 全绿。
 - P1-5 最新控制面源码 Linux ASAN+UBSAN 3/3、TSAN 8/8 通过，没有 sanitizer、undefined behavior 或数据竞争报告。
-- 最新真机 golden 在 `wtt@10.65.35.16` 隔离端口 `18909` 通过：主进程本地模型 load/infer/commit、动态 Worker READY/proxy inference、READY 后 crash 收敛、generation 恢复、graceful unload、额外 1-cycle lifecycle、最终 ledger baseline 和 INFO/WARN/ERROR 日志契约全部 PASS。产物位于 `artifacts/p1_5_load_transaction_golden`，既有 `7901/7999` 未停止或修改。
+- 最新真机 golden 在 `test-user@test-host.example.com` 隔离端口 `isolated-port` 通过：主进程本地模型 load/infer/commit、动态 Worker READY/proxy inference、READY 后 crash 收敛、generation 恢复、graceful unload、额外 1-cycle lifecycle、最终 ledger baseline 和 INFO/WARN/ERROR 日志契约全部 PASS。产物位于 `artifacts/p1_5_load_transaction_golden`，既有 `existing-service-port/other-service-port` 未停止或修改。
 
 ## P1-6：InferenceDispatcher 与 ApiRouter（Completed）
 
@@ -257,12 +257,12 @@ shutdown 为 INFO，lookup/invalid ticket 为 WARN，且不记录 launch token�
 - 新增 8 个定向测试用例、76 条断言：Reconciler 3/22、Discovery 3/36、Catalog 2/18。Registry 17/172、Controller 12/108 回归通过；Windows Release 产品构建与完整 CTest 15/15 通过。
 - Linux exact-source Release 产品构建与完整 CTest 14/14 通过；ASAN+UBSAN 3/3、TSAN 13/13 通过，没有 sanitizer、undefined behavior 或 data race 报告。
 - TSAN 验证暴露了 Reconciler 停止路径的真实 condition-variable 丢唤醒窗口：stop predicate 可能在 worker 完成 predicate 检查后、进入 wait 前发布，导致停止等待完整 5 秒周期。现已在 `wait_mutex_` 下发布 `stop_requested_` 后再 notify；TSAN 下仍执行全部功能断言，仅关闭不适用于插桩构建的 `<100 us` 微基准阈值，Release 性能门禁保持不变。
-- 真机 180 秒 mixed-workload 在 `wtt@10.65.35.16` 隔离端口 `18932` 通过：完成 59 个 Worker load/infer/unload cycle，主进程 load/infer/commit、Worker READY/proxy inference、READY 后 crash 收敛、generation 恢复与 graceful unload 全绿；最终 ledger 回基线、manifest 零泄漏、`graceful_shutdowns=60`、`forced_shutdowns=0`。handles `20 -> 20`、threads `32 -> 32`、RSS `433250304 -> 436580352` bytes、private bytes `408055808 -> 410087424` bytes，尾段无持续增长；INFO/WARN/ERROR 日志契约通过。产物位于 `artifacts/p1_7_control_services_short_soak_retry2`，既有 `7901/7999` 未停止或修改。
+- 真机 180 秒 mixed-workload 在 `test-user@test-host.example.com` 隔离端口 `isolated-port` 通过：完成 59 个 Worker load/infer/unload cycle，主进程 load/infer/commit、Worker READY/proxy inference、READY 后 crash 收敛、generation 恢复与 graceful unload 全绿；最终 ledger 回基线、manifest 零泄漏、`graceful_shutdowns=60`、`forced_shutdowns=0`。handles `20 -> 20`、threads `32 -> 32`、RSS `433250304 -> 436580352` bytes、private bytes `408055808 -> 410087424` bytes，尾段无持续增长；INFO/WARN/ERROR 日志契约通过。产物位于 `artifacts/p1_7_control_services_short_soak_retry2`，既有 `existing-service-port/other-service-port` 未停止或修改。
 - ModelLoadService 定向测试 4 个用例、28 条断言通过，覆盖 embedded load transaction、显式设备数量拒绝、replica-mode 拒绝与 typed control error 映射；Windows Release 产品构建与完整 CTest 16/16、Linux exact-source clean build 与 CTest 15/15 通过。
-- 新 typed load 路径在真机隔离端口 `18933` 完成 20-cycle mixed-workload：主进程 load/infer/commit、Worker READY/proxy inference、READY 后 crash 收敛、generation 恢复、graceful unload、最终 ledger/manifest 和 INFO/WARN/ERROR 契约全绿，handles/threads 保持 `20/32`。产物位于 `artifacts/p1_7_model_load_service_smoke`。
-- auto-load 在隔离端口 `18934` 单独验证：catalog 建立并卸载后，普通 `/v1/chat/completions` 成功触发 typed load、完成真实推理并再次卸载；最终 loaded/runtime 为 0、`active_sessions=0`、tracked pending/committed 和设备 pending/committed reservation 全为 0。产物位于 `artifacts/p1_7_model_load_auto_load_smoke_retry3`。
+- 新 typed load 路径在真机隔离端口 `isolated-port` 完成 20-cycle mixed-workload：主进程 load/infer/commit、Worker READY/proxy inference、READY 后 crash 收敛、generation 恢复、graceful unload、最终 ledger/manifest 和 INFO/WARN/ERROR 契约全绿，handles/threads 保持 `20/32`。产物位于 `artifacts/p1_7_model_load_service_smoke`。
+- auto-load 在隔离端口 `isolated-port` 单独验证：catalog 建立并卸载后，普通 `/v1/chat/completions` 成功触发 typed load、完成真实推理并再次卸载；最终 loaded/runtime 为 0、`active_sessions=0`、tracked pending/committed 和设备 pending/committed reservation 全为 0。产物位于 `artifacts/p1_7_model_load_auto_load_smoke_retry3`。
 - ModelReadinessService 新增 2 个并发/取消用例、20 条断言：12 个并发调用只触发一个 load function，全部等待同一 generation 进入 Ready；单个 waiter cancellation 不回滚当前 generation。Windows Release CTest 17/17、tests-only 15/15，Linux exact-source Release CTest 16/16 通过。
-- Readiness/ModelLoad 最新源码通过 Linux ASAN+UBSAN 3/3 与 TSAN 15/15，无 sanitizer、undefined behavior 或 data race 报告。隔离端口 `18934` 再次完成真实 auto-load/chat/unload，generation 递增到 2，最终 loaded/runtime/session/tracked reservation/设备 reservation 全为 0；产物位于 `artifacts/p1_7_model_readiness_auto_load_smoke`。
+- Readiness/ModelLoad 最新源码通过 Linux ASAN+UBSAN 3/3 与 TSAN 15/15，无 sanitizer、undefined behavior 或 data race 报告。隔离端口 `isolated-port` 再次完成真实 auto-load/chat/unload，generation 递增到 2，最终 loaded/runtime/session/tracked reservation/设备 reservation 全为 0；产物位于 `artifacts/p1_7_model_readiness_auto_load_smoke`。
 - 新增 `HLIEDocumentApplicationService` 与 document application-service 架构门禁；Workflow 不再直接 inspect PDF、选择 Document operation 或停止 document companion。定向测试 2 个用例、15 条断言通过；Windows Release 主程序构建和完整 CTest 20/20、`HLIE_TESTS_ONLY` CTest 18/18 通过。
 - 新增 `HLIEAsrApplicationService`、`IHLIEAsrRealtimeTransport` 与 ASR application-service 架构门禁；Workflow 不再包含 transcription pipeline、realtime handler、Qwen stream decoder 或 WebSocket 类型。定向测试 3 个用例、15 条断言覆盖 direct Whisper、Qwen3-ASR + ForceAligner 和 realtime lifecycle；正常逐请求路由日志降为 DEBUG，失败日志不再输出 transcript/response body。Windows Release 主程序构建与完整 CTest 21/21、`HLIE_TESTS_ONLY` CTest 19/19 通过。
 - 新增 `HLIESpeechApplicationService` 与 speech application-service 架构门禁；Workflow 不再选择 CosyVoice/Qwen3-TTS、不等待 speech readiness、不 acquire Speech session 或组合 Qwen admission guard。定向测试 4 个用例、17 条断言在完整与 SDK-free target 均通过；正常 speech route 日志由 INFO 降为 DEBUG。Windows Release 主程序与单测 target 构建通过，完整 CTest 22/22、`HLIE_TESTS_ONLY` CTest 20/20 通过。

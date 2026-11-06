@@ -1,11 +1,11 @@
 @host = http://127.0.0.1:7901
 @modelType = qwen3_tts
 @device = 0
-@modelPath = E:/models/HiModel_xh2_qwen3-tts-1.7b-customvoice-w8a16-256-2k-b1-1chip-2cores-v1.4.0_20260720.gguf
+@modelPath = models/qwen3-tts-1.7b-customvoice.gguf
 @model = HiModel_xh2_qwen3-tts-1.7b-customvoice-w8a16-256-2k-b1-1chip-2cores-v1.4.0_20260720
-@baseModelPath = E:/models/HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0.gguf
+@baseModelPath = models/qwen3-tts-0.6b-base.gguf
 @baseModel = HiModel_xh2_qwen3-tts-0.6b-base-w8a16h1-sefp-256-2k-b1-1chip-2cores-v1.4.0
-@referenceWav = D:/workspace/wtt/houmo/imodelzoo/data/audio/clone_1.wav
+@referenceWav = tests/fixtures/clone_1.wav
 
 ### 1. Check available devices before loading
 GET {{host}}/hlie/v1/devices

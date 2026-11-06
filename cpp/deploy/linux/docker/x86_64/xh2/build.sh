@@ -19,6 +19,7 @@ for config_file in sys.cfg model_presets.json model_overrides.json config_schema
     }
 done
 
-docker build -t harbor.houmo.ai/application_software/hlie.cpp-xh2-20250910:v0.3.0-x86_64 .
+DOCKER_REGISTRY="${DOCKER_REGISTRY:-registry.example.invalid}"
+docker build -t "${DOCKER_REGISTRY}/application_software/hlie.cpp-xh2-20250910:v0.3.0-x86_64" .
 
 rm -rf tmp

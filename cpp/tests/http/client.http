@@ -233,7 +233,7 @@ Content-Type: multipart/form-data; boundary=WebAppBoundary
 --WebAppBoundary
 Content-Disposition: form-data; name="file"; filename="jfk.wav"
 
-< D:/workspace/wtt/houmo/llm/hi.cpp/samples/zero_shot_prompt.wav
+< samples/zero_shot_prompt.wav
 
 --WebAppBoundary
 Content-Disposition: form-data; name="model"

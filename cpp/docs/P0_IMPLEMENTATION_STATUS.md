@@ -55,7 +55,7 @@
 - 控制面并发压力门禁：`hlie.stress.control-plane` 将 ServiceSlot/Registry generation/atomic eviction 与 reservation ledger 的 reserve/bind/commit/release/rollback 交错执行；当前每轮覆盖 1000 次请求/卸载/重载交错和 4000 次并发 reservation transaction，并持续检查生命周期和账本不变量。
 - 可重复真机硬件门禁：`hlie-p0-hardware-smoke` 在独立端口自启/自清理服务，覆盖主进程模型、资源不足 503、READY 前 Worker crash、READY 后 Worker crash、generation 恢复、代理推理、graceful unload、最终账本归零和日志等级契约。脚本只终止本次服务返回的 PID，结果写入 `artifacts/p0_hardware_smoke/<timestamp>`。
 - Worker launch manifest 生命周期收口：文件名从秒级时间戳改为“时间戳 + UUID”，避免并发启动覆盖；Worker 解析一次性 manifest 后立即删除，父进程在 CreateProcess/fork 失败、启动后立即退出、异常退出和强杀路径兜底删除，端口分配失败和写文件失败也会清理。修复前 `meta_cache` 会每次启动遗留一个 `.hlif`，修复后的 500-cycle soak 新增残留为 0。
-- 主端口配置统一为 env-first：WebService listener、Workflow、Worker port allocator/preflight 现在共同读取 `HLIE__SERVER__PORT`；修复了控制面按环境变量计算 17901、真实 HTTP socket 却仍绑定 `sys.cfg` 7901 的端口分裂。
+- 主端口配置统一为 env-first：WebService listener、Workflow、Worker port allocator/preflight 现在共同读取 `HLIE__SERVER__PORT`；修复了控制面按环境变量计算 isolated-port、真实 HTTP socket 却仍绑定 `sys.cfg` existing-service-port 的端口分裂。
 - 控制面日志分级收口：高频路由、HAL 候选和 stale generation 降为 DEBUG；正常 reserve/commit/unload/expected exit 使用 INFO；容量拒绝、busy、fallback 和成功 orphan 回收使用 WARN；Worker crash、READY timeout、reservation bind/commit 失败保留 ERROR。Supervisor 状态只在变化时记录，当前值由 health/metrics 暴露。主 logger、TCIM 和 LLM backend 的日志等级统一使用 env-first 配置，`HLIE__LOG__LEVEL` 不再被 `sys.cfg` 的旧值覆盖。
 - Linux 主程序解除 root 硬依赖：移除 `geteuid() == 0` 启动拦截；删除与 `HLIEProcessManager` 争抢 `waitpid` 的全局 `SIGCHLD` handler；配置的 `/var/log/HLIECpp` 不可写时回退到 `$XDG_STATE_HOME/HLIECpp/logs` 或 `~/.local/state/HLIECpp/logs`；动态 Worker 使用 `/proc/self/exe` 解析出的当前程序路径启动。安装/注册 systemd 服务仍可要求管理员权限，但服务进程本身不再因 UID 非 0 被拒绝。
 - Linux sanitizer 门禁：新增 hicpp 自有 `HLIE_SANITIZE_ADDRESS`、`HLIE_SANITIZE_UNDEFINED`、`HLIE_SANITIZE_THREAD` CMake 开关和 rootless `ci/run_linux_sanitizers.sh`。ASAN+UBSAN 覆盖完整 unit、控制面 stress 和 Fake Worker supervisor；TSAN 使用修复后的 `HLIE_TESTS_ONLY=ON` 纯控制面目标，不加载 TCIM/HAL/推理 SDK。脚本强制选择同版本 C/C++ 编译器并在编译器变化时重建缓存，避免混用不同 sanitizer runtime。
@@ -81,21 +81,21 @@
 - 控制面压力测试：2 cases，7628 assertions；连续重复 10 轮全部通过，单轮约 199～308 ms。
 - CTest：`hlie.unit`、`hlie.stress.control-plane`、`hlie.component.worker-supervisor`、`hlie.component.mirage`，4/4 通过。
 - Linux x86_64 Release：主程序、单测和 Worker supervisor 组件目标构建通过；CTest 3/3 通过（远端未安装可选 Mirage），单测为 144 cases / 8553 assertions，少于 Windows 的 1 条为平台条件断言。
-- Linux 非 root 真机启动：用户 `wtt` 在端口 17901 启动成功，HAL 初始化和 device 0 枚举成功；`/live` 返回 200，空载 `/ready` 按语义返回 503，`/health` 返回 200；应用、access、boot 和 TCIM 日志回退到 `~/.local/state/HLIECpp/logs` 且属主为 `wtt:wtt`。SIGTERM 后进程和 17901 listener 均清理，既有 7901 root service 未受影响。
+- Linux 非 root 真机启动：用户 `test-user` 在端口 isolated-port 启动成功，HAL 初始化和 device 0 枚举成功；`/live` 返回 200，空载 `/ready` 按语义返回 503，`/health` 返回 200；应用、access、boot 和 TCIM 日志回退到 `~/.local/state/HLIECpp/logs` 且属主为 `test-user:test-user`。SIGTERM 后进程和 isolated-port listener 均清理，既有 existing-service-port root service 未受影响。
 - Linux ASAN+UBSAN：`hlie.unit`、`hlie.stress.control-plane`、`hlie.component.worker-supervisor` 3/3 通过，开启 leak detection、遇错立即终止；未发现内存越界、use-after-free、泄漏或未定义行为。
 - Linux TSAN：专有 SDK 无关的控制面 unit/stress 2/2 通过；未报告 Registry、ServiceSlot、admission、cancellation metrics 或 device reservation ledger 的 data race。
 - Sanitizer 首轮暴露并修复两项构建问题：远端默认 `cc=gcc-9`、`c++=g++-13` 导致 `libasan.so.5/.8` 同进程冲突；测试又将静态 zlib 同时链接进 `libhlie-base.so` 与单测 executable，触发 `z_errmsg` ODR violation。现已统一编译器，并由 hlie-base 提供 gzip 读取入口以保持单一 zlib 实例。
 - `git diff --check`：通过（仅保留 Git 对换行格式的提示）。
 - 日志等级真机验证：以 `HLIE__LOG__LEVEL=info` 启动并连续访问空载 health，新增主日志中 DEBUG 行为 0，`model service not initialized` 行为 0；资源拒绝记录为 WARN，进程层异常退出记录为 WARN，WorkerSupervisor 收敛记录为 ERROR，正常 reservation release/unload 记录为 INFO。
-- 自动化硬件 smoke：Windows Release、独立主端口 17901 通过；主模型 committed `16272MB`，资源不足返回 503 且账本不变，READY 前观测 pending `16485MB` 后 crash 回滚，Worker generation 按 `1 → 2 → 3` 推进，2 次 unexpected exit 和 1 次 graceful shutdown 均收敛，最终两个设备 pending/committed 回到基线。
+- 自动化硬件 smoke：Windows Release、独立主端口 isolated-port 通过；主模型 committed `16272MB`，资源不足返回 503 且账本不变，READY 前观测 pending `16485MB` 后 crash 回滚，Worker generation 按 `1 → 2 → 3` 推进，2 次 unexpected exit 和 1 次 graceful shutdown 均收敛，最终两个设备 pending/committed 回到基线。
 - Code Review 收尾后于 2026-08-17 再次运行同一真机 smoke：主进程加载/推理、资源拒绝、READY 前 crash、READY 后 crash、代理推理、generation 恢复、graceful unload、最终账本归零和 INFO/WARN/ERROR 契约全部通过；产物见 `artifacts/p0_hardware_smoke/20260817-120207`。
 - 500-cycle 真机 lifecycle soak：500 次动态 Worker load/READY、每 10 轮一次代理推理、500 次 graceful unload 全部通过；父进程 handle `300 → 300`、线程 `38 → 34`、RSS `747388928 → 766697472` bytes、private bytes `904216576 → 923987968`，最后 100 轮仅约增长 1 MB；forced shutdown 为 0，新增 manifest 为 0，最终账本回基线。产物见 `artifacts/p0_hardware_smoke/20260816-165022`。
-- Linux 2 小时 mixed-workload soak：2026-08-17 在 `wtt@10.65.35.16` 的独立端口 17901 连续运行 7200 秒，完成 2542 次动态 Worker load/READY/unload，每 10 轮执行一次代理推理；主进程本地模型加载/推理、READY 后故障注入、generation 恢复、graceful unload、最终账本归零和日志等级契约全部通过。父进程 handles `18 → 18`，threads `32 → 33` 后保持稳定，RSS `428044288 → 433856512` bytes，private bytes `404987904 → 409313280` bytes，新增 manifest 为 0；累计 2543 次 graceful shutdown，1 次预期注入的 unexpected exit。远端仅有 device 0 且既有 7901 服务占用同卡，因此本轮启用 shared-device，并跳过已由前序 smoke 覆盖的资源不足拒绝和 READY 前 crash；既有 7901 服务未停止或修改。产物见远端 `artifacts/p0_hardware_soak/linux-2h/summary.json`。
+- Linux 2 小时 mixed-workload soak：2026-08-17 在 `test-user@test-host.example.com` 的独立端口 isolated-port 连续运行 7200 秒，完成 2542 次动态 Worker load/READY/unload，每 10 轮执行一次代理推理；主进程本地模型加载/推理、READY 后故障注入、generation 恢复、graceful unload、最终账本归零和日志等级契约全部通过。父进程 handles `18 → 18`，threads `32 → 33` 后保持稳定，RSS `428044288 → 433856512` bytes，private bytes `404987904 → 409313280` bytes，新增 manifest 为 0；累计 2543 次 graceful shutdown，1 次预期注入的 unexpected exit。远端仅有 device 0 且既有 existing-service-port 服务占用同卡，因此本轮启用 shared-device，并跳过已由前序 smoke 覆盖的资源不足拒绝和 READY 前 crash；既有 existing-service-port 服务未停止或修改。产物见远端 `artifacts/p0_hardware_soak/linux-2h/summary.json`。
 
 ## 真机模型验证
 
 - Qwen3.5 0.8B 主进程本地模型：加载、chat、卸载通过。
-- 第二个 Qwen3.5 0.8B 变体：动态 Worker READY、7901 代理推理、graceful unload 通过。
+- 第二个 Qwen3.5 0.8B 变体：动态 Worker READY、existing-service-port 代理推理、graceful unload 通过。
 - 动态 Worker 外部 kill：约 2 秒内离开路由，unexpected exit 增长，reservation 和端口释放；随后新 generation 恢复加载成功，旧 generation status 被拒绝。
 - 动态 Worker READY 前 kill：父进程先观测到 device 1 `pending=16485MB, committed=0`，在启动后 246ms 强杀 Worker；下一次约 500ms 的监督周期内 pending 归零、端口和进程释放，本地模型保持 loaded。
 - 真机资源不足拒绝：关闭自动驱逐后，device 0 已有 `16272MB` committed、仅余 `1832MB` admissible；再申请 `16485MB` 返回 HTTP 503，前后 pending/committed 不变且未启动 Worker。

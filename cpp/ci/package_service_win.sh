@@ -3,19 +3,20 @@
 # 检查参数数量
 ARCH=x86_64
 
-# SDK URLs
-xh2_dadao_sdk_url="http://10.10.1.53:8082/artifactory/houmo_software/release_xh2_v1.4.0/2026/07/13/2100/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-1.4.0.tar.gz"
+# SDK URLs. Set HOUMO_ARTIFACTORY_BASE_URL in the private build environment.
+HOUMO_ARTIFACTORY_BASE_URL="${HOUMO_ARTIFACTORY_BASE_URL:-https://artifacts.example.invalid}"
+xh2_dadao_sdk_url="${HOUMO_ARTIFACTORY_BASE_URL}/houmo_software/release_xh2_v1.4.0/2026/07/13/2100/windows11/houmo_tcim_runtime_xh2_windows11_x86_64-1.4.0.tar.gz"
 
-xh2_llama_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/llama.cpp/houmo-HLIELLama-xh2_2.1.1_windows11_x86_64.tar.gz"
+xh2_llama_sdk_url="${HOUMO_ARTIFACTORY_BASE_URL}/application_software/release/llama.cpp/houmo-HLIELLama-xh2_2.1.1_windows11_x86_64.tar.gz"
 
-xh2_sd_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.3.0_windows11_x86_64.tar.gz"
-xh2_whisper_cpp_sdk_url="http://10.10.1.53:8082/artifactory/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.2.0_windows11_x86_64.tar.gz"
+xh2_sd_cpp_sdk_url="${HOUMO_ARTIFACTORY_BASE_URL}/application_software/release/sd.cpp/houmo-HLIESDCpp-xh2_1.3.0_windows11_x86_64.tar.gz"
+xh2_whisper_cpp_sdk_url="${HOUMO_ARTIFACTORY_BASE_URL}/application_software/release/hliewhisper.cpp/houmo-HLIEWhisperCpp-xh2_1.2.0_windows11_x86_64.tar.gz"
 
-uwebsockets_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/uwebsockets-win_x64.tar.gz"
-libsamplerate_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/libsamplerate-win_x64.tar.gz"
-eigen3_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/eigen3.tar.gz"
-kaldi_native_fbank_url="http://10.10.1.53:8081/artifactory/application_software/release/hi.cpp/thirdparty/kaldi-native-fbank-win_x64.tar.gz"
-pdfium_url="http://10.10.1.53:8082/artifactory/application_software/release/hi.cpp/thirdparty/pdfium-win_x64.tar.gz"
+uwebsockets_url="${HOUMO_ARTIFACTORY_BASE_URL}/application_software/release/hi.cpp/thirdparty/uwebsockets-win_x64.tar.gz"
+libsamplerate_url="${HOUMO_ARTIFACTORY_BASE_URL}/application_software/release/hi.cpp/thirdparty/libsamplerate-win_x64.tar.gz"
+eigen3_url="${HOUMO_ARTIFACTORY_BASE_URL}/application_software/release/hi.cpp/thirdparty/eigen3.tar.gz"
+kaldi_native_fbank_url="${HOUMO_ARTIFACTORY_BASE_URL}/application_software/release/hi.cpp/thirdparty/kaldi-native-fbank-win_x64.tar.gz"
+pdfium_url="${HOUMO_ARTIFACTORY_BASE_URL}/application_software/release/hi.cpp/thirdparty/pdfium-win_x64.tar.gz"
 
 # 下载文件并检查是否成功
 download_file() {
