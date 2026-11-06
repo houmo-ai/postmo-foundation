@@ -1,13 +1,15 @@
 services:
   hliepython:
-    image: harbor.houmo.ai/application_software/infer:v3.1.0
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: hliepython_server_container
     privileged: true
     restart: always
-    working_dir: /opt/houmo
+    working_dir: /workspace
     volumes:
-      - ./config.yaml:/opt/houmo/config.yaml
-      - ../models:/opt/houmo/models
+      - ./config.yaml:/workspace/config.yaml
+      - ../models:/workspace/models
     command:
       - python
       - -m

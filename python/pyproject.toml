@@ -7,7 +7,7 @@ name = "hliepython"
 version = "3.1.0"
 description = "A multi-process multi-instance OpenAI API server"
 authors = [
-    {name = "wenhao.yang", email = "wenhao.yang@houmo.ai"},
+    {name = "HLIEPython Contributors"},
 ]
 dependencies = [
     "fastapi",
@@ -35,8 +35,25 @@ dependencies = [
     "resampy",
     "vllm[audio]",
 ]
-readme = "hliepython/README.md"
+readme = "README.md"
 requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+keywords = ["ai", "llm", "inference", "openai", "api", "vllm", "multi-modal"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/hliepython"
+Documentation = "https://github.com/your-org/hliepython/blob/master/README.md"
+Repository = "https://github.com/your-org/hliepython.git"
+Issues = "https://github.com/your-org/hliepython/issues"
 
 [project.scripts]
 hliepython = "hliepython.main:main"

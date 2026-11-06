@@ -1,24 +1,26 @@
 services:
   hlievllm:
-    image: harbor.houmo.ai/application_software/infer:v3.1.0
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: hlievllm_server_container
     privileged: true
     restart: always
-    working_dir: /opt/houmo
+    working_dir: /workspace
     volumes:
-      - ../models:/opt/houmo/models
+      - ../models:/workspace/models
     command: >-
-      vllm serve /opt/houmo/models
+      vllm serve /workspace/models
       --port 7801
       --host 0.0.0.0
       --no-enable-prefix-caching
-      --served-model-name houmo-model
+      --served-model-name model-name
       --max-num-batched-tokens 262144
       --max-num-seqs 1
       --max-model-len 262144
       --enable-auto-tool-choice
       --tool-call-parser qwen3_coder
-      --additional-config '{"visual_model_path":"/opt/houmo/models/mmproj_xh2_qwen3.6-35b-a3b_w4a8_2cores_vit_448x448_v1.4.0_20260716.gguf"}'
+      --additional-config '{"visual_model_path":"/workspace/models/mmproj.gguf"}'
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     network_mode: "host"
