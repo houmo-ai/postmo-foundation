@@ -116,8 +116,8 @@ ENV HOUMO_SDK_PATH=/usr/local/houmo-sdk
 ENV LD_LIBRARY_PATH=${HOUMO_PATH}/lib:${HOUMO_SDK_PATH}/hal/lib:${LD_LIBRARY_PATH}
 ENV PATH=${HOUMO_PATH}/bin:${HOUMO_SDK_PATH}/tools:${HOUMO_SDK_PATH}/scripts:${PATH}
 
-ENV HF_ENDPOINT=https://hf-mirror.com
-ENV HF_TOKEN=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
+ENV HF_ENDPOINT=
+ENV HF_TOKEN=
 
 RUN chmod 777 /tmp && pwd && ls -l /tmp
 
